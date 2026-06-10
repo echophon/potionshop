@@ -138,8 +138,13 @@ function Screen:redraw()
   screen.level(15); screen.move(0, 7)
   screen.text(self.ctl:current_page())
   screen.level(3); screen.move(128, 7); screen.text_right(self.ctl.selectedScaleName)
+  local bpm
   if clock then
-    screen.level(3); screen.move(64, 7); screen.text(math.floor(clock.tempo) .. ' bpm')
+    if clock.get_tempo then bpm = clock.get_tempo()
+    elseif type(clock.tempo) == 'number' then bpm = clock.tempo end
+  end
+  if type(bpm) == 'number' then
+    screen.level(3); screen.move(64, 7); screen.text(math.floor(bpm) .. ' bpm')
   end
   self.pages:redraw()
 

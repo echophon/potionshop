@@ -58,7 +58,7 @@ live in the system **CLOCK** menu (`clock.tempo`); the script starts at 55 bpm.
 | file | role |
 |------|------|
 | `potionshop.lua` | init/cleanup, grid wrapper + strobe metro, params, enc/key, reset scheduler |
-| `lib/burst.lua` | sequencing core: channel state, geode math, lattice-sprocket scheduling, randomize/mutate |
+| `lib/burst.lua` | sequencing core: channel state, geode math, clock-coroutine scheduling, randomize/mutate |
 | `lib/grid_ui.lua` | the grid controller / UI state machine (pages, pickers, KB, action modes) |
 | `lib/screen_ui.lua` | screen navigation built on `lib/ui` (UI.Pages, UI.List) |
 | `lib/scales.lua` | scales (via `musicutil`) + degree→frequency |
@@ -67,14 +67,16 @@ live in the system **CLOCK** menu (`clock.tempo`); the script starts at 55 bpm.
 | `lib/Engine_Potionshop.sc` | SuperCollider FM engine + master limiter |
 
 **Stock libraries used:** `sequins` (pattern cycling), `musicutil` (pitch/scales),
-`lattice` (clock-synced per-channel scheduling), `ui` (screen widgets).
+`ui` (screen widgets).
 
-**Scheduling note:** each channel is a lattice *sprocket* whose division is set to
-`1/(div·rate)` and updated between bursts. A consequence is that the global
-`quantize` knob collapses into lattice's division grid rather than snapping
-arbitrary event times as the browser app did — an intentional adaptation. If a
-timing nuance proves hard to express, the `er301_geode.lua` `clock.run`/`wait_beat`
-coroutine model is the documented fallback.
+**Scheduling:** each launched channel runs a `clock.run` coroutine that draws the
+next value from each sequins per burst, waits until the target beat, fires, and
+advances — a 1:1 port of the browser app's runChannel/runBurst (and of the
+original `er301_geode.lua`). The global `quantize` knob snaps every event's target
+beat forward to a shared grid via `quantize.snap_beat` (events per whole note;
+0 = off), so all channels lock together regardless of their individual divisions.
+(An earlier draft used `lattice`, but its fixed per-sprocket division grid can't
+express forward-snap quantization cleanly, so the engine uses clock coroutines.)
 
 ## Testing
 
@@ -82,8 +84,9 @@ Pure modules are unit-tested off-hardware (the test harness ships faithful stubs
 the norns `sequins`/`musicutil`/`lattice` libs):
 
 ```
-lua test/run.lua          # 55 checks: quantize, scales, sequins glue, geode math,
-                          # randomize grid-alignment, sprocket scheduling, grid_ui wiring
+lua test/run.lua          # 60 checks: quantize math + snap-forward behaviour,
+                          # scales, sequins glue, geode math, randomize grid-alignment,
+                          # clock-coroutine scheduling, grid_ui wiring
 ```
 
 SynthDef graphs can be build-checked with stock SuperCollider:

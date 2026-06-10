@@ -1,21 +1,22 @@
 -- burst.lua
--- Six-channel FM burst sequencer core, ported from src/burst.ts.
+-- Six-channel FM burst sequencer core, ported from src/burst.ts (which in turn
+-- ports er301_geode.lua). Scheduling is a 1:1 port of the web app's
+-- runChannel/runBurst coroutines onto norns `clock`: each launched channel runs
+-- a `clock.run` coroutine that pulls the next value from each sequins per burst,
+-- waits until the (quantized) target beat via `clock.sleep`, fires, and advances.
 --
--- Scheduling uses the stock `lattice` library: one lattice (clock-driven), one
--- sprocket per channel. A channel's `div` ("events per whole note") maps to a
--- lattice division of 1/div (scaled by `rate`); the sprocket's action does the
--- per-burst bookkeeping the web app's runChannel/runBurst coroutines did. Each
--- action fires one hit and, after firing, sets the division that governs the
--- gap to the NEXT hit — so changing div at a burst boundary takes effect for
--- the following hit, matching the web timing. (lattice re-arms a sprocket's
--- phase from self.division right after action() returns.)
+-- Quantization: every event's target beat is snapped FORWARD to the global
+-- quantize grid (`quantize.snap_beat`) before sleeping, so all channels lock to
+-- a shared sub-beat grid regardless of each channel's division — exactly the web
+-- behaviour. quantize = 0 disables snapping.
 --
--- Geode modulation, the env->time mapping, and randomize/mutate value sets are
--- ported verbatim so audio behaviour and grid-reachability match the original.
+-- Cancellation uses a per-channel token (bumped on launch/stop) AND
+-- clock.cancel, mirroring the web's token check so a stale coroutine exits at
+-- its next sleep even if a relaunch raced ahead.
 
-local lattice = require 'lattice'
-local scales  = require 'scales'
-local seqx    = require 'seqx'
+local quantize = require 'quantize'
+local scales   = require 'scales'
+local seqx     = require 'seqx'
 
 local NUM_CHANNELS = 6
 local INF = math.huge
@@ -30,6 +31,13 @@ Burst.MUSICAL_DIVS = MUSICAL_DIVS
 
 local function round(x) return math.floor(x + 0.5) end
 local function clamp(v, lo, hi) return math.max(lo, math.min(hi, v)) end
+
+local function get_beats()
+  return (clock and clock.get_beats and clock.get_beats()) or 0
+end
+local function get_tempo()
+  return (clock and clock.get_tempo and clock.get_tempo()) or 120
+end
 
 -- ---- pure geode math (exposed for testing) -----------------------------
 
@@ -109,41 +117,25 @@ end
 
 function Burst.new()
   local self = setmetatable({}, Burst)
-  self.launchGrid = 4
-  self.quantize = 32  -- stored; under lattice the division grid is the snap
+  self.launchGrid = 4   -- launches snap to the next quarter-note boundary
+  self.quantize = 32    -- global event snap grid (events per whole note); 0 = off
   self.scale = scales.by_name.major
   self.channels = {}
   self.running = {}
-  self.rt = {}        -- per-channel runtime burst state
+  self.clocks = {}      -- per-channel clock.run id (or nil)
+  self.tokens = {}      -- per-channel cancellation token
   for i = 1, NUM_CHANNELS do
     self.channels[i] = default_channel()
     self.running[i] = false
-    self.rt[i] = { remaining = 0 }
+    self.tokens[i] = 0
   end
   self.listeners = {}
-  self.lattice = nil
-  self.sprockets = {}
-  self.modIndex = 8   -- FM modulation index (FMVoice default)
+  self.modIndex = 8     -- FM modulation index (FMVoice default)
   return self
 end
 
--- ---- lattice setup -----------------------------------------------------
-
-function Burst:setup_lattice()
-  self.lattice = lattice:new{ auto = true }
-  for i = 1, NUM_CHANNELS do
-    self.sprockets[i] = self.lattice:new_sprocket{
-      action = function() self:_tick(i) end,
-      division = 1 / 4,
-      enabled = false,  -- created stopped; launch() starts it
-    }
-  end
-  self.lattice:start()
-end
-
-local function division_for(div, rate)
-  return 1 / (math.max(1, div) * rate)
-end
+-- Kept for call-site compatibility; the clock model needs no setup.
+function Burst:setup() end
 
 -- ---- event listeners ---------------------------------------------------
 
@@ -182,7 +174,6 @@ function Burst:reset_channel(ch)
                      'divB','repsB','noteB','levelB','harmB','envB'} do
     c[k]:reset()
   end
-  self.rt[ch].remaining = 0
 end
 
 function Burst:reset_sequins()
@@ -193,20 +184,18 @@ end
 
 function Burst:launch(ch)
   if ch < 1 or ch > NUM_CHANNELS then return end
-  self.rt[ch] = { remaining = 0 }  -- force a fresh burst on the next tick
-  local sp = self.sprockets[ch]
-  if sp then
-    -- start one division out so the first hit is musically placed, not instant
-    sp.phase = sp.division * self.lattice.ppqn * 4
-    sp:start()
-  end
+  if self.clocks[ch] then clock.cancel(self.clocks[ch]); self.clocks[ch] = nil end
+  self.tokens[ch] = self.tokens[ch] + 1
+  local token = self.tokens[ch]
   self.running[ch] = true
   self:emit{ type = 'launch', ch = ch }
+  self.clocks[ch] = clock.run(function() self:run_channel(ch, token) end)
 end
 
 function Burst:stop(ch)
   if ch < 1 or ch > NUM_CHANNELS then return end
-  if self.sprockets[ch] then self.sprockets[ch]:stop() end
+  self.tokens[ch] = self.tokens[ch] + 1  -- invalidate any in-flight coroutine
+  if self.clocks[ch] then clock.cancel(self.clocks[ch]); self.clocks[ch] = nil end
   if self.running[ch] then
     self.running[ch] = false
     self:emit{ type = 'stop', ch = ch }
@@ -217,71 +206,121 @@ function Burst:stop_all()
   for i = 1, NUM_CHANNELS do self:stop(i) end
 end
 
--- ---- the per-channel tick (lattice sprocket action) --------------------
+-- ---- scheduling (clock coroutines) -------------------------------------
 
-function Burst:_pull_burst(ch)
-  local c = self.channels[ch]
-  local st = self.rt[ch]
-  local div = math.max(1, c.div() + c.divB())
-  local repsA = c.reps()
-  local repsBv = c.repsB()
-  local reps = (repsA == -1) and -1 or (repsA + repsBv)
-  local degree = c.note() + c.noteB()
-  local level = c.level() + c.levelB()
-  local harm = c.harm() + c.harmB()
-  local env = c.env() + c.envB()
-
-  st.div = div
-  st.freq = scales.degree_to_freq(degree, self.scale)
-  st.level = level
-  st.harm = harm
-  st.env = env
-  st.rate = c.rate
-  st.hit_idx = 0
-  if reps == -1 then
-    st.total = INF
-    st.remaining = INF
-  else
-    st.total = math.max(1, reps)   -- guard against 0/negative B offsets
-    st.remaining = st.total
-  end
-  -- single-shot: A's reps length-1 AND B's reps length-1 (a multi-step B-reps
-  -- layer is a "make this loop" signal even if A is single-step).
-  local reps_len = math.max(seqx.len(c.reps), seqx.len(c.repsB))
-  st.single_shot = (reps ~= -1) and (reps_len <= 1)
-  -- burst-mode probability gate (only when not per-hit; infinite unaffected)
-  st.muted = (not c.probHit) and (reps ~= -1) and (math.random() > c.burstProb)
+-- Wait until absolute beat `target`, snapping forward to the next quantize
+-- grid point. Tempo is preserved: target progresses at the natural rate; the
+-- snap only nudges the firing instant. (Direct port of clock.ts waitUntilBeat.)
+function Burst:wait_until_beat(target)
+  local fire = quantize.snap_beat(target, self.quantize)
+  local wait_secs = (fire - get_beats()) * (60 / get_tempo())
+  if wait_secs > 0 then clock.sleep(wait_secs) end
 end
 
-function Burst:_fire_hit(ch)
-  local c = self.channels[ch]
-  local st = self.rt[ch]
-  local i = st.hit_idx
-  local total = st.total
+-- Outer loop: keep firing bursts until cancelled, or until a single-shot burst
+-- (length-1 finite reps on both A and B) completes.
+function Burst:run_channel(ch, token)
+  local target = quantize.snap_beat(get_beats(), self.launchGrid)
+  while self.tokens[ch] == token do
+    local r = self:run_burst(ch, token, target)
+    if r == nil then return end
+    target = r.target
+    local c = self.channels[ch]
+    local reps_len = math.max(seqx.len(c.reps), seqx.len(c.repsB))
+    if r.reps ~= -1 and reps_len <= 1 then
+      if self.tokens[ch] == token then
+        self.running[ch] = false
+        self.clocks[ch] = nil
+        self:emit{ type = 'stop', ch = ch }
+      end
+      return
+    end
+  end
+end
 
-  local geo_run = clamp(st.level, 0, 1)
-  local actual_level = Burst.burst_level_for_hit(st.level, c.geodeMode, st.env, i, total)
+-- Inner burst: capture sequins refs, draw one value each, fire `reps` events
+-- spaced by 4/div beats (scaled by rate). If a captured ref was replaced (live
+-- grid edit / relaunch), bail and let the outer loop redraw fresh values.
+-- Returns {reps, div, target} or nil if cancelled.
+function Burst:run_burst(ch, token, target_in)
+  local target = target_in
+  while self.tokens[ch] == token do
+    local c = self.channels[ch]
+    local div_seq, reps_seq, note_seq = c.div, c.reps, c.note
+    local div_seqB, reps_seqB, note_seqB = c.divB, c.repsB, c.noteB
+    local div = math.max(1, div_seq() + div_seqB())
+    local repsA = reps_seq()
+    local repsBv = reps_seqB()
+    local reps = (repsA == -1) and -1 or (repsA + repsBv)
+    local degree = note_seq() + note_seqB()
+    local level = c.level() + c.levelB()
+    local harm = c.harm() + c.harmB()
+    local env = c.env() + c.envB()
+    local freq = scales.degree_to_freq(degree, self.scale)
+    -- finite bursts clamp to >=1 hit so a 0/negative B offset can't tight-loop.
+    local total = (reps == -1) and INF or math.max(1, reps)
+
+    -- burst-mode probability gate: skip the whole burst, advance time once.
+    if (not c.probHit) and reps ~= -1 and math.random() > c.burstProb then
+      target = target + total * (4 / div) / c.rate
+      self:wait_until_beat(target)
+      if self.tokens[ch] ~= token then return nil end
+      return { reps = reps, div = div, target = target }
+    end
+
+    local restarted = false
+    local i = 0
+    while (total == INF or i < total) and self.tokens[ch] == token do
+      -- identity check: a live grid edit / relaunch replaced a timing or
+      -- position sequins, so restart this burst with the new values now.
+      if c.div ~= div_seq or c.reps ~= reps_seq or c.note ~= note_seq
+         or c.divB ~= div_seqB or c.repsB ~= reps_seqB or c.noteB ~= note_seqB then
+        restarted = true
+        break
+      end
+      self:wait_until_beat(target)
+      if self.tokens[ch] ~= token then return nil end
+      if c.probHit and math.random() > c.burstProb then
+        -- per-hit skip: advance the playhead but don't trigger a voice.
+        self:emit{ type = 'fire', ch = ch, beat = target,
+                   freq = freq, level = level, harm = harm, env = env }
+      else
+        self:fire(ch, target, freq, level, harm, env, div, total, i)
+      end
+      target = target + (4 / div) / c.rate
+      i = i + 1
+    end
+
+    if self.tokens[ch] ~= token then return nil end
+    if not restarted then return { reps = reps, div = div, target = target } end
+  end
+  return nil
+end
+
+function Burst:fire(ch, beat, freq, level, harm, env, div, total, hit_idx)
+  local c = self.channels[ch]
+  local geo_run = clamp(level, 0, 1)
+  local actual_level = Burst.burst_level_for_hit(level, c.geodeMode, env, hit_idx, total)
 
   -- Pitch geode: g=1 -> target, g=0 -> -1 octave.
-  local geo_freq = st.freq
+  local geo_freq = freq
   if c.pitchEnv > 0 then
-    local g = Burst.geode_mod(c.pitchEnv, geo_run, i, total)
-    geo_freq = st.freq * (2 ^ (g - 1))
+    local g = Burst.geode_mod(c.pitchEnv, geo_run, hit_idx, total)
+    geo_freq = freq * (2 ^ (g - 1))
   end
 
   -- Harm geode: g=1 -> target harm, g=0 -> unison (2).
-  local geo_harm = st.harm
+  local geo_harm = harm
   if c.harmEnv > 0 then
-    local g = Burst.geode_mod(c.harmEnv, geo_run, i, total)
-    geo_harm = 2 + g * math.max(0, st.harm - 2)
+    local g = Burst.geode_mod(c.harmEnv, geo_run, hit_idx, total)
+    geo_harm = 2 + g * math.max(0, harm - 2)
   end
 
   -- decaySec from envMode (1=burst-length, 2=per-hit).
   local decay_sec = nil
   if c.envMode ~= 0 then
-    local tempo = (clock and clock.tempo) or 120
-    local sec_per_beat = 60 / tempo
-    local interval_sec = (4 / st.div) * sec_per_beat
+    local sec_per_beat = 60 / get_tempo()
+    local interval_sec = (4 / div) * sec_per_beat
     if c.envMode == 1 and total ~= INF then
       decay_sec = total * interval_sec
     else
@@ -296,41 +335,18 @@ function Burst:_fire_hit(ch)
     amp_dec = math.max(0.01, decay_sec)
     mod_dec = amp_dec * 0.4
   else
-    local e = clamp(st.env, 0, 1)
+    local e = clamp(env, 0, 1)
     attack = 0.001 + e * 0.024
     amp_dec = 0.4 + e * 0.8
     mod_dec = 0.05 + e * 0.25
   end
 
-  -- per-hit probability gate: skip the voice but still advance the playhead.
-  local skip = c.probHit and (math.random() > c.burstProb)
-  if not skip and not st.muted then
-    if engine and engine.trig then
-      engine.trig(geo_freq, actual_level, geo_harm, self.modIndex, attack, amp_dec, mod_dec)
-    end
+  if engine and engine.trig then
+    engine.trig(geo_freq, actual_level, geo_harm, self.modIndex, attack, amp_dec, mod_dec)
   end
 
-  local beat = (clock and clock.get_beats and clock.get_beats()) or 0
   self:emit{ type = 'fire', ch = ch, beat = beat,
-             freq = geo_freq, level = actual_level, harm = geo_harm, env = st.env }
-end
-
-function Burst:_tick(ch)
-  local st = self.rt[ch]
-  if st.remaining ~= INF and st.remaining <= 0 then
-    self:_pull_burst(ch)
-  end
-
-  self:_fire_hit(ch)
-  st.hit_idx = st.hit_idx + 1
-  if st.remaining ~= INF then st.remaining = st.remaining - 1 end
-
-  -- division that governs the gap to the NEXT hit (this burst's div).
-  self.sprockets[ch]:set_division(division_for(st.div, st.rate))
-
-  if st.single_shot and st.remaining ~= INF and st.remaining <= 0 then
-    self:stop(ch)
-  end
+             freq = geo_freq, level = actual_level, harm = geo_harm, env = env }
 end
 
 -- ---- randomize / mutate (grid-aligned values) --------------------------

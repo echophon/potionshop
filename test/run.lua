@@ -3,6 +3,7 @@
 -- Uses faithful stubs of the norns sequins/musicutil libs (see test/norns_stub).
 
 package.path = 'test/norns_stub/?.lua;lib/?.lua;' .. package.path
+clock = require 'clock'  -- virtual cooperative clock (global, like norns)
 
 local fail = 0
 local function check(name, cond)
@@ -95,31 +96,67 @@ check('harm values land on picker grid (2+i*0.75)', ok_harm)
 check('env values land on picker grid (i/31)', ok_env)
 check('lengths: div/reps/note 2..4, level len 1 unlocked', ok_len)
 
--- ---- burst: tick-level scheduling smoke test --------------------------
+-- ---- burst: clock-coroutine scheduling --------------------------------
 print('burst scheduling:')
+-- single-shot: reps length-1 finite -> completes during launch, stops itself
+clock._reset()
 local eng2 = Burst.new()
-eng2:setup_lattice()
 local fires = {}
 eng2:on(function(ev) if ev.type == 'fire' then fires[#fires + 1] = ev end end)
--- single-shot: reps length-1 finite -> stops after the burst completes
 eng2.channels[1].reps = seqx.new{1}
 eng2.channels[1].div  = seqx.new{4}
 eng2.channels[1].note = seqx.new{0}
 eng2:launch(1)
-local sp1 = eng2.sprockets[1]
-sp1.action()  -- one hit
 check('single-shot fired exactly one hit', #fires == 1)
 check('single-shot stopped the channel', eng2:is_running(1) == false)
 check('fire freq = degree_to_freq(0, major) = C1', approx(fires[1].freq, 32.7032))
+
 -- looping: default reps {2,2} keeps running across bursts
-local eng3 = Burst.new(); eng3:setup_lattice()
+clock._reset()
+local eng3 = Burst.new()
 local n = 0
 eng3:on(function(ev) if ev.type == 'fire' then n = n + 1 end end)
 eng3:launch(2)
-local sp2 = eng3.sprockets[2]
-for _ = 1, 6 do sp2.action() end
-check('looping channel still running after 6 ticks', eng3:is_running(2) == true)
-check('looping channel fired 6 hits', n == 6)
+check('looping fired first hit on launch', n == 1)
+check('looping running after launch', eng3:is_running(2) == true)
+clock._run_until(8)
+check('looping kept firing across bursts', n > 6)
+check('looping still running', eng3:is_running(2) == true)
+eng3:stop(2)
+check('stop halts the channel', eng3:is_running(2) == false)
+
+-- quantization: an off-grid division (triplet, 4/3 beats) must snap every
+-- event FORWARD to the quarter-note grid (quantize=4 -> step 1 beat). We read
+-- clock.get_beats() inside the listener = the actual (snapped) firing instant.
+clock._reset()
+local eqn = Burst.new()
+eqn.quantize = 4
+eqn.channels[1].div  = seqx.new{3}    -- natural spacing 4/3 ≈ 1.333 beats
+eqn.channels[1].reps = seqx.new{-1}   -- infinite
+eqn.channels[1].note = seqx.new{0}
+local fired_at = {}
+eqn:on(function(ev) if ev.type == 'fire' then fired_at[#fired_at + 1] = clock.get_beats() end end)
+eqn:launch(1)
+clock._run_until(10)
+local on_grid = true
+for _, b in ipairs(fired_at) do
+  if math.abs(b - math.floor(b + 0.5)) > 1e-6 then on_grid = false end
+end
+check('quantize snaps off-grid events to the quarter grid', on_grid and #fired_at > 3)
+eqn:stop(1)
+-- and with quantize disabled, the same triplet fires at its natural 4/3 spacing
+clock._reset()
+local eqd = Burst.new()
+eqd.quantize = 0
+eqd.channels[1].div  = seqx.new{3}
+eqd.channels[1].reps = seqx.new{-1}
+eqd.channels[1].note = seqx.new{0}
+local nat = {}
+eqd:on(function(ev) if ev.type == 'fire' then nat[#nat + 1] = clock.get_beats() end end)
+eqd:launch(1)
+clock._run_until(6)
+check('quantize=0 fires at natural 4/3 spacing', #nat >= 3 and approx(nat[2] - nat[1], 4/3))
+eqd:stop(1)
 
 -- ---- grid_ui: controller wiring ---------------------------------------
 local GridUI = require 'grid_ui'
@@ -140,7 +177,8 @@ local function vals_eq(a, b)
   return true
 end
 
-local geng = Burst.new(); geng:setup_lattice()
+clock._reset()
+local geng = Burst.new()
 local mg = mock_grid()
 local ctl = GridUI.new(geng, mg)
 

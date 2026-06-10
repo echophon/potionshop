@@ -19,6 +19,13 @@ local _dir = norns.state.path
 if _dir:sub(-1) ~= '/' then _dir = _dir .. '/' end
 package.path = _dir .. 'lib/?.lua;' .. package.path
 
+-- require() caches in package.loaded, and a norns script RELOAD does not clear
+-- it (only a full matron restart does). Drop our own modules from the cache so
+-- editing a lib/ file and reloading the script actually picks up the change.
+for _, m in ipairs({'burst', 'grid_ui', 'screen_ui', 'scales', 'seqx', 'quantize'}) do
+  package.loaded[m] = nil
+end
+
 local Burst    = require 'burst'
 local GridUI   = require 'grid_ui'
 local ScreenUI = require 'screen_ui'
@@ -98,7 +105,7 @@ end
 
 function init()
   eng = Burst.new()
-  eng:setup_lattice()
+  eng:setup()
 
   -- seed musical defaults (mirrors the web app's boot: randomize + B offsets)
   for i = 1, Burst.NUM_CHANNELS do eng:randomize(i) end
@@ -165,5 +172,4 @@ function cleanup()
   if engine and engine.panic then engine.panic() end
   if strobe_metro then strobe_metro:stop() end
   if reset_clock then clock.cancel(reset_clock) end
-  if eng and eng.lattice and eng.lattice.destroy then eng.lattice:destroy() end
 end
