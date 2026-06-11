@@ -7,7 +7,7 @@
 -- The grid is the primary interface (read lib/grid_ui.lua's layout comment).
 -- The screen + encoders/keys are a complete secondary surface (lib/screen_ui).
 --
--- E1 channel · E2 param (K1+E2 step) · E3 value · K2 launch/stop · K3 page · K1+K3 scale
+-- E1 channel · E2 cursor (run, steps, `_` add slot) · E3 value · K2/K3 line jump · K1 = system
 
 engine.name = 'Potionshop'
 
@@ -122,7 +122,8 @@ function init()
   end
 
   controller = GridUI.new(eng, gw, {
-    on_redraw = function() redraw() end,
+    -- mark the screen dirty; the strobe metro's tick repaints at ~15 Hz
+    on_redraw = function() if ui_screen then ui_screen.dirty = true end end,
   })
   ui_screen = ScreenUI.new(eng, controller)
 
@@ -136,6 +137,7 @@ function init()
     gw.slow_on = (math.floor(c / 8) % 2) == 0
     gw.fast_on = (math.floor(c / 3) % 2) == 0
     gw:refresh()
+    if ui_screen then ui_screen:tick() end
   end
   strobe_metro:start()
 

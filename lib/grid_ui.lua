@@ -112,6 +112,14 @@ local GridUI = {}
 GridUI.__index = GridUI
 GridUI.STEP_PICKER_VALUES = STEP_PICKER_VALUES
 GridUI.PARAMS = PARAMS
+-- shared with screen_ui so both surfaces draw/edit from one source of truth
+GridUI.value_brightness = value_brightness
+GridUI.ENV_MODE_NAMES = ENV_MODE_NAMES
+GridUI.GEODE_MODE_NAMES = GEODE_MODE_NAMES
+GridUI.PITCH_ENV_MODE_NAMES = PITCH_ENV_MODE_NAMES
+GridUI.HARM_ENV_MODE_NAMES = HARM_ENV_MODE_NAMES
+GridUI.RESET_INTERVALS = RESET_INTERVALS
+GridUI.RATE_VALUES = RATE_VALUES
 
 -- opts.on_status(string): pushed status text (for screen). opts.on_redraw():
 -- called after any state change so the screen can refresh too.

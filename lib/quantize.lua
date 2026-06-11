@@ -5,10 +5,10 @@
 -- note" (so 4 = quarter notes, 16 = sixteenths). Step size in beats is 4/N.
 -- q <= 0 disables snapping.
 --
--- In the browser app this snapped arbitrary target beats forward to the next
--- grid point. Under the Norns lattice port its main job shifts to snapping a
--- channel's chosen division onto the global quantize grid, but the math is
--- identical and unit-testable without any Norns runtime.
+-- This snaps an event's target beat FORWARD to the next grid point, so every
+-- channel's clock coroutine (see burst.lua) locks to a shared sub-beat grid
+-- regardless of its own division. The math is identical to the browser app and
+-- unit-testable without any Norns runtime.
 
 local quantize = {}
 
