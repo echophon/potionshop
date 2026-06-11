@@ -22,18 +22,20 @@ package.path = _dir .. 'lib/?.lua;' .. package.path
 -- require() caches in package.loaded, and a norns script RELOAD does not clear
 -- it (only a full matron restart does). Drop our own modules from the cache so
 -- editing a lib/ file and reloading the script actually picks up the change.
-for _, m in ipairs({'burst', 'grid_ui', 'screen_ui', 'scales', 'seqx', 'quantize'}) do
+for _, m in ipairs({'burst', 'grid_ui', 'screen_ui', 'scales', 'seqx', 'quantize', 'params_sync'}) do
   package.loaded[m] = nil
 end
 
-local Burst    = require 'burst'
-local GridUI   = require 'grid_ui'
-local ScreenUI = require 'screen_ui'
-local scales   = require 'scales'
+local Burst      = require 'burst'
+local GridUI     = require 'grid_ui'
+local ScreenUI   = require 'screen_ui'
+local ParamsSync = require 'params_sync'
+local scales     = require 'scales'
 
 local eng        -- Burst engine
 local controller -- GridUI
 local ui_screen  -- ScreenUI
+local psync      -- ParamsSync (params <-> engine/UI bidirectional sync)
 local g          -- norns grid
 local gw         -- grid wrapper (0-based -> 1-based, strobe overlay)
 local strobe_metro
@@ -75,32 +77,6 @@ local function make_grid_wrapper(dev)
   return w
 end
 
--- ---- params ------------------------------------------------------------
-
-local function add_params()
-  params:add_separator('potionshop', 'POTIONSHOP')
-
-  params:add_option('scale', 'scale', scales.names, 2)  -- default 'major'
-  params:set_action('scale', function(i)
-    local name = scales.names[i]
-    eng.scale = scales.by_name[name]
-    if controller then
-      controller.selectedScaleName = name
-      controller.customMask = {}
-      for _, v in ipairs(scales.by_name[name]) do
-        controller.customMask[#controller.customMask + 1] = v
-      end
-      controller:refresh()
-    end
-  end)
-
-  params:add_number('quantize', 'quantize (per whole note)', 1, 32, 32)
-  params:set_action('quantize', function(v) eng.quantize = v end)
-
-  params:add_number('mod_index', 'FM mod index', 1, 24, 8)
-  params:set_action('mod_index', function(v) eng.modIndex = v end)
-end
-
 -- ---- lifecycle ---------------------------------------------------------
 
 function init()
@@ -127,8 +103,15 @@ function init()
   })
   ui_screen = ScreenUI.new(eng, controller)
 
-  add_params()
+  -- params layer (lib/params_sync.lua): the entire instrument as norns params,
+  -- kept bidirectionally in sync with the grid/screen. Defaults are captured
+  -- from the engine state seeded above, so the bang re-applies the boot
+  -- randomization rather than clobbering it; triggers arm only after the bang.
+  psync = ParamsSync.new{engine = eng, controller = controller, params = params, scales = scales}
+  psync:add_params()
+  psync:attach()
   params:bang()
+  psync:enable_triggers()
 
   -- strobe blink driver (~15 Hz): slow ≈ 0.6 Hz, fast ≈ 1.4 Hz
   strobe_metro = metro.init()
@@ -137,6 +120,7 @@ function init()
     gw.slow_on = (math.floor(c / 8) % 2) == 0
     gw.fast_on = (math.floor(c / 3) % 2) == 0
     gw:refresh()
+    if psync then psync:flush() end  -- coalesced repaint for param-menu edits
     if ui_screen then ui_screen:tick() end
   end
   strobe_metro:start()

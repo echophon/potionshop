@@ -56,15 +56,9 @@ local function freq_to_name(f)
   return NOTE_NAMES[(n % 12) + 1] .. (math.floor(n / 12) - 1)
 end
 
--- index of the picker value nearest `cur` (1-based).
-local function nearest_index(layout, cur)
-  local best, bd = 1, math.huge
-  for i = 1, #layout do
-    local d = math.abs(layout[i] - cur)
-    if d < bd then bd = d; best = i end
-  end
-  return best
-end
+-- index of the picker value nearest `cur` (1-based); one snapping rule shared
+-- with the grid + params surfaces.
+local nearest_index = GridUI.nearest_index
 
 -- compact value formatting for the lines (env shown on the 0..31 grid scale).
 local function fmt(param, v)
@@ -279,32 +273,35 @@ local function step_table(cur, tbl, d)
 end
 
 function Screen:_edit_snd(d)
-  local c = self.engine.channels[self.sel_ch + 1]
+  local ch = self.sel_ch
+  local c = self.engine.channels[ch + 1]
   local line = self.sel_line[2]
-  if line == 1 then c.envMode  = clamp(c.envMode + d, 0, #GridUI.ENV_MODE_NAMES - 1)
-  elseif line == 2 then c.geodeMode = clamp(c.geodeMode + d, 0, #GridUI.GEODE_MODE_NAMES - 1)
-  elseif line == 3 then c.pitchEnv = clamp(c.pitchEnv + d, 0, #GridUI.PITCH_ENV_MODE_NAMES - 1)
-  elseif line == 4 then c.harmEnv = clamp(c.harmEnv + d, 0, #GridUI.HARM_ENV_MODE_NAMES - 1)
+  if line == 1 then self.ctl:set_scalar(ch, 'envMode', clamp(c.envMode + d, 0, #GridUI.ENV_MODE_NAMES - 1))
+  elseif line == 2 then self.ctl:set_scalar(ch, 'geodeMode', clamp(c.geodeMode + d, 0, #GridUI.GEODE_MODE_NAMES - 1))
+  elseif line == 3 then self.ctl:set_scalar(ch, 'pitchEnv', clamp(c.pitchEnv + d, 0, #GridUI.PITCH_ENV_MODE_NAMES - 1))
+  elseif line == 4 then self.ctl:set_scalar(ch, 'harmEnv', clamp(c.harmEnv + d, 0, #GridUI.HARM_ENV_MODE_NAMES - 1))
   end
 end
 
 function Screen:_edit_prob(d)
-  local c = self.engine.channels[self.sel_ch + 1]
+  local ch = self.sel_ch
+  local c = self.engine.channels[ch + 1]
   if self.sel_line[3] == 1 then
     -- snap to the grid slider's 0..14 columns so edits stay grid-reachable
     local k = clamp(round(c.burstProb * 14) + d, 0, 14)
-    c.burstProb = k / 14
+    self.ctl:set_scalar(ch, 'burstProb', k / 14)
   else
-    c.probHit = not c.probHit
+    self.ctl:set_scalar(ch, 'probHit', not c.probHit)
   end
 end
 
 function Screen:_edit_rst(d)
-  local c = self.engine.channels[self.sel_ch + 1]
+  local ch = self.sel_ch
+  local c = self.engine.channels[ch + 1]
   if self.sel_line[4] == 1 then
-    c.resetInterval = step_table(c.resetInterval, GridUI.RESET_INTERVALS, d)
+    self.ctl:set_scalar(ch, 'resetInterval', step_table(c.resetInterval, GridUI.RESET_INTERVALS, d))
   else
-    c.rate = step_table(c.rate, GridUI.RATE_VALUES, d)
+    self.ctl:set_scalar(ch, 'rate', step_table(c.rate, GridUI.RATE_VALUES, d))
   end
 end
 

@@ -89,6 +89,17 @@ local function index_of(t, v)
   return -1
 end
 
+-- index of the picker value nearest `cur` (1-based). Shared by screen_ui and
+-- params_sync so every surface snaps off-grid values identically.
+local function nearest_index(layout, cur)
+  local best, bd = 1, math.huge
+  for i = 1, #layout do
+    local d = math.abs(layout[i] - cur)
+    if d < bd then bd = d; best = i end
+  end
+  return best
+end
+
 local function value_brightness(param, value)
   if param == 'div' then
     return value <= 4 and 6 or value <= 8 and 8 or value <= 16 and 11 or 14
@@ -114,6 +125,8 @@ GridUI.STEP_PICKER_VALUES = STEP_PICKER_VALUES
 GridUI.PARAMS = PARAMS
 -- shared with screen_ui so both surfaces draw/edit from one source of truth
 GridUI.value_brightness = value_brightness
+GridUI.nearest_index = nearest_index
+GridUI.DEFAULT_VALUE = DEFAULT_VALUE
 GridUI.ENV_MODE_NAMES = ENV_MODE_NAMES
 GridUI.GEODE_MODE_NAMES = GEODE_MODE_NAMES
 GridUI.PITCH_ENV_MODE_NAMES = PITCH_ENV_MODE_NAMES
@@ -122,7 +135,11 @@ GridUI.RESET_INTERVALS = RESET_INTERVALS
 GridUI.RATE_VALUES = RATE_VALUES
 
 -- opts.on_status(string): pushed status text (for screen). opts.on_redraw():
--- called after any state change so the screen can refresh too.
+-- called after any state change so the screen can refresh too. opts.on_edit(ev):
+-- observer for every engine-state mutation made through the controller —
+-- ev = {type='seq', ch, param, layer} | {type='scalar', ch} |
+-- {type='channel', ch} | {type='global'} (ch 0-based). The params layer hangs
+-- off this; defaults to a no-op so tests run params-free.
 function GridUI.new(engine, grid, opts)
   opts = opts or {}
   local self = setmetatable({}, GridUI)
@@ -130,6 +147,7 @@ function GridUI.new(engine, grid, opts)
   self.g = grid
   self.on_status = opts.on_status or function() end
   self.on_redraw = opts.on_redraw or function() end
+  self.on_edit = opts.on_edit or function() end
 
   self.selectedParam = 'note'
   self.paramLayer = 'A'        -- 'A' | 'B'
@@ -170,6 +188,13 @@ function GridUI:refresh() self:render_all() end
 -- channel-state accessor (ch is 0-based)
 function GridUI:chan(ch) return self.engine.channels[ch + 1] end
 
+-- single edit path for channel scalar fields: grid and screen both write
+-- through here so on_edit sees every mutation. ch is 0-based.
+function GridUI:set_scalar(ch, field, value)
+  self:chan(ch)[field] = value
+  self.on_edit{ type = 'scalar', ch = ch }
+end
+
 -- ---- press dispatch ----------------------------------------------------
 
 function GridUI:press(x, y)
@@ -183,33 +208,31 @@ function GridUI:handle_normal_press(x, y)
     if self.resetMode then
       local rate_idx = index_of(RATE_COLS, x)
       if rate_idx ~= -1 then
-        self:chan(y).rate = RATE_VALUES[rate_idx + 1]
+        self:set_scalar(y, 'rate', RATE_VALUES[rate_idx + 1])
         self:render_channel_row(y); self.g:refresh()
         return
       end
       local idx = index_of(RESET_COLS, x)
       if idx ~= -1 then
-        self:chan(y).resetInterval = RESET_INTERVALS[idx + 1]
+        self:set_scalar(y, 'resetInterval', RESET_INTERVALS[idx + 1])
         self:render_channel_row(y); self.g:refresh()
       end
       return
     end
     if self.probMode then
-      local c = self:chan(y)
       if x == 15 then
-        c.probHit = not c.probHit
+        self:set_scalar(y, 'probHit', not self:chan(y).probHit)
       else
-        c.burstProb = x / 14
+        self:set_scalar(y, 'burstProb', x / 14)
       end
       self:render_channel_row(y); self.g:refresh()
       return
     end
     if self.soundMode then
-      local c = self:chan(y)
-      if x <= 2 then c.envMode = x
-      elseif x >= 4 and x <= 7 then c.geodeMode = x - 4
-      elseif x >= 8 and x <= 11 then c.pitchEnv = x - 8
-      elseif x >= 12 and x <= 15 then c.harmEnv = x - 12 end
+      if x <= 2 then self:set_scalar(y, 'envMode', x)
+      elseif x >= 4 and x <= 7 then self:set_scalar(y, 'geodeMode', x - 4)
+      elseif x >= 8 and x <= 11 then self:set_scalar(y, 'pitchEnv', x - 8)
+      elseif x >= 12 and x <= 15 then self:set_scalar(y, 'harmEnv', x - 12) end
       self:render_channel_row(y); self.g:refresh()
       return
     end
@@ -281,6 +304,7 @@ function GridUI:apply_picker_value(p, x, y)
     elseif y == 4 then
       self.engine.quantize = QUANTIZE_VALUES[x + 16 + 1]
     end
+    self.on_edit{ type = 'global' }
     self:render_all()
   end
 end
@@ -353,6 +377,7 @@ function GridUI:commit_step_raw(ch, param, vals, layer)
   local c = self:chan(ch)
   if layer == 'A' then c[param] = seqx.new(final)
   else c[param .. 'B'] = seqx.new(final) end
+  self.on_edit{ type = 'seq', ch = ch, param = param, layer = layer }
   -- Shared INTONE: harm on a JF channel broadcasts to all JF channels.
   if param == 'harm' and layer == 'A' and c.voiceType == 'jf' then
     for i = 0, NUM_CHANNELS - 1 do
@@ -360,6 +385,7 @@ function GridUI:commit_step_raw(ch, param, vals, layer)
       if i ~= ch and oc.voiceType == 'jf' then
         local copy = {} for k = 1, #final do copy[k] = final[k] end
         oc.harm = seqx.new(copy)
+        self.on_edit{ type = 'seq', ch = i, param = 'harm', layer = 'A' }
       end
     end
   end
@@ -402,9 +428,10 @@ end
 
 function GridUI:clear_channel_param(ch)
   local param = self.selectedParam
-  local c = self:chan(ch)
-  c[param] = seqx.new{DEFAULT_VALUE[param]}
-  c[param .. 'B'] = seqx.new{0}
+  -- through commit_step_raw (not commit_step): clearing must not lock-sync,
+  -- but observers still need to see both layers reset
+  self:commit_step_raw(ch, param, {DEFAULT_VALUE[param]}, 'A')
+  self:commit_step_raw(ch, param, {0}, 'B')
   self:render_all()
 end
 
@@ -441,17 +468,22 @@ function GridUI:handle_row6(x)
 
   if self.actionMode == 'voice' and x < 6 then
     self.engine:toggle_voice(x + 1)
+    self.on_edit{ type = 'scalar', ch = x }
     self:render_all(); return
   end
   if self.actionMode == 'lock' and x < 6 then
     local c = self:chan(x)
-    c.locked = not c.locked
+    self:set_scalar(x, 'locked', not c.locked)
     if c.locked then self:enforce_lock_on_entry(x) end
     self:render_all(); return
   end
   if self.actionMode and x < 6 then
-    if self.actionMode == 'randomize' then self.engine:randomize(x + 1)
-    elseif self.actionMode == 'mutate' then self.engine:mutate(x + 1)
+    if self.actionMode == 'randomize' then
+      self.engine:randomize(x + 1)
+      self.on_edit{ type = 'channel', ch = x }
+    elseif self.actionMode == 'mutate' then
+      self.engine:mutate(x + 1)
+      self.on_edit{ type = 'channel', ch = x }
     elseif self.actionMode == 'clear' then self:clear_channel_param(x) end
     self:render_all(); return
   end
@@ -746,7 +778,10 @@ function GridUI:handle_kb_press(x, y)
   if y == 6 then
     if x == KB_EXIT_COL then self:exit_kb_mode(); return end
     local name = scales.kb_names[x + 1]
-    if name then self.engine.scale = scales.by_name[name] end
+    if name then
+      self.engine.scale = scales.by_name[name]
+      self.on_edit{ type = 'global' }
+    end
     self:render_all()
     return
   end
