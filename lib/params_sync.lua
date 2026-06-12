@@ -145,8 +145,14 @@ end
 
 -- Defaults are captured from the CURRENT engine state, so the params:bang()
 -- after init re-applies exactly what the boot randomization seeded (and
--- params:default() restores that boot state).
+-- params:default() restores that boot state). Split into globals/channels so
+-- the host can insert other groups (lib/outputs.lua) between them.
 function M:add_params()
+  self:add_globals()
+  self:add_channels()
+end
+
+function M:add_globals()
   local params = self.params
   local eng = self.engine
 
@@ -170,8 +176,10 @@ function M:add_params()
 
   params:add_number('mod_index', 'FM mod index', 1, 24, eng.modIndex)
   params:set_action('mod_index', function(v) eng.modIndex = v end)
+end
 
-  for n = 1, #eng.channels do self:_add_channel_params(n) end
+function M:add_channels()
+  for n = 1, #self.engine.channels do self:_add_channel_params(n) end
 end
 
 function M:_add_channel_params(n)

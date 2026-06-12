@@ -239,12 +239,12 @@ local sui = ScreenUI.new(seng, sctl)
 
 -- smoke: redraw runs clean on every page
 local pages_ok = true
-for p = 1, 4 do
+for p = 1, 5 do
   sui:set_page(p)
   local ok, err = pcall(function() sui:redraw() end)
   if not ok then pages_ok = false; print('      redraw error page ' .. p .. ': ' .. tostring(err)) end
 end
-check('redraw runs clean on all 4 pages', pages_ok)
+check('redraw runs clean on all 5 pages', pages_ok)
 check('set_page syncs grid modes (rst -> resetMode)', sctl.resetMode == true)
 
 -- main page: E3 edits land exactly on the step picker grid
@@ -259,8 +259,8 @@ check('main E3 edit lands on note picker grid',
 check('main E2 sync keeps grid selectedParam agreeing', sctl.selectedParam == 'note')
 
 -- snd page: edits cycle the shared mode tables
-sui:set_page(2)
-sui.sel_line[2] = 2
+sui:set_page(3)
+sui.sel_line[3] = 2
 local g0 = seng.channels[1].geodeMode
 sui:enc(3, 1)
 check('snd E3 steps geodeMode within table', seng.channels[1].geodeMode == g0 + 1)
@@ -268,21 +268,21 @@ sui:enc(3, 99)
 check('snd E3 clamps at table end', seng.channels[1].geodeMode == #GridUI.GEODE_MODE_NAMES - 1)
 
 -- prob page: prob snaps to the grid slider's k/14 columns
-sui:set_page(3)
-sui.sel_line[3] = 1
+sui:set_page(4)
+sui.sel_line[4] = 1
 seng.channels[1].burstProb = 1
 sui:enc(3, -1)
 check('prob E3 snaps to k/14', approx(seng.channels[1].burstProb, 13 / 14))
-sui.sel_line[3] = 2
+sui.sel_line[4] = 2
 sui:enc(3, 1)
 check('prob mode line toggles probHit', seng.channels[1].probHit == true)
 
 -- rst page: values come from the shared interval/rate tables
-sui:set_page(4)
-sui.sel_line[4] = 1
+sui:set_page(5)
+sui.sel_line[5] = 1
 sui:enc(3, 3)
 check('rst E3 lands in RESET_INTERVALS', in_set(seng.channels[1].resetInterval, GridUI.RESET_INTERVALS))
-sui.sel_line[4] = 2
+sui.sel_line[5] = 2
 sui:enc(3, 1)
 check('rate E3 lands in RATE_VALUES', in_set(seng.channels[1].rate, GridUI.RATE_VALUES))
 
@@ -308,10 +308,10 @@ check('ghost glyph drawn after fire', glyph_drawn)
 sui:set_page(1)
 sctl:press(15, 6)  -- SND on the grid
 sui:redraw()
-check('grid SND press switches screen to snd page', sui.page == 2)
+check('grid SND press switches screen to snd page', sui.page == 3)
 sctl:press(13, 6)  -- PROB on the grid
 sui:redraw()
-check('grid PROB press switches screen to prob page', sui.page == 3)
+check('grid PROB press switches screen to prob page', sui.page == 4)
 sctl:press(13, 6)  -- toggle PROB off
 sui:redraw()
 check('grid mode off returns screen to main page', sui.page == 1)
@@ -370,11 +370,40 @@ sui.sel_step = 0
 sui:enc(3, -1)
 check('last remaining step clamps, never removed', seqx.len(seng.channels[1].note) == 1)
 
--- K2/K3 jump whole lines
+-- K2/K3 page back/forward, clamped at the ends; grid modes + paramLayer follow
+sui:set_page(1)
 sui:key(3, 1)
-check('K3 jumps to the next line', sui.sel_line[1] == 5 and sui.sel_step == 0)
+check('K3 pages forward to alt (grid layer follows)',
+  sui.page == 2 and sctl.paramLayer == 'B')
+sui:key(3, 1)
+check('K3 pages to snd (grid soundMode follows)',
+  sui.page == 3 and sctl.soundMode == true)
 sui:key(2, 1)
-check('K2 jumps back a line', sui.sel_line[1] == 4)
+check('K2 pages back to alt (soundMode off)',
+  sui.page == 2 and sctl.soundMode == false)
+sui:key(2, 1)
+check('K2 back to main restores layer A', sui.page == 1 and sctl.paramLayer == 'A')
+sui:key(2, 1)
+check('K2 clamps at main (no wrap)', sui.page == 1 and sctl.resetMode == false)
+
+-- alt page: clone of main editing the B (offset) layer
+sui:set_page(2)
+sui.sel_ch = 0
+seng.channels[1].divB = seqx.new{0}
+sui.sel_line[2] = 2  -- div
+sui:enc(2, 0)        -- sync the grid's selected param + layer
+sui.sel_step = 0
+sui:enc(3, 1)
+check('alt E3 steps div B from 0 onto the picker grid',
+  seqx.values(seng.channels[1].divB)[1] == GridUI.STEP_PICKER_VALUES.div[1])
+sui:enc(3, -1)
+check('alt E3 decrement returns to literal 0 (no offset)',
+  seqx.values(seng.channels[1].divB)[1] == 0)
+sui.sel_step = 1  -- `_` add slot
+sui:enc(3, 1)
+check('alt `_` appends literal 0', seqx.len(seng.channels[1].divB) == 2
+  and seqx.values(seng.channels[1].divB)[2] == 0)
+sui:set_page(1)
 
 -- focused value token gets an underscore (rect 1px tall, token width)
 seng.channels[1].div = seqx.new{16, 8}
@@ -570,6 +599,144 @@ check('flush clears the pending render', psync.render_pending == false)
 peng.channels[5].burstProb = 3 / 14
 fake.action_read()
 check('action_read reflects engine state into params', fake:get('ch5_prob') == 3)
+
+-- ---- outputs: per-channel midi / crow / i2c routing ----------------------
+local Outputs = require 'outputs'
+print('outputs:')
+
+local midi_log = {}
+local fake_midi = {
+  connect = function(dev)
+    return {
+      dev = dev,
+      note_on  = function(_, note, vel, ch) midi_log[#midi_log + 1] = {'on', note, vel, ch} end,
+      note_off = function(_, note, vel, ch) midi_log[#midi_log + 1] = {'off', note, vel, ch} end,
+    }
+  end,
+}
+local crow_log = {}
+local function fake_crow_out(n)
+  return setmetatable({volts = 0, action = ''}, {
+    __call = function(self) crow_log[#crow_log + 1] = {'exec', n, self.action} end,
+  })
+end
+local fake_crow = {
+  output = {fake_crow_out(1), fake_crow_out(2), fake_crow_out(3), fake_crow_out(4)},
+  ii = {
+    jf = {
+      mode       = function(m) crow_log[#crow_log + 1] = {'jf_mode', m} end,
+      play_voice = function(voice, v, l) crow_log[#crow_log + 1] = {'jf', voice, v, l} end,
+    },
+    er301 = {
+      cv       = function(p, v) crow_log[#crow_log + 1] = {'301cv', p, v} end,
+      tr_pulse = function(p) crow_log[#crow_log + 1] = {'301tr', p} end,
+    },
+  },
+}
+
+-- pure conversions
+check('freq_to_note A4 = 69', approx(Outputs.freq_to_note(440), 69))
+check('note_to_volts C5 = +1V', approx(Outputs.note_to_volts(72), 1))
+check('velocity scales level linearly', Outputs.velocity(0.5) == 64)
+check('velocity floors at 1', Outputs.velocity(0.001) == 1)
+check('velocity caps at 127', Outputs.velocity(1.5) == 127)
+
+clock._reset()
+local ofake = Paramset.new()
+local outs = Outputs.new{params = ofake, midi = fake_midi, crow = fake_crow}
+outs:add_params()
+check('outputs group size exact', group_counts_ok(ofake))
+ofake:bang()
+check('default destination is audio', outs:wants_audio(1) == true)
+outs:note(1, {freq = 440, level = 0.5, dur = 0.5})
+check('audio destination sends nothing external', #midi_log == 0 and #crow_log == 0)
+
+-- midi: note on with velocity/channel, note off after dur via clock
+ofake:set('ch1_output', Outputs.DEST.MIDI)
+ofake:set('ch1_midi_chan', 5)
+check('midi destination disables internal audio', outs:wants_audio(1) == false)
+outs:note(1, {freq = 261.6256, level = 0.5, dur = 0.5})
+check('midi note_on: middle C, vel 64, chan 5',
+  #midi_log == 1 and midi_log[1][1] == 'on' and midi_log[1][2] == 60
+  and midi_log[1][3] == 64 and midi_log[1][4] == 5)
+clock._run_until(4)  -- 0.5 s at 120 bpm = 1 beat
+check('midi note_off scheduled after dur',
+  #midi_log == 2 and midi_log[2][1] == 'off' and midi_log[2][2] == 60)
+
+-- retrigger same pitch: old note cut first, stale timer's off dropped
+midi_log = {}
+outs:note(1, {freq = 261.6256, level = 0.5, dur = 0.5})
+outs:note(1, {freq = 261.6256, level = 0.9, dur = 0.5})
+check('retrigger cuts the held note first',
+  midi_log[1][1] == 'on' and midi_log[2][1] == 'off' and midi_log[3][1] == 'on')
+clock._run_until(8)
+check('exactly one note_off after retrigger settles', #midi_log == 4
+  and midi_log[4][1] == 'off')
+
+-- zero-level hits are silent everywhere (matches the internal voice)
+midi_log = {}
+outs:note(1, {freq = 440, level = 0, dur = 0.5})
+check('level 0 sends no midi', #midi_log == 0)
+
+-- channel stop / cleanup flushes hanging notes
+outs:note(1, {freq = 440, level = 0.5, dur = 9})
+midi_log = {}
+outs:notes_off(1)
+check('notes_off flushes the hanging note', #midi_log == 1 and midi_log[1][1] == 'off')
+clock._run_until(100)
+check('flushed note\'s stale timer stays silent', #midi_log == 1)
+
+-- crow 1+2 / 3+4: v/oct on the odd output, level-scaled envelope on the even
+ofake:set('ch2_output', Outputs.DEST.CROW12)
+crow_log = {}
+outs:note(2, {freq = 523.2511, level = 0.5, dur = 0.5})
+check('crow 1+2 sets v/oct pitch on out 1', approx(fake_crow.output[1].volts, 1))
+check('crow 1+2 fires envelope on out 2', #crow_log == 1 and crow_log[1][1] == 'exec'
+  and crow_log[1][2] == 2 and crow_log[1][3]:find('to%(4%.00') ~= nil)
+ofake:set('ch2_output', Outputs.DEST.CROW34)
+crow_log = {}
+outs:note(2, {freq = 261.6256, level = 1, dur = 0.5})
+check('crow 3+4 routes to outputs 3/4', approx(fake_crow.output[3].volts, 0)
+  and crow_log[1][2] == 4)
+
+-- jf: mode 1 while any channel targets it, mode 0 when the last leaves
+crow_log = {}
+ofake:set('ch3_output', Outputs.DEST.JF)
+check('first jf channel sends jf.mode(1)', crow_log[1] and crow_log[1][1] == 'jf_mode'
+  and crow_log[1][2] == 1)
+ofake:set('ch4_output', Outputs.DEST.JF)
+check('second jf channel does not resend mode', #crow_log == 1)
+outs:note(3, {freq = 261.6256, level = 0.5, dur = 0.5})
+check('jf play_voice: voice = channel, v/oct, level volts', crow_log[2][1] == 'jf'
+  and crow_log[2][2] == 3 and approx(crow_log[2][3], 0) and approx(crow_log[2][4], 2.5))
+ofake:set('ch3_output', Outputs.DEST.AUDIO)
+check('jf mode stays while one channel remains', #crow_log == 2)
+ofake:set('ch4_output', Outputs.DEST.AUDIO)
+check('last jf channel leaving sends jf.mode(0)', crow_log[3][1] == 'jf_mode'
+  and crow_log[3][2] == 0)
+
+-- er301: cv + tr_pulse on the channel-numbered port
+ofake:set('ch5_output', Outputs.DEST.ER301)
+crow_log = {}
+outs:note(5, {freq = 523.2511, level = 0.5, dur = 0.5})
+check('er301 cv + tr on port = channel', crow_log[1][1] == '301cv' and crow_log[1][2] == 5
+  and approx(crow_log[1][3], 1) and crow_log[2][1] == '301tr' and crow_log[2][2] == 5)
+
+-- burst integration: fire() respects wants_audio and forwards final values
+engine = { trigs = 0 }
+engine.trig = function() engine.trigs = engine.trigs + 1 end
+local oeng = Burst.new()
+oeng.outputs = outs
+midi_log = {}
+oeng:fire(1, 0, 440, 0.5, 2, 0, 4, 4, 0)  -- ch1 is midi: external only
+check('fire on midi channel skips engine.trig', engine.trigs == 0 and #midi_log == 1)
+ofake:set('ch1_output', Outputs.DEST.AUDIO_MIDI)
+midi_log = {}
+oeng:fire(1, 0, 440, 0.5, 2, 0, 4, 4, 0)
+check('audio+midi fires both', engine.trigs == 1 and #midi_log == 1)
+oeng:fire(2, 0, 440, 0.5, 2, 0, 4, 4, 0)  -- ch2 is on crow 3+4
+check('fire on crow channel skips engine.trig', engine.trigs == 1)
+engine = nil
 
 print('')
 if fail == 0 then print('ALL PASS') else print(fail .. ' FAILURE(S)') os.exit(1) end

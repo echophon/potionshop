@@ -1,13 +1,9 @@
 -- potionshop
--- Six-channel FM burst sequencer for monome norns + grid.
--- A native port of the browser app (https://github.com/.../potionshop), itself
--- a descendant of the er301_geode Lua patch. FM voice first; JF/Mangrove voices
--- route to FM for now (see lib/Engine_Potionshop.sc).
+-- Six-channel burst sequencer. 
+-- Geode & sequins inspired
 --
--- The grid is the primary interface (read lib/grid_ui.lua's layout comment).
--- The screen + encoders/keys are a complete secondary surface (lib/screen_ui).
---
--- E1 channel · E2 cursor (run, steps, `_` add slot) · E3 value · K2/K3 line jump · K1 = system
+-- E1 channel E2 cursor E3 value 
+-- K2/K3 page back/fwd
 
 engine.name = 'Potionshop'
 
@@ -22,7 +18,7 @@ package.path = _dir .. 'lib/?.lua;' .. package.path
 -- require() caches in package.loaded, and a norns script RELOAD does not clear
 -- it (only a full matron restart does). Drop our own modules from the cache so
 -- editing a lib/ file and reloading the script actually picks up the change.
-for _, m in ipairs({'burst', 'grid_ui', 'screen_ui', 'scales', 'seqx', 'quantize', 'params_sync'}) do
+for _, m in ipairs({'burst', 'grid_ui', 'screen_ui', 'scales', 'seqx', 'quantize', 'params_sync', 'outputs'}) do
   package.loaded[m] = nil
 end
 
@@ -30,12 +26,14 @@ local Burst      = require 'burst'
 local GridUI     = require 'grid_ui'
 local ScreenUI   = require 'screen_ui'
 local ParamsSync = require 'params_sync'
+local Outputs    = require 'outputs'
 local scales     = require 'scales'
 
 local eng        -- Burst engine
 local controller -- GridUI
 local ui_screen  -- ScreenUI
 local psync      -- ParamsSync (params <-> engine/UI bidirectional sync)
+local outs       -- Outputs (per-channel midi / crow / i2c routing, params-only)
 local g          -- norns grid
 local gw         -- grid wrapper (0-based -> 1-based, strobe overlay)
 local strobe_metro
@@ -108,7 +106,21 @@ function init()
   -- from the engine state seeded above, so the bang re-applies the boot
   -- randomization rather than clobbering it; triggers arm only after the bang.
   psync = ParamsSync.new{engine = eng, controller = controller, params = params, scales = scales}
-  psync:add_params()
+
+  -- output routing (lib/outputs.lua): per-channel midi / crow / i2c
+  -- destinations, params-only (OUTPUTS group, placed between the globals
+  -- and the channel groups). Burst:fire consults it.
+  outs = Outputs.new{params = params, midi = midi, crow = crow,
+                     num_channels = Burst.NUM_CHANNELS}
+  eng.outputs = outs
+
+  psync:add_globals()
+  outs:add_params()
+  psync:add_channels()
+  eng:on(function(ev)
+    if ev.type == 'stop' then outs:notes_off(ev.ch) end
+  end)
+
   psync:attach()
   params:bang()
   psync:enable_triggers()
@@ -155,6 +167,7 @@ function redraw() if ui_screen then ui_screen:redraw() end end
 
 function cleanup()
   if eng then eng:stop_all() end
+  if outs then outs:all_notes_off() end
   if engine and engine.panic then engine.panic() end
   if strobe_metro then strobe_metro:stop() end
   if reset_clock then clock.cancel(reset_clock) end

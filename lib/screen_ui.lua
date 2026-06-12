@@ -10,21 +10,24 @@
 --
 -- Control scheme:
 --   E1 = select channel (1..6)
---   E2 = scroll the cursor through every position on the main page: the run
---        line, then each step of each param line in turn. Each param line
---        ends in a temporary `_` add slot. (Other pages: select line.)
+--   E2 = scroll the cursor through every position on a sequence page
+--        (main/alt): the run line, then each step of each param line in
+--        turn. Each param line ends in a temporary `_` add slot.
+--        (Other pages: select line.)
 --   E3 = edit under the cursor. run: right = launch, left = stop. steps:
 --        change the value (grid-reachable snapped); decrement below the
 --        lowest value to remove the step; on `_`, increment to append one.
---   K2 / K3 = jump to the previous / next line (the fast lane; E2 walks)
+--   K2 / K3 = page back / forward (main · alt · snd · prob · rst, clamped)
 --   K1 = untouched — left to the norns system menus
 --
--- Pages: `main` edits launch + the six param sequences (via the same
--- commit_step path the grid uses); `snd` / `prob` / `rst` edit the selected
--- channel's mode fields — the same fields the grid's soundMode/probMode/
--- resetMode presses set, picking only from GridUI's shared value tables.
--- Page switching and the scale picker live on the grid (RST/PROB/SND/QNT
--- buttons); the screen tab follows.
+-- Pages: `main` edits launch + the six A-layer param sequences (via the same
+-- commit_step path the grid uses); `alt` is its clone for the B (additive
+-- offset) layer, snapping to the same extended value set params_sync uses
+-- (literal 0 = no offset, plus the picker grid); `snd` / `prob` / `rst` edit
+-- the selected channel's mode fields — the same fields the grid's soundMode/
+-- probMode/resetMode presses set, picking only from GridUI's shared value
+-- tables. The grid's RST/PROB/SND buttons still switch the matching pages;
+-- the screen tab follows, and main/alt drive the grid's paramLayer.
 --
 -- Redraw model: state changes set `dirty`; the host calls tick() at ~15 Hz
 -- (piggybacking on the strobe metro) and we repaint only when dirty — the
@@ -34,8 +37,8 @@ local seqx   = require 'seqx'
 local GridUI = require 'grid_ui'
 
 local PARAMS = {'div', 'reps', 'note', 'level', 'harm', 'env'}
-local PAGES  = {'main', 'snd', 'prob', 'rst'}
-local LINES_PER_PAGE = {1 + #PARAMS, 4, 2, 2}  -- main line 1 = run
+local PAGES  = {'main', 'alt', 'snd', 'prob', 'rst'}
+local LINES_PER_PAGE = {1 + #PARAMS, 1 + #PARAMS, 4, 2, 2}  -- main/alt line 1 = run
 
 local NOTE_NAMES = {'c','c#','d','d#','e','f','f#','g','g#','a','a#','b'}
 
@@ -82,7 +85,7 @@ function Screen.new(engine, controller)
   self.ctl = controller
   self.SPV = controller.STEP_PICKER_VALUES
   self.sel_ch = 0
-  self.sel_line = {4, 1, 1, 1}  -- per-page focused line (main defaults to note)
+  self.sel_line = {4, 4, 1, 1, 1}  -- per-page focused line (main/alt default to note)
   self.sel_step = 0
   self.page = 1
   self.dirty = true
@@ -115,18 +118,38 @@ function Screen:tick()
   if self.dirty then self:redraw() end
 end
 
--- main page line 1 is `run`; lines 2..7 are the six params.
+-- pages 1 (main) and 2 (alt) are the two sequence pages; alt edits the
+-- B (additive offset) layer through the same machinery.
+function Screen:_seq_page() return self.page <= 2 end
+function Screen:layer() return (self.page == 2) and 'B' or 'A' end
+
+-- value layout for the focused param on this page. The B layer's value set
+-- is params_sync's: literal 0 (the no-offset default) plus the picker grid —
+-- prepended only where the A layout doesn't already start at 0.
+function Screen:_layout(param)
+  local layout = self.SPV[param]
+  if self:layer() == 'B' and layout[1] ~= 0 then
+    local t = {0}
+    for i = 1, #layout do t[i + 1] = layout[i] end
+    return t
+  end
+  return layout
+end
+
+-- sequence page line 1 is `run`; lines 2..7 are the six params.
 function Screen:main_param()
-  if self.sel_line[1] >= 2 then return PARAMS[self.sel_line[1] - 1] end
+  if not self:_seq_page() then return nil end
+  local line = self.sel_line[self.page]
+  if line >= 2 then return PARAMS[line - 1] end
   return nil
 end
 
--- cursor positions on a main-page line: `run` has one; a param line has one
--- per step plus a trailing `_` add slot (unless at the 16-step grid cap).
+-- cursor positions on a sequence-page line: `run` has one; a param line has
+-- one per step plus a trailing `_` add slot (unless at the 16-step grid cap).
 function Screen:_main_positions(line)
   if line == 1 then return 1 end
   local param = PARAMS[line - 1]
-  local len = seqx.len(self.ctl:seq_ref(self.sel_ch, param, 'A'))
+  local len = seqx.len(self.ctl:seq_ref(self.sel_ch, param, self:layer()))
   return (len < 16) and (len + 1) or len
 end
 
@@ -134,19 +157,20 @@ end
 function Screen:_on_add_slot()
   local param = self:main_param()
   if not param then return false end
-  return self.sel_step >= seqx.len(self.ctl:seq_ref(self.sel_ch, param, 'A'))
+  return self.sel_step >= seqx.len(self.ctl:seq_ref(self.sel_ch, param, self:layer()))
 end
 
 function Screen:_clamp_step()
   local param = self:main_param()
   if not param then self.sel_step = 0; return end
-  self.sel_step = clamp(self.sel_step, 0, self:_main_positions(self.sel_line[1]) - 1)
+  self.sel_step = clamp(self.sel_step, 0, self:_main_positions(self.sel_line[self.page]) - 1)
 end
 
--- move the main-page cursor one position, flowing across lines: run, then
--- every step (+ add slot) of each param line in turn.
+-- move the sequence-page cursor one position, flowing across lines: run,
+-- then every step (+ add slot) of each param line in turn.
 function Screen:_move_cursor(dir)
-  local line, pos = self.sel_line[1], self.sel_step + dir
+  local pg = self.page
+  local line, pos = self.sel_line[pg], self.sel_step + dir
   if pos < 0 then
     if line > 1 then
       line = line - 1
@@ -155,22 +179,22 @@ function Screen:_move_cursor(dir)
       pos = 0
     end
   elseif pos >= self:_main_positions(line) then
-    if line < LINES_PER_PAGE[1] then
+    if line < LINES_PER_PAGE[pg] then
       line = line + 1
       pos = 0
     else
       pos = self:_main_positions(line) - 1
     end
   end
-  self.sel_line[1], self.sel_step = line, pos
+  self.sel_line[pg], self.sel_step = line, pos
 end
 
--- keep the grid's selected param agreeing with the focused line.
+-- keep the grid's selected param + layer agreeing with the focused line/page.
 function Screen:_sync_selected_param()
   local param = self:main_param()
-  if param and self.ctl.selectedParam ~= param then
+  if param and (self.ctl.selectedParam ~= param or self.ctl.paramLayer ~= self:layer()) then
     self.ctl.selectedParam = param
-    self.ctl.paramLayer = 'A'
+    self.ctl.paramLayer = self:layer()
     self.ctl:render_all()
   end
 end
@@ -179,18 +203,24 @@ function Screen:set_page(p)
   self.page = ((p - 1) % #PAGES) + 1
   local c = self.ctl
   c.picker = nil; c.kbMode = false; c.actionMode = nil
-  c.soundMode = (self.page == 2)
-  c.probMode  = (self.page == 3)
-  c.resetMode = (self.page == 4)
+  c.soundMode = (self.page == 3)
+  c.probMode  = (self.page == 4)
+  c.resetMode = (self.page == 5)
+  if self:_seq_page() then
+    c.paramLayer = self:layer()
+    self:_clamp_step()
+  end
   c:render_all()
   self.dirty = true
 end
 
 -- The grid's RST/PROB/SND buttons toggle the same modes set_page sets; follow
--- them so the screen tab always matches what the grid is showing.
+-- them so the screen tab always matches what the grid is showing. `alt` is a
+-- screen-only page (no grid mode), so it survives while no mode is active.
 function Screen:_sync_page_from_grid()
   local c = self.ctl
-  self.page = c.soundMode and 2 or c.probMode and 3 or c.resetMode and 4 or 1
+  self.page = c.soundMode and 3 or c.probMode and 4 or c.resetMode and 5
+    or (self:_seq_page() and self.page or 1)
 end
 
 -- ---- input ---------------------------------------------------------------
@@ -201,7 +231,7 @@ function Screen:enc(n, d)
     self.sel_ch = clamp(self.sel_ch + d, 0, 5)
     self:_clamp_step()
   elseif n == 2 then
-    if self.page == 1 then
+    if self:_seq_page() then
       local dir = (d >= 0) and 1 or -1
       for _ = 1, math.abs(d) do self:_move_cursor(dir) end
       self:_sync_selected_param()
@@ -216,10 +246,10 @@ function Screen:enc(n, d)
 end
 
 function Screen:_edit_value(d)
-  if self.page == 1 then self:_edit_main(d)
-  elseif self.page == 2 then self:_edit_snd(d)
-  elseif self.page == 3 then self:_edit_prob(d)
-  elseif self.page == 4 then self:_edit_rst(d) end
+  if self:_seq_page() then self:_edit_main(d)
+  elseif self.page == 3 then self:_edit_snd(d)
+  elseif self.page == 4 then self:_edit_prob(d)
+  elseif self.page == 5 then self:_edit_rst(d) end
   self.ctl:render_all()
 end
 
@@ -232,20 +262,21 @@ function Screen:_edit_main(d)
     elseif d < 0 and self.engine:is_running(ch1) then self.engine:stop(ch1) end
     return
   end
-  local seq = self.ctl:seq_ref(self.sel_ch, param, 'A')
+  local layer = self:layer()
+  local seq = self.ctl:seq_ref(self.sel_ch, param, layer)
   local src = seqx.values(seq)
   if #src == 0 then return end
   self:_clamp_step()
   local vals = {}
   for i = 1, #src do vals[i] = src[i] end
-  local layout = self.SPV[param]
+  local layout = self:_layout(param)
 
   -- the `_` add slot: a value below the bottom of the picker. Turning right
-  -- appends a step starting from the lowest picker value.
+  -- appends a step starting from the lowest value (0 = no offset on alt).
   if self.sel_step >= #vals then
     if d > 0 and #vals < 16 then
       vals[#vals + 1] = layout[clamp(d, 1, #layout)]
-      self.ctl:commit_step(self.sel_ch, param, vals, 'A')
+      self.ctl:commit_step(self.sel_ch, param, vals, layer)
     end
     return
   end
@@ -256,13 +287,13 @@ function Screen:_edit_main(d)
     -- the last remaining step just clamps instead
     if #vals > 1 then
       table.remove(vals, self.sel_step + 1)
-      self.ctl:commit_step(self.sel_ch, param, vals, 'A')
+      self.ctl:commit_step(self.sel_ch, param, vals, layer)
       self:_clamp_step()
     end
     return
   end
   vals[self.sel_step + 1] = layout[clamp(idx, 1, #layout)]
-  self.ctl:commit_step(self.sel_ch, param, vals, 'A')
+  self.ctl:commit_step(self.sel_ch, param, vals, layer)
 end
 
 -- step an indexed mode/value field through a shared GridUI table.
@@ -275,7 +306,7 @@ end
 function Screen:_edit_snd(d)
   local ch = self.sel_ch
   local c = self.engine.channels[ch + 1]
-  local line = self.sel_line[2]
+  local line = self.sel_line[3]
   if line == 1 then self.ctl:set_scalar(ch, 'envMode', clamp(c.envMode + d, 0, #GridUI.ENV_MODE_NAMES - 1))
   elseif line == 2 then self.ctl:set_scalar(ch, 'geodeMode', clamp(c.geodeMode + d, 0, #GridUI.GEODE_MODE_NAMES - 1))
   elseif line == 3 then self.ctl:set_scalar(ch, 'pitchEnv', clamp(c.pitchEnv + d, 0, #GridUI.PITCH_ENV_MODE_NAMES - 1))
@@ -286,7 +317,7 @@ end
 function Screen:_edit_prob(d)
   local ch = self.sel_ch
   local c = self.engine.channels[ch + 1]
-  if self.sel_line[3] == 1 then
+  if self.sel_line[4] == 1 then
     -- snap to the grid slider's 0..14 columns so edits stay grid-reachable
     local k = clamp(round(c.burstProb * 14) + d, 0, 14)
     self.ctl:set_scalar(ch, 'burstProb', k / 14)
@@ -298,26 +329,21 @@ end
 function Screen:_edit_rst(d)
   local ch = self.sel_ch
   local c = self.engine.channels[ch + 1]
-  if self.sel_line[4] == 1 then
+  if self.sel_line[5] == 1 then
     self.ctl:set_scalar(ch, 'resetInterval', step_table(c.resetInterval, GridUI.RESET_INTERVALS, d))
   else
     self.ctl:set_scalar(ch, 'rate', step_table(c.rate, GridUI.RATE_VALUES, d))
   end
 end
 
--- K1 is left untouched for the norns system. K2/K3 jump a whole line at a
--- time (E2 walks every step position, so this is the fast lane between lines).
+-- K1 is left untouched for the norns system. K2/K3 page back/forward,
+-- clamping at the ends; E2's walking cursor covers travel within a page.
 function Screen:key(n, z)
   if z ~= 1 then return end
   self:_sync_page_from_grid()
   if n == 2 or n == 3 then
-    local p = self.page
-    self.sel_line[p] = clamp(self.sel_line[p] + (n == 3 and 1 or -1), 1, LINES_PER_PAGE[p])
-    if p == 1 then
-      self.sel_step = 0
-      self:_sync_selected_param()
-    end
-    self.dirty = true
+    self:set_page(clamp(self.page + (n == 3 and 1 or -1), 1, #PAGES))
+    if self:_seq_page() then self:_sync_selected_param() end
   end
 end
 
@@ -386,14 +412,14 @@ end
 -- between the ': ' and the focused token, for measuring where it starts).
 function Screen:page_lines()
   local c = self.engine.channels[self.sel_ch + 1]
-  if self.page == 1 then
+  if self:_seq_page() then
     local run_val = self.engine:is_running(self.sel_ch + 1) and 'on' or 'off'
     local lines = {
       {'run', run_val, '', run_val},
     }
     for i, p in ipairs(PARAMS) do
-      local vals = seqx.values(self.ctl:seq_ref(self.sel_ch, p, 'A'))
-      local focused = (self.sel_line[1] == i + 1)
+      local vals = seqx.values(self.ctl:seq_ref(self.sel_ch, p, self:layer()))
+      local focused = (self.sel_line[self.page] == i + 1)
       -- slide a 4-value window so the cursor's step is always visible
       local first = focused and math.max(1, self.sel_step + 1 - 3) or 1
       local last = math.min(#vals, first + 3)
@@ -415,14 +441,14 @@ function Screen:page_lines()
     return lines
   end
   local lines
-  if self.page == 2 then
+  if self.page == 3 then
     lines = {
       {'env',   GridUI.ENV_MODE_NAMES[c.envMode + 1]},
       {'geode', GridUI.GEODE_MODE_NAMES[c.geodeMode + 1]},
       {'pitch', GridUI.PITCH_ENV_MODE_NAMES[c.pitchEnv + 1]},
       {'harm',  GridUI.HARM_ENV_MODE_NAMES[c.harmEnv + 1]},
     }
-  elseif self.page == 3 then
+  elseif self.page == 4 then
     lines = {
       {'prob', round(c.burstProb * 100) .. '%'},
       {'mode', c.probHit and 'hit' or 'burst'},
@@ -477,11 +503,12 @@ function Screen:draw_steps()
       screen.fill()
     end
   end
-  -- cursor underline, between the rows (main page edits the A layer); on the
-  -- add slot it sits past the last square, reading as the `_` itself
-  if self.page == 1 and self:main_param() then
+  -- cursor underline: between the rows when editing A (main), below the B
+  -- row on alt; on the add slot it sits past the last square, reading as
+  -- the `_` itself
+  if self:_seq_page() and self:main_param() then
     screen.level(8)
-    screen.rect(2 + self.sel_step * 5, 57, 4, 1)
+    screen.rect(2 + self.sel_step * 5, self.page == 1 and 57 or 63, 4, 1)
     screen.fill()
   end
 end

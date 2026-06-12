@@ -131,6 +131,7 @@ function Burst.new()
   end
   self.listeners = {}
   self.modIndex = 8     -- FM modulation index (FMVoice default)
+  self.outputs = nil    -- optional lib/outputs.lua router (set by the host)
   return self
 end
 
@@ -341,8 +342,16 @@ function Burst:fire(ch, beat, freq, level, harm, env, div, total, hit_idx)
     mod_dec = 0.05 + e * 0.25
   end
 
-  if engine and engine.trig then
+  -- output routing (lib/outputs.lua): non-audio destinations replace the
+  -- internal voice; midi/crow get the same final freq/level/length it would
+  -- have played. Hook lives here (not on emit) because the per-hit prob skip
+  -- emits a 'fire' event for the playhead without sounding anything.
+  local out = self.outputs
+  if engine and engine.trig and ((not out) or out:wants_audio(ch)) then
     engine.trig(geo_freq, actual_level, geo_harm, self.modIndex, attack, amp_dec, mod_dec)
+  end
+  if out then
+    out:note(ch, { freq = geo_freq, level = actual_level, dur = attack + amp_dec })
   end
 
   self:emit{ type = 'fire', ch = ch, beat = beat,
