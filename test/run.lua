@@ -39,6 +39,13 @@ check('custom scale hijaz preserved literally', #scales.by_name.hijaz == 7
   and scales.by_name.hijaz[2] == 1)
 check('12 scale names in picker order', #scales.names == 12
   and scales.names[1] == 'chromatic' and scales.names[12] == 'wuSheng')
+check('7 grid preset names, subset of scales.names', #scales.picker_names == 7
+  and scales.picker_names[1] == 'major' and scales.by_name[scales.picker_names[7]] ~= nil)
+check('root transposes tonic up by semitones',
+  approx(scales.degree_to_freq(0, major, 2),
+    require('musicutil').note_num_to_freq(26)))
+check('root defaults to 0 (no transposition)',
+  approx(scales.degree_to_freq(0, major, 0), scales.degree_to_freq(0, major)))
 
 -- ---- seqx / sequins ----------------------------------------------------
 local seqx = require 'seqx'
@@ -262,9 +269,13 @@ check('re-press stops channel 1', geng:is_running(1) == false)
 -- scale picker (row6 QNT col 14)
 ctl:press(14, 6)
 check('QNT opens scale picker', ctl.picker ~= nil and ctl.picker.kind == 'scale')
-ctl:press(2, 0)  -- scales.names[3] = 'minor'
+ctl:press(1, 0)  -- scales.picker_names[2] = 'minor'
 check('scale picker selects minor', ctl.selectedScaleName == 'minor')
 check('engine.scale set to minor intervals', vals_eq(geng.scale, scales.by_name.minor))
+ctl:press(0, 5)  -- root keyboard white row, col 0 = semitone 0 (C)
+check('root keyboard sets engine.root to C', geng.root == 0)
+ctl:press(1, 5)  -- col 1 white = semitone 2 (D)
+check('root keyboard sets engine.root to D', geng.root == 2)
 ctl:press(14, 6)  -- close scale picker
 check('scale picker closed via QNT', ctl.picker == nil)
 
@@ -679,7 +690,7 @@ check('randomize trigger reflects all sequences exactly', rt_ok)
 
 -- grid quantize edit reflects into the global param
 pctl:press(14, 6)  -- scale picker
-pctl:press(7, 3)   -- quantize row -> QUANTIZE_VALUES[8] = 8
+pctl:press(15, 1)  -- quantize block row 0, col 7 -> QUANTIZE_VALUES[8] = 8
 check('grid quantize edit reflects to param', fake:get('quantize') == 8)
 pctl:press(14, 6)  -- close picker
 

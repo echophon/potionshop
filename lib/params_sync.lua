@@ -3,7 +3,7 @@
 -- PSETs, MIDI mapping) and keeps them bidirectionally in sync with the grid
 -- and screen surfaces.
 --
--- Layout: a global block (scale / quantize / mod_index) plus one group per
+-- Layout: a global block (scale / root / quantize / mod_index) plus one group per
 -- channel ("CHANNEL 1".."CHANNEL 6"). Each group holds the channel scalars
 -- (run, rate, prob, modes, reset, clear/copy/paste + action triggers) and, per
 -- sequence parameter x layer (div/reps/note/level/harm/env x A/B), a
@@ -47,6 +47,7 @@ for i, v in ipairs(GridUI.RESET_INTERVALS) do
   RESET_NAMES[i] = (v == 0) and 'off' or (v .. (v == 1 and ' bar' or ' bars'))
 end
 local PROB_MODE_NAMES = {'burst', 'hit'}
+local NOTE_NAMES = {'C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'}
 
 local function round(x) return math.floor(x + 0.5) end
 local function clamp(v, lo, hi) return math.max(lo, math.min(hi, v)) end
@@ -172,6 +173,9 @@ function M:add_globals()
     end
     self:request_render()
   end)
+
+  params:add_option('root', 'root', NOTE_NAMES, (eng.root or 0) + 1)
+  params:set_action('root', function(i) eng.root = i - 1; self:request_render() end)
 
   params:add_number('quantize', 'quantize (per whole note)', 1, 32, clamp(eng.quantize, 1, 32))
   params:set_action('quantize', function(v) eng.quantize = v; self:request_render() end)
@@ -434,6 +438,7 @@ end
 function M:reflect_globals()
   local params = self.params
   params:set('quantize', clamp(self.engine.quantize, 1, 32), true)
+  params:set('root', clamp((self.engine.root or 0) + 1, 1, 12), true)
   -- a custom note mask has no preset index; leave the option untouched then
   local si = self:_scale_index(self.engine.scale)
   if si then params:set('scale', si, true) end

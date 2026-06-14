@@ -24,7 +24,12 @@
 --   PERF:  rows 0-5 = reset off/1/2/4 bars (cols 0..3) · octave -2..+2 (cols 5..9)
 --          · rate (cols 11..15)
 --   SND:   rows 0-5 = env(0-2) · geode(4-7) · pitch env(8-11) · harm env(12-15)
---   scale picker: row 0 scales · rows 1-2 note-mask keyboard · rows 3-4 quantize
+--   scale picker: row 0 cols 0-6 scale presets (7)
+--                 rows 1-2 cols 0-6 degree (note-mask) keyboard: black row 1 / white row 2
+--                 rows 4-5 cols 0-6 root keyboard: black row 4 / white row 5
+--                 rows 1-4 cols 8-15 quantize (8x4 = 32 values, right side)
+--                 keyboards are a compact piano: white keys packed at cols 0-6,
+--                 black keys offset above the white key they follow
 --   step picker:  rows 0-1 value grid
 --   KB mode: see handle_kb_press / render_kb_mode
 
@@ -54,6 +59,18 @@ local KB_CLEAR_BUTTON_COL = 14
 
 local BLACK_KEYS = {1, 3, 6, 8, 10}
 local WHITE_KEYS = {0, 2, 4, 5, 7, 9, 11}
+
+-- Compact piano keyboard (scale picker): col -> semitone. White keys pack into
+-- cols 0..6; black keys sit above the white key they follow (cols 2 and 6 have
+-- no black key, matching a real keyboard's E-F and B-C gaps).
+local KB_WHITE_COL = {[0] = 0, [1] = 2, [2] = 4, [3] = 5, [4] = 7, [5] = 9, [6] = 11}
+local KB_BLACK_COL = {[0] = 1, [1] = 3, [3] = 6, [4] = 8, [5] = 10}
+-- Scale-picker row assignments.
+local SCALE_PRESET_ROW = 0
+local DEG_BLACK_ROW, DEG_WHITE_ROW = 1, 2
+local ROOT_BLACK_ROW, ROOT_WHITE_ROW = 4, 5
+-- Quantize block: 8 cols x 4 rows on the right side.
+local QNT_COL0, QNT_ROW0, QNT_W, QNT_H = 8, 1, 8, 4
 local RESET_INTERVALS = {0, 1, 2, 4}
 local RESET_COLS      = {0, 1, 2, 3}
 local OCTAVE_VALUES = {-2, -1, 0, 1, 2}
@@ -260,7 +277,7 @@ end
 
 function GridUI:handle_picker_press(x, y)
   local p = self.picker
-  local picker_rows = (p.kind == 'scale') and 5 or 2
+  local picker_rows = (p.kind == 'scale') and 6 or 2
   if y < picker_rows then
     self:apply_picker_value(p, x, y)
     return
@@ -290,37 +307,47 @@ function GridUI:apply_picker_value(p, x, y)
     self:set_step(p.ch, p.col, v, p.layer)
     self:close_picker()
   elseif p.kind == 'scale' then
-    if y == 0 then
-      local name = scales.names[x + 1]
+    -- quantize block (right side): 8x4 grid, cols 8..15, rows 1..4
+    if x >= QNT_COL0 and y >= QNT_ROW0 and y < QNT_ROW0 + QNT_H then
+      local idx = (y - QNT_ROW0) * QNT_W + (x - QNT_COL0) + 1
+      self.engine.quantize = QUANTIZE_VALUES[idx]
+    elseif y == SCALE_PRESET_ROW then
+      local name = scales.picker_names[x + 1]
       if not name then return end
       self.selectedScaleName = name
       self.customMask = {}
       for _, vv in ipairs(scales.by_name[name]) do self.customMask[#self.customMask + 1] = vv end
       self.engine.scale = self.customMask
-    elseif y == 1 or y == 2 then
-      local semitone = x
-      if semitone >= 12 then return end
-      local valid = (y == 1) and BLACK_KEYS or WHITE_KEYS
-      if not contains(valid, semitone) then return end
-      local at = nil
-      for i, s in ipairs(self.customMask) do if s == semitone then at = i break end end
-      if at then
-        if #self.customMask > 1 then table.remove(self.customMask, at) end
-      else
-        self.customMask[#self.customMask + 1] = semitone
-        table.sort(self.customMask)
-      end
-      local copy = {}
-      for _, s in ipairs(self.customMask) do copy[#copy + 1] = s end
-      self.engine.scale = copy
-    elseif y == 3 then
-      self.engine.quantize = QUANTIZE_VALUES[x + 1]
-    elseif y == 4 then
-      self.engine.quantize = QUANTIZE_VALUES[x + 16 + 1]
+    elseif y == DEG_BLACK_ROW or y == DEG_WHITE_ROW then
+      local semitone = (y == DEG_BLACK_ROW) and KB_BLACK_COL[x] or KB_WHITE_COL[x]
+      if semitone == nil then return end
+      self:toggle_mask_note(semitone)
+    elseif y == ROOT_BLACK_ROW or y == ROOT_WHITE_ROW then
+      local semitone = (y == ROOT_BLACK_ROW) and KB_BLACK_COL[x] or KB_WHITE_COL[x]
+      if semitone == nil then return end
+      self.engine.root = semitone
+    else
+      return
     end
     self.on_edit{ type = 'global' }
     self:render_all()
   end
+end
+
+-- Toggle a semitone in the custom note mask. Refuses to empty the mask (a scale
+-- needs at least one degree). Keeps customMask sorted and re-points engine.scale.
+function GridUI:toggle_mask_note(semitone)
+  local at = nil
+  for i, s in ipairs(self.customMask) do if s == semitone then at = i break end end
+  if at then
+    if #self.customMask > 1 then table.remove(self.customMask, at) end
+  else
+    self.customMask[#self.customMask + 1] = semitone
+    table.sort(self.customMask)
+  end
+  local copy = {}
+  for _, s in ipairs(self.customMask) do copy[#copy + 1] = s end
+  self.engine.scale = copy
 end
 
 -- ---- picker enter/exit -------------------------------------------------
@@ -556,28 +583,40 @@ function GridUI:render_step_picker(p)
 end
 
 function GridUI:render_scale_picker()
-  for x = 0, GRID_W - 1 do
-    local name = scales.names[x + 1]
-    local b
-    if not name then b = 0
-    elseif name == self.selectedScaleName then b = 15
-    else b = 5 end
-    self.g:set_led(x, 0, b)
+  -- clear the whole picker area first (rows 0..5)
+  for y = 0, 5 do for x = 0, GRID_W - 1 do self.g:set_led(x, y, 0) end end
+
+  -- row 0: 7 scale presets, left justified
+  for x = 0, #scales.picker_names - 1 do
+    local name = scales.picker_names[x + 1]
+    self.g:set_led(x, SCALE_PRESET_ROW, name == self.selectedScaleName and 15 or 5)
   end
-  for x = 0, GRID_W - 1 do
-    if x >= 12 or not contains(BLACK_KEYS, x) then self.g:set_led(x, 1, 0)
-    else self.g:set_led(x, 1, contains(self.customMask, x) and 12 or 3) end
+
+  -- degree (note-mask) keyboard: black row above white row
+  for x, semi in pairs(KB_BLACK_COL) do
+    self.g:set_led(x, DEG_BLACK_ROW, contains(self.customMask, semi) and 12 or 3)
   end
-  for x = 0, GRID_W - 1 do
-    if x >= 12 or not contains(WHITE_KEYS, x) then self.g:set_led(x, 2, 0)
-    else self.g:set_led(x, 2, contains(self.customMask, x) and 12 or 3) end
+  for x, semi in pairs(KB_WHITE_COL) do
+    self.g:set_led(x, DEG_WHITE_ROW, contains(self.customMask, semi) and 12 or 3)
   end
+
+  -- root keyboard: highlights the single selected tonic
+  local root = self.engine.root or 0
+  for x, semi in pairs(KB_BLACK_COL) do
+    self.g:set_led(x, ROOT_BLACK_ROW, semi == root and 15 or 3)
+  end
+  for x, semi in pairs(KB_WHITE_COL) do
+    self.g:set_led(x, ROOT_WHITE_ROW, semi == root and 15 or 3)
+  end
+
+  -- quantize: 8x4 block on the right
   local curq = self.engine.quantize
-  for x = 0, GRID_W - 1 do
-    self.g:set_led(x, 3, QUANTIZE_VALUES[x + 1] == curq and 15 or 3)
-    self.g:set_led(x, 4, QUANTIZE_VALUES[x + 16 + 1] == curq and 15 or 3)
+  for r = 0, QNT_H - 1 do
+    for c = 0, QNT_W - 1 do
+      local idx = r * QNT_W + c + 1
+      self.g:set_led(QNT_COL0 + c, QNT_ROW0 + r, QUANTIZE_VALUES[idx] == curq and 15 or 3)
+    end
   end
-  for x = 0, GRID_W - 1 do self.g:set_led(x, 5, 0) end
 end
 
 function GridUI:render_channel_row(ch)

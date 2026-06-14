@@ -76,6 +76,13 @@ scales.kb_names = {
   'chromatic', 'major', 'minor', 'pentatonic', 'dorian', 'akebono', 'hijaz', 'kurd',
 }
 
+-- Curated 7-preset set shown on the scale picker's top row (grid cols 0..6).
+-- A strict subset of scales.names, so picker selections still resolve to a
+-- valid PARAMETERS-menu scale index.
+scales.picker_names = {
+  'major', 'minor', 'pentatonic', 'dorian', 'akebono', 'hijaz', 'rast',
+}
+
 -- Octave-aware degree lookup. Degree 7 in major wraps to the next octave's
 -- degree 0 (root + 12 semitones). Lua % is floor-mod for these operands, so
 -- negative degrees resolve correctly too. `intervals` is a 1-based Lua array.
@@ -86,9 +93,11 @@ function scales.degree_to_semitones(degree, intervals)
   return oct * 12 + intervals[idx]
 end
 
--- Scale degree -> frequency in Hz, via musicutil rooted at C1.
-function scales.degree_to_freq(degree, intervals)
-  local note = ROOT_NOTE + scales.degree_to_semitones(degree, intervals)
+-- Scale degree -> frequency in Hz, via musicutil rooted at C1 transposed by
+-- `root` semitones (0..11; 0 = C1, the historical default). Root shifts the
+-- whole scale's tonic up by that pitch class within the base octave.
+function scales.degree_to_freq(degree, intervals, root)
+  local note = ROOT_NOTE + (root or 0) + scales.degree_to_semitones(degree, intervals)
   return musicutil.note_num_to_freq(note)
 end
 

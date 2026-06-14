@@ -119,6 +119,7 @@ function Burst.new()
   self.launchGrid = 4   -- launches snap to the next quarter-note boundary
   self.quantize = 32    -- global event snap grid (events per whole note); 0 = off
   self.scale = scales.by_name.major
+  self.root = 0         -- tonic transposition in semitones (0..11; 0 = C)
   self.channels = {}
   self.running = {}
   self.clocks = {}      -- per-channel clock.run id (or nil)
@@ -262,7 +263,7 @@ function Burst:run_burst(ch, token, target_in)
     local level = c.level() + c.levelB()
     local harm = c.harm() + c.harmB()
     local env = c.env() + c.envB()
-    local freq = scales.degree_to_freq(degree, self.scale)
+    local freq = scales.degree_to_freq(degree, self.scale, self.root)
     -- finite bursts clamp to >=1 hit so a 0/negative B offset can't tight-loop.
     local total = (reps == -1) and INF or math.max(1, reps)
 
@@ -387,10 +388,9 @@ function Burst:randomize(ch)
   c.level = seqx.new(fill(t_len, function() return (ri(16) + 1) / 31 end))
   c.harm  = seqx.new(fill(t_len, function() return 2 + ri(16) * 0.75 end))
   c.env   = seqx.new(fill(t_len, function() return ri(16) / 31 end))
-  c.envMode   = ri(3)
-  c.geodeMode = ri(4)
-  c.pitchEnv  = ri(4)
-  c.harmEnv   = ri(4)
+  -- Sound-page modes (envMode/geodeMode/pitchEnv/harmEnv) are intentionally
+  -- left untouched: randomize/mutate scramble the value sequences (incl. harm
+  -- and env) but preserve the user's chosen envelope/geode mode selections.
 end
 
 -- Perturb A-layer values by ±amount, preserving length and clamping to range.
