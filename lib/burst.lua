@@ -172,6 +172,20 @@ function Burst:reset_sequins()
   for i = 1, NUM_CHANNELS do self:reset_channel(i) end
 end
 
+-- Bar-boundary reset (driven by the per-bar reset scheduler in potionshop.lua):
+-- rewind the channel's sequins to step 1 AND, if it's running, hard-restart its
+-- burst so the firing instants re-anchor to the bar grid. A soft sequins rewind
+-- alone only re-syncs *values* at each channel's next burst boundary and never
+-- touches the burst `target` phase, so two identical / copy-pasted channels stay
+-- offset. Relaunching snaps both to the same bar beat (launch ->
+-- snap_beat(now, launchGrid)), so channels sharing a reset interval fire in
+-- lockstep. (A hit landing exactly on the bar can briefly double-trigger as the
+-- old coroutine is replaced — an acceptable artifact of the realign.)
+function Burst:bar_reset(ch)
+  self:reset_channel(ch)
+  if self.running[ch] then self:launch(ch) end
+end
+
 -- ---- launch / stop -----------------------------------------------------
 
 function Burst:launch(ch)

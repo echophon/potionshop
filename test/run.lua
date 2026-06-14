@@ -173,6 +173,46 @@ clock._run_until(6)
 check('quantize=0 fires at natural 4/3 spacing', #nat >= 3 and approx(nat[2] - nat[1], 4/3))
 eqd:stop(1)
 
+-- bar_reset (the per-bar reset scheduler's per-channel action): a soft sequins
+-- rewind leaves two identical channels' burst phases offset; bar_reset hard-
+-- restarts a running channel so out-of-phase copies lock together — the copy/
+-- paste + reset-to-1-bar use case.
+clock._reset()
+local erb = Burst.new()
+erb.quantize = 0
+for _, ch in ipairs({1, 2}) do
+  erb.channels[ch].div  = seqx.new{3}    -- 4/3-beat spacing: won't self-align
+  erb.channels[ch].reps = seqx.new{-1}
+  erb.channels[ch].note = seqx.new{0}
+end
+local efb = {{}, {}}
+erb:on(function(ev)
+  if ev.type == 'fire' then local t = efb[ev.ch]; t[#t + 1] = clock.get_beats() end
+end)
+erb:launch(1)
+clock._run_until(1.5)
+erb:launch(2)                 -- snaps to beat 2 -> phase-offset from ch1
+clock._run_until(3)
+check('channels out of phase before reset',
+      math.abs(efb[1][#efb[1]] - efb[2][#efb[2]]) > 1e-6)
+erb:bar_reset(1); erb:bar_reset(2)   -- reset between fires (relaunch owns the bar)
+clock._run_until(9)
+local function after(t, b0)
+  local o = {}
+  for _, v in ipairs(t) do if v > b0 + 1e-9 then o[#o + 1] = v end end
+  return o
+end
+local a1, a2 = after(efb[1], 3), after(efb[2], 3)
+local aligned = (#a1 >= 3 and #a1 == #a2)
+if aligned then for i = 1, #a1 do if not approx(a1[i], a2[i]) then aligned = false end end end
+check('bar_reset realigns out-of-phase identical channels to lockstep', aligned)
+check('bar_reset keeps running channels running', erb:is_running(1) and erb:is_running(2))
+erb:stop(1); erb:stop(2)
+-- on a stopped channel it rewinds sequins only, never relaunches
+erb.channels[3].note = seqx.new{0}
+erb:bar_reset(3)
+check('bar_reset does not launch a stopped channel', erb:is_running(3) == false)
+
 -- ---- grid_ui: controller wiring ---------------------------------------
 local GridUI = require 'grid_ui'
 print('grid_ui controller:')
@@ -340,11 +380,12 @@ sui:tick()
 check('tick repaints and clears dirty', sui.dirty == false)
 screen._reset()
 sui:redraw()
-local glyph_drawn = false
+-- the per-channel column draws ch0's note letter ('c1') after it fired
+local letter_drawn = false
 for _, cl in ipairs(screen.calls) do
-  if cl[1] == 'font_size' and cl[2] == 24 then glyph_drawn = true end
+  if cl[1] == 'text' and cl[2] == 'c1' then letter_drawn = true end
 end
-check('ghost glyph drawn after fire', glyph_drawn)
+check('channel column draws note letter after fire', letter_drawn)
 
 -- grid mode buttons drive the screen tab (grid -> screen sync)
 sui:set_page(1)

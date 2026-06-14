@@ -8,7 +8,7 @@ local function rec(name)
 end
 
 for _, f in ipairs({
-  'clear', 'update', 'fill', 'stroke', 'move', 'rect', 'level',
+  'clear', 'update', 'fill', 'stroke', 'move', 'line', 'rect', 'level',
   'font_face', 'font_size', 'text', 'text_right', 'text_center', 'line_width',
 }) do
   screen[f] = rec(f)

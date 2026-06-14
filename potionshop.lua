@@ -37,6 +37,7 @@ local outs       -- Outputs (per-channel midi / crow / i2c routing, params-only)
 local g          -- norns grid
 local gw         -- grid wrapper (0-based -> 1-based, strobe overlay)
 local strobe_metro
+local screen_metro
 local reset_clock
 
 -- ---- grid wrapper ------------------------------------------------------
@@ -96,7 +97,7 @@ function init()
   end
 
   controller = GridUI.new(eng, gw, {
-    -- mark the screen dirty; the strobe metro's tick repaints at ~15 Hz
+    -- mark the screen dirty; the screen metro's tick repaints at ~30 Hz
     on_redraw = function() if ui_screen then ui_screen.dirty = true end end,
   })
   ui_screen = ScreenUI.new(eng, controller)
@@ -133,11 +134,24 @@ function init()
     gw.fast_on = (math.floor(c / 3) % 2) == 0
     gw:refresh()
     if psync then psync:flush() end  -- coalesced repaint for param-menu edits
-    if ui_screen then ui_screen:tick() end
   end
   strobe_metro:start()
 
-  -- per-bar reset scheduler: each channel resets on its own interval
+  -- screen redraw driver, decoupled from the 15 Hz grid strobe: the sparkline
+  -- scrolls ~11 px/s, so 15 fps lands ~1.3 frames per pixel and stutters; 30 fps
+  -- evens the cadence out. tick() self-guards (system menu) and only repaints
+  -- when dirty, so the higher rate costs nothing while the screen is idle.
+  screen_metro = metro.init()
+  screen_metro.time = 1 / 30
+  screen_metro.event = function()
+    if ui_screen then ui_screen:tick() end
+  end
+  screen_metro:start()
+
+  -- per-bar reset scheduler: each channel resets on its own interval. bar_reset
+  -- hard-restarts a running channel on the bar boundary (rewind sequins + re-
+  -- anchor burst timing to the bar), so channels sharing a reset interval — e.g.
+  -- a copy/pasted duplicate with reset = 1 bar — lock together instead of drifting.
   local bars = {}
   for i = 1, Burst.NUM_CHANNELS do bars[i] = 0 end
   reset_clock = clock.run(function()
@@ -148,7 +162,7 @@ function init()
         local iv = eng.channels[i].resetInterval
         if iv > 0 then
           bars[i] = bars[i] + 1
-          if bars[i] % iv == 0 then eng:reset_channel(i); did = true end
+          if bars[i] % iv == 0 then eng:bar_reset(i); did = true end
         end
       end
       if did then controller:refresh() end
@@ -170,5 +184,6 @@ function cleanup()
   if outs then outs:all_notes_off() end
   if engine and engine.panic then engine.panic() end
   if strobe_metro then strobe_metro:stop() end
+  if screen_metro then screen_metro:stop() end
   if reset_clock then clock.cancel(reset_clock) end
 end

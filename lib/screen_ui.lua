@@ -43,6 +43,9 @@ local LINES_PER_PAGE = {1 + #PARAMS, 1 + #PARAMS, 4, 2, 3}  -- main/alt line 1 =
 local NOTE_NAMES = {'c','c#','d','d#','e','f','f#','g','g#','a','a#','b'}
 
 local FIRE_FLASH_SECS = 0.12
+local ENV_GLYPH_SECS  = 1.0   -- how long the focused-row letter pulse fades over
+local HIST_SECS       = 2.5   -- time window the scrolling amplitude trail spans
+local HIST_CAP        = 96    -- max retained fires per channel
 
 local function clamp(v, lo, hi) return math.max(lo, math.min(hi, v)) end
 local function round(x) return math.floor(x + 0.5) end
@@ -89,13 +92,20 @@ function Screen.new(engine, controller)
   self.sel_step = 0
   self.page = 1
   self.dirty = true
-  self.last_note = {}  -- ch (0-based) -> note name of last fire
-  self.fire_time = {}  -- ch (0-based) -> time of last fire
+  self.last_note = {}   -- ch (0-based) -> note name of last fire
+  self.fire_time = {}   -- ch (0-based) -> time of last fire
+  self.hist = {}        -- ch (0-based) -> ring of {t, a} fires (scrolling sparkline)
+  for ch = 0, 5 do self.hist[ch] = {} end
   engine:on(function(ev)
     if ev.type == 'fire' then
+      -- every 'fire' counts, including a per-hit-skip (no voice) — consistent
+      -- with the header flash; it feeds the channel's scrolling amplitude trail
       local ch = ev.ch - 1
       self.last_note[ch] = freq_to_name(ev.freq) or self.last_note[ch]
       self.fire_time[ch] = now()
+      local h = self.hist[ch]
+      h[#h + 1] = { t = now(), a = ev.level or 0 }
+      if #h > HIST_CAP then table.remove(h, 1) end
       self.dirty = true
     elseif ev.type == 'launch' or ev.type == 'stop' then
       self.dirty = true
@@ -111,9 +121,10 @@ function Screen:tick()
   -- keep repainting while a fire flash / glyph pulse is decaying
   local ft = self.fire_time[self.sel_ch]
   if ft and (now() - ft) < 1.5 then self.dirty = true end
+  -- keep repainting while any channel's amplitude trail is still scrolling
   for ch = 0, 5 do
     local t = self.fire_time[ch]
-    if t and (now() - t) < FIRE_FLASH_SECS then self.dirty = true end
+    if t and (now() - t) < HIST_SECS then self.dirty = true end
   end
   if self.dirty then self:redraw() end
 end
@@ -352,12 +363,22 @@ end
 
 -- ---- drawing -------------------------------------------------------------
 
--- Ghost glyph brightness as the last fire on the selected channel ages.
--- Returns base, echo levels. The aesthetic knob of the whole screen: a bright
--- pulse at fire that settles into a faint persistent watermark.
-function Screen:glyph_levels(age)
-  local echo = 2 + 8 * math.max(0, 1 - age / 1.2)
-  return 1, round(echo)
+-- Left-column layout: six rows (one per channel), each a small note letter plus
+-- a scrolling amplitude trail of that channel's recent fires. Lives above the
+-- A/B step footer (y>=52), so rows run y~13..48.
+local COL_LETTER_X  = 2    -- note-name x
+local COL_GLYPH_X   = 16   -- sparkline x
+local COL_GLYPH_W   = 28   -- sparkline width (== HIST_SECS time span)
+local COL_ROW_TOP   = 13   -- first row baseline
+local COL_ROW_PITCH = 7    -- baseline-to-baseline
+local COL_ENV_H     = 6    -- full-height bar (normalized loudest hit) in px
+
+-- Letter brightness as the channel's last fire ages: the focused row pulses
+-- 15 -> 5; the rest sit at a dim 2 with a brief flash. Same focus-brightness
+-- spirit as the rest of the screen.
+function Screen:row_level(sel, age)
+  if sel then return round(5 + 10 * math.max(0, 1 - age / ENV_GLYPH_SECS)) end
+  return round(2 + 6 * math.max(0, 1 - age / 0.4))
 end
 
 function Screen:draw_header()
@@ -395,19 +416,49 @@ function Screen:draw_header()
   end
 end
 
-function Screen:draw_glyph()
-  local note = self.last_note[self.sel_ch]
-  if not note then return end
-  local age = now() - (self.fire_time[self.sel_ch] or 0)
-  local base, echo = self:glyph_levels(age)
-  screen.font_size(24)
-  screen.level(base)
-  screen.move(2, 38)
-  screen.text(note)
-  screen.level(echo)
-  screen.move(3, 36)
-  screen.text(note)
-  screen.font_size(8)
+-- One channel's scrolling amplitude trail: each recent fire is a vertical bar,
+-- positioned by age (newest at the right "playhead" edge, drifting left and out
+-- of the window). Heights are normalized to the loudest hit in *this* channel's
+-- window, so soft channels still use the full row height and adjacent hits read
+-- as more than a 1px difference. Older bars fade so the motion is legible.
+function Screen:draw_sparkline(ch, x0, yb, sel)
+  local h = self.hist[ch]
+  if #h == 0 then return end
+  local t = now()
+  -- per-channel normalization: find the loudest visible hit
+  local maxa = 0
+  for i = #h, 1, -1 do
+    local age = t - h[i].t
+    if age > HIST_SECS then break end
+    if h[i].a > maxa then maxa = h[i].a end
+  end
+  if maxa <= 0 then return end
+  local base = sel and 13 or 5
+  for i = #h, 1, -1 do
+    local age = t - h[i].t
+    if age > HIST_SECS then break end
+    local x = round(x0 + COL_GLYPH_W * (1 - age / HIST_SECS))
+    local bar = math.max(1, round((h[i].a / maxa) * COL_ENV_H))
+    screen.level(math.max(2, round(base * math.max(0.3, 1 - age / HIST_SECS))))
+    screen.move(x, yb)
+    screen.line(x, yb - bar)
+    screen.stroke()
+  end
+end
+
+-- Six-row channel column: note letter + scrolling amplitude trail per channel,
+-- focused row brightest. Replaces the single big ghost glyph.
+function Screen:draw_channel_column()
+  local t = now()
+  for ch = 0, 5 do
+    local sel = (ch == self.sel_ch)
+    local yb = COL_ROW_TOP + ch * COL_ROW_PITCH
+    local age = t - (self.fire_time[ch] or -1e9)
+    screen.level(self:row_level(sel, age))
+    screen.move(COL_LETTER_X, yb)
+    screen.text(self.last_note[ch] or '-')
+    self:draw_sparkline(ch, COL_GLYPH_X, yb, sel)
+  end
 end
 
 -- the right column: one table of {label, value, pre, tok} per page; the
@@ -532,7 +583,7 @@ function Screen:redraw()
   screen.font_face(1)
   screen.font_size(8)
   self:draw_header()
-  self:draw_glyph()
+  self:draw_channel_column()
   self:draw_lines()
   -- when the grid is mid-gesture (picker / kb / action), it owns interaction:
   -- swap the step rows for the dim status line
