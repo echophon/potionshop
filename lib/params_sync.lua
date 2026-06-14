@@ -257,8 +257,8 @@ function M:_add_channel_params(n)
   local mode_fields = {
     {'env_mode', 'env mode', 'envMode', GridUI.ENV_MODE_NAMES},
     {'geode', 'geode', 'geodeMode', GridUI.GEODE_MODE_NAMES},
-    {'pitch_env', 'pitch env', 'pitchEnv', GridUI.PITCH_ENV_MODE_NAMES},
-    {'harm_env', 'harm env', 'harmEnv', GridUI.HARM_ENV_MODE_NAMES},
+    {'harm_env_mode', 'harm env', 'harmEnvMode', GridUI.HARM_ENV_MODE_NAMES},
+    {'harm_geode', 'harm geode', 'harmEnv', GridUI.HARM_GEODE_NAMES},
   }
   for _, m in ipairs(mode_fields) do
     local pid, name, field, names = m[1], m[2], m[3], m[4]
@@ -440,8 +440,8 @@ function M:reflect_scalars(n)
   params:set(id('harm_trig'), c.harmTrig + 1, true)
   params:set(id('env_mode'), c.envMode + 1, true)
   params:set(id('geode'), c.geodeMode + 1, true)
-  params:set(id('pitch_env'), c.pitchEnv + 1, true)
-  params:set(id('harm_env'), c.harmEnv + 1, true)
+  params:set(id('harm_env_mode'), c.harmEnvMode + 1, true)
+  params:set(id('harm_geode'), c.harmEnv + 1, true)
   params:set(id('reset'), GridUI.nearest_index(GridUI.RESET_INTERVALS, c.resetInterval), true)
   params:set(id('octave'), c.octave, true)
 end

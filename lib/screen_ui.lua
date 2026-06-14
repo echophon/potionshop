@@ -339,8 +339,8 @@ function Screen:_edit_snd(d)
   local line = self.sel_line[3]
   if line == 1 then self.ctl:set_scalar(ch, 'envMode', clamp(c.envMode + d, 0, #GridUI.ENV_MODE_NAMES - 1))
   elseif line == 2 then self.ctl:set_scalar(ch, 'geodeMode', clamp(c.geodeMode + d, 0, #GridUI.GEODE_MODE_NAMES - 1))
-  elseif line == 3 then self.ctl:set_scalar(ch, 'pitchEnv', clamp(c.pitchEnv + d, 0, #GridUI.PITCH_ENV_MODE_NAMES - 1))
-  elseif line == 4 then self.ctl:set_scalar(ch, 'harmEnv', clamp(c.harmEnv + d, 0, #GridUI.HARM_ENV_MODE_NAMES - 1))
+  elseif line == 3 then self.ctl:set_scalar(ch, 'harmEnvMode', clamp(c.harmEnvMode + d, 0, #GridUI.HARM_ENV_MODE_NAMES - 1))
+  elseif line == 4 then self.ctl:set_scalar(ch, 'harmEnv', clamp(c.harmEnv + d, 0, #GridUI.HARM_GEODE_NAMES - 1))
   end
 end
 
@@ -523,8 +523,8 @@ function Screen:page_lines()
     lines = {
       {'env',   GridUI.ENV_MODE_NAMES[c.envMode + 1]},
       {'geode', GridUI.GEODE_MODE_NAMES[c.geodeMode + 1]},
-      {'pitch', GridUI.PITCH_ENV_MODE_NAMES[c.pitchEnv + 1]},
-      {'harm',  GridUI.HARM_ENV_MODE_NAMES[c.harmEnv + 1]},
+      {'h.env', GridUI.HARM_ENV_MODE_NAMES[c.harmEnvMode + 1]},
+      {'harm',  GridUI.HARM_GEODE_NAMES[c.harmEnv + 1]},
     }
   elseif self.page == 4 then
     lines = {

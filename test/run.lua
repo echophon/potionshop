@@ -175,8 +175,9 @@ check('alt-trig step arpeggiates the B pitch per hit',
   and approx(step[2], scales.degree_to_freq(5, major))
   and approx(step[3], scales.degree_to_freq(7, major)))
 
--- harm-trig mirrors alt-trig for the B harm layer (harmEnv off => ev.harm is the
--- raw harmA + harmB sum). harm {2}, harmB {0,3,6}: hold => 2,2,2; step => 2,5,8.
+-- harm-trig mirrors alt-trig for the B harm layer. level 0.5 makes the (always
+-- on) harm geode neutral (g=1), so ev.harm is the raw harmA + harmB sum.
+-- harm {2}, harmB {0,3,6}: hold => 2,2,2; step => 2,5,8.
 local function harm_trig_harms(mode)
   clock._reset()
   local e = Burst.new()
@@ -185,6 +186,7 @@ local function harm_trig_harms(mode)
   e:on(function(ev) if ev.type == 'fire' then h[#h + 1] = ev.harm end end)
   e.channels[1].div   = seqx.new{4}
   e.channels[1].reps  = seqx.new{3}
+  e.channels[1].level = seqx.new{0.5}  -- neutral geode (g=1)
   e.channels[1].harm  = seqx.new{2}
   e.channels[1].harmB = seqx.new{0, 3, 6}
   e.channels[1].harmTrig = mode
@@ -198,6 +200,54 @@ check('harm-trig hold holds one B harm offset across the burst',
 local h_step = harm_trig_harms(1)
 check('harm-trig step arpeggiates the B harm per hit',
   #h_step == 3 and approx(h_step[1], 2) and approx(h_step[2], 5) and approx(h_step[3], 8))
+
+-- harm envelope: harmEnvMode sweeps the FM ratio bright->clean over the note.
+-- engine.trig(freq, amp, harmStart, harmEnd, harmDecay, modIndex, atk, aDec, mDec).
+local function first_trig(harmEnvMode)
+  clock._reset()
+  local saved = engine
+  local cap
+  engine = { trig = function(...) cap = cap or {...} end }
+  local e = Burst.new()
+  e.quantize = 0
+  e.channels[1].div = seqx.new{4}
+  e.channels[1].reps = seqx.new{1}
+  e.channels[1].harm = seqx.new{8}
+  e.channels[1].harmEnvMode = harmEnvMode
+  e:launch(1)
+  clock._run_until(2)
+  engine = saved
+  return cap
+end
+local off = first_trig(0)
+check('harm env off: ratio is static (start==end, ~no decay)',
+  off and approx(off[3], 8) and approx(off[4], 8) and off[5] < 0.01)
+local on = first_trig(1)  -- hit: sweep over one interval
+check('harm env on: ratio sweeps target->unison over a real decay',
+  on and approx(on[3], 8) and approx(on[4], 2) and on[5] > 0.01)
+-- hit-mode harm sweep spans the note's own amp decay (msg[8]) so the clean
+-- tone lands at silence, not before it.
+check('harm env hit: sweep decay == amp decay', on and approx(on[5], on[8]))
+
+-- shape-mode amp decay tracks the inter-hit gap: 4x faster division -> ~1/4
+-- the decay, so dense/fast channels self-shorten instead of piling up.
+local function amp_decay_for_div(divv)
+  clock._reset()
+  local saved = engine
+  local cap
+  engine = { trig = function(...) cap = cap or {...} end }
+  local e = Burst.new()
+  e.quantize = 0
+  e.channels[1].div = seqx.new{divv}
+  e.channels[1].reps = seqx.new{1}
+  e:launch(1)
+  clock._run_until(2)
+  engine = saved
+  return cap and cap[8]
+end
+local slow, fast = amp_decay_for_div(2), amp_decay_for_div(8)
+check('amp decay scales with division (4x faster ~= 1/4 the hit)',
+  slow and fast and approx(fast, slow / 4))
 
 -- quantization: an off-grid division (triplet, 4/3 beats) must snap every
 -- event FORWARD to the quarter-note grid (quantize=4 -> step 1 beat). We read
@@ -350,7 +400,7 @@ check('PROB mode exited', ctl.probMode == false)
 -- SND mode geode set
 ctl:press(15, 6)
 check('SND mode entered', ctl.soundMode == true)
-ctl:press(5, 0)  -- col5 -> geode index 1 (transient) on channel 0
+ctl:press(5, 0)  -- col5 -> geode index 1 (sustain) on channel 0
 check('SND sets geodeMode to 1', geng.channels[1].geodeMode == 1)
 
 -- PERF mode (row6 col 12): reset cols 0-3, octave cols 5-9, rate cols 11-15

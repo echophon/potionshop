@@ -104,10 +104,10 @@ local function default_channel()
     envB   = seqx.new{0},
     burstProb = 1,
     probHit = false,
-    envMode = 0,    -- 0=shape 1=burst 2=hit
-    geodeMode = 0,  -- 0=off 1=transient 2=sustain 3=cycle
-    pitchEnv = 0,
-    harmEnv = 0,
+    envMode = 0,      -- amp decay timing:  0=shape 1=burst 2=hit
+    geodeMode = 0,    -- amp per-hit geode: 0=transient 1=sustain 2=cycle (always on)
+    harmEnvMode = 0,  -- harm sweep timing: 0=off 1=hit 2=burst (bright->clean)
+    harmEnv = 0,      -- harm per-hit geode: 0=fast 1=med 2=slow (always on)
     resetInterval = 0,
     rate = 1,
     octave = 0,     -- -2..2, whole-octave pitch shift (perf page)
@@ -186,19 +186,33 @@ end
 -- old coroutine is replaced — an acceptable artifact of the realign.)
 function Burst:bar_reset(ch)
   self:reset_channel(ch)
-  if self.running[ch] then self:launch(ch) end
+  if self.running[ch] then
+    -- Anchor the relaunch to the launchGrid boundary we're sitting on. clock.sync
+    -- wakes us just AFTER the boundary, so get_beats() is N*step + a tiny epsilon;
+    -- the default run_channel path would snap that FORWARD a full step, landing the
+    -- first hit late and leaving an audible gap each bar. Floor back onto the
+    -- boundary instead (the +1e-9 keeps an exactly-on-grid value from dropping a
+    -- step). clock.sync guarantees epsilon >= 0, so flooring never rewinds into
+    -- already-played time.
+    local step = 4 / self.launchGrid
+    local anchor = math.floor(get_beats() / step + 1e-9) * step
+    self:launch(ch, anchor)
+  end
 end
 
 -- ---- launch / stop -----------------------------------------------------
 
-function Burst:launch(ch)
+-- `start_beat` (optional): explicit absolute beat to anchor the first burst to,
+-- bypassing the forward launchGrid snap. Used by bar_reset, which is already
+-- sitting on the bar boundary it wants to start from.
+function Burst:launch(ch, start_beat)
   if ch < 1 or ch > NUM_CHANNELS then return end
   if self.clocks[ch] then clock.cancel(self.clocks[ch]); self.clocks[ch] = nil end
   self.tokens[ch] = self.tokens[ch] + 1
   local token = self.tokens[ch]
   self.running[ch] = true
   self:emit{ type = 'launch', ch = ch }
-  self.clocks[ch] = clock.run(function() self:run_channel(ch, token) end)
+  self.clocks[ch] = clock.run(function() self:run_channel(ch, token, start_beat) end)
 end
 
 function Burst:stop(ch)
@@ -228,8 +242,8 @@ end
 
 -- Outer loop: keep firing bursts until cancelled, or until a single-shot burst
 -- (length-1 finite reps on both A and B) completes.
-function Burst:run_channel(ch, token)
-  local target = quantize.snap_beat(get_beats(), self.launchGrid)
+function Burst:run_channel(ch, token, start_beat)
+  local target = start_beat or quantize.snap_beat(get_beats(), self.launchGrid)
   while self.tokens[ch] == token do
     local r = self:run_burst(ch, token, target)
     if r == nil then return end
@@ -341,27 +355,25 @@ function Burst:fire(ch, beat, freq, level, harm, env, div, total, hit_idx)
   -- on them. Shifting here also feeds the final freq to external outputs.
   freq = freq * (2 ^ c.octave)
   local geo_run = clamp(level, 0, 1)
-  local actual_level = Burst.burst_level_for_hit(level, c.geodeMode, env, hit_idx, total)
+  -- geodeMode/harmEnv are 0-based {transient,sustain,cycle}; geode_mod wants
+  -- 1/2/3, so +1 at the call site. Both geodes are always on (no 'off').
+  local actual_level = Burst.burst_level_for_hit(level, c.geodeMode + 1, env, hit_idx, total)
 
-  -- Pitch geode: g=1 -> target, g=0 -> -1 octave.
+  -- geo_freq stays at the target pitch (this voice has no pitch envelope).
   local geo_freq = freq
-  if c.pitchEnv > 0 then
-    local g = Burst.geode_mod(c.pitchEnv, geo_run, hit_idx, total)
-    geo_freq = freq * (2 ^ (g - 1))
-  end
 
-  -- Harm geode: g=1 -> target harm, g=0 -> unison (2).
-  local geo_harm = harm
-  if c.harmEnv > 0 then
-    local g = Burst.geode_mod(c.harmEnv, geo_run, hit_idx, total)
-    geo_harm = 2 + g * math.max(0, harm - 2)
-  end
+  -- Harm geode: g=1 -> target harm, g=0 -> unison (2). Always applied; sets the
+  -- hit's destination ratio that the harm envelope below sweeps toward.
+  local g = Burst.geode_mod(c.harmEnv + 1, geo_run, hit_idx, total)
+  local geo_harm = 2 + g * math.max(0, harm - 2)
 
-  -- decaySec from envMode (1=burst-length, 2=per-hit).
+  -- per-hit timing, shared by the amp- and harm-envelope decay maths.
+  local sec_per_beat = 60 / get_tempo()
+  local interval_sec = (4 / div) * sec_per_beat
+
+  -- amp decaySec from envMode (1=burst-length, 2=per-hit).
   local decay_sec = nil
   if c.envMode ~= 0 then
-    local sec_per_beat = 60 / get_tempo()
-    local interval_sec = (4 / div) * sec_per_beat
     if c.envMode == 1 and total ~= INF then
       decay_sec = total * interval_sec
     else
@@ -369,7 +381,11 @@ function Burst:fire(ch, beat, freq, level, harm, env, div, total, hit_idx)
     end
   end
 
-  -- env -> time mapping (ported from FMVoice.triggerAt).
+  -- env -> time mapping. In shape mode the hit length tracks the inter-hit gap
+  -- (interval / rate), so faster divisions & higher rates give proportionally
+  -- shorter hits and a 6-voice mix doesn't pile up; env `e` scales staccato ->
+  -- slightly-legato within that gap. Diverges from the web FMVoice (fixed
+  -- 0.4..1.2s) to keep a dense norns mix legible. burst/hit keep decay_sec.
   local attack, amp_dec, mod_dec
   if decay_sec ~= nil then
     attack = 0.001
@@ -377,9 +393,25 @@ function Burst:fire(ch, beat, freq, level, harm, env, div, total, hit_idx)
     mod_dec = amp_dec * 0.4
   else
     local e = clamp(env, 0, 1)
-    attack = 0.001 + e * 0.024
-    amp_dec = 0.4 + e * 0.8
-    mod_dec = 0.05 + e * 0.25
+    local gap_sec = interval_sec / math.max(0.01, c.rate)
+    attack  = 0.001 + e * 0.018
+    amp_dec = clamp(gap_sec * (0.3 + e * 0.95), 0.04, 2.2)
+    mod_dec = amp_dec * 0.4
+  end
+
+  -- Harm envelope: sweep harm bright -> clean (geo_harm -> unison 2). The sweep
+  -- spans the note's own amp decay (hit mode), so the present 2:1 tone lands just
+  -- as the amp fades to silence -> minimal sustained-tail buildup across voices.
+  -- burst mode sweeps slowly across the whole burst, so per hit it stays bright.
+  -- harmEnvMode 0=off (static ratio, start==end).
+  local harm_start, harm_end, harm_decay = geo_harm, geo_harm, 0.001
+  if c.harmEnvMode ~= 0 then
+    harm_end = 2
+    if c.harmEnvMode == 2 and total ~= INF then
+      harm_decay = total * interval_sec
+    else
+      harm_decay = amp_dec
+    end
   end
 
   -- output routing (lib/outputs.lua): non-audio destinations replace the
@@ -388,15 +420,18 @@ function Burst:fire(ch, beat, freq, level, harm, env, div, total, hit_idx)
   -- emits a 'fire' event for the playhead without sounding anything.
   local out = self.outputs
   if engine and engine.trig and ((not out) or out:wants_audio(ch)) then
-    engine.trig(geo_freq, actual_level, geo_harm, self.modIndex, attack, amp_dec, mod_dec)
+    engine.trig(geo_freq, actual_level, harm_start, harm_end, harm_decay,
+                self.modIndex, attack, amp_dec, mod_dec)
   end
   if out then
-    out:note(ch, { freq = geo_freq, level = actual_level, harm = geo_harm,
+    -- external voices can't sweep the FM ratio; hand them the starting (peak)
+    -- harm so MIDI/crow track what's heard at the note's attack.
+    out:note(ch, { freq = geo_freq, level = actual_level, harm = harm_start,
                    dur = attack + amp_dec })
   end
 
   self:emit{ type = 'fire', ch = ch, beat = beat,
-             freq = geo_freq, level = actual_level, harm = geo_harm, env = env }
+             freq = geo_freq, level = actual_level, harm = harm_start, env = env }
 end
 
 -- ---- randomize / mutate (grid-aligned values) --------------------------
@@ -419,7 +454,7 @@ function Burst:randomize(ch)
   c.level = seqx.new(fill(t_len, function() return (ri(16) + 1) / 31 end))
   c.harm  = seqx.new(fill(t_len, function() return 2 + ri(16) * 0.75 end))
   c.env   = seqx.new(fill(t_len, function() return ri(16) / 31 end))
-  -- Sound-page modes (envMode/geodeMode/pitchEnv/harmEnv) are intentionally
+  -- Sound-page modes (envMode/geodeMode/harmEnvMode/harmEnv) are intentionally
   -- left untouched: randomize/mutate scramble the value sequences (incl. harm
   -- and env) but preserve the user's chosen envelope/geode mode selections.
 end

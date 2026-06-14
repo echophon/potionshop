@@ -25,7 +25,7 @@
 --          right-justified) · col 15 burst/hit toggle
 --   PERF:  rows 0-5 = reset off/1/2/4 bars (cols 0..3) · octave -2..+2 (cols 5..9)
 --          · rate (cols 11..15)
---   SND:   rows 0-5 = env(0-2) · geode(4-7) · pitch env(8-11) · harm env(12-15)
+--   SND:   rows 0-5 = env(0-2) · geode(4-6) · harm env(8-10) · harm geode(12-14)
 --   scale picker: row 0 cols 0-6 scale presets (7)
 --                 rows 1-2 cols 0-6 degree (note-mask) keyboard: black row 1 / white row 2
 --                 rows 4-5 cols 0-6 root keyboard: black row 4 / white row 5
@@ -88,9 +88,9 @@ local PROB_COLS     = {11, 12, 13, 14}
 local PROB_HIT_COL  = 15
 
 local ENV_MODE_NAMES       = {'shape', 'burst', 'hit'}
-local GEODE_MODE_NAMES     = {'off', 'transient', 'sustain', 'cycle'}
-local PITCH_ENV_MODE_NAMES = {'off', 'fast', 'med', 'slow'}
-local HARM_ENV_MODE_NAMES  = {'off', 'fast', 'med', 'slow'}
+local GEODE_MODE_NAMES     = {'transient', 'sustain', 'cycle'}  -- amp geode, always on
+local HARM_ENV_MODE_NAMES  = {'off', 'hit', 'burst'}  -- harm sweep timing
+local HARM_GEODE_NAMES     = {'fast', 'med', 'slow'}  -- harm per-hit geode, always on
 -- alt(B)-layer trigger modes: how a B sequins feeds a burst. Shared by the note
 -- (altTrig) and harm (harmTrig) layers.
 --   hold = add&hold (B drawn once per burst, summed onto A for every hit)
@@ -166,8 +166,8 @@ GridUI.nearest_index = nearest_index
 GridUI.DEFAULT_VALUE = DEFAULT_VALUE
 GridUI.ENV_MODE_NAMES = ENV_MODE_NAMES
 GridUI.GEODE_MODE_NAMES = GEODE_MODE_NAMES
-GridUI.PITCH_ENV_MODE_NAMES = PITCH_ENV_MODE_NAMES
 GridUI.HARM_ENV_MODE_NAMES = HARM_ENV_MODE_NAMES
+GridUI.HARM_GEODE_NAMES = HARM_GEODE_NAMES
 GridUI.RESET_INTERVALS = RESET_INTERVALS
 GridUI.OCTAVE_VALUES = OCTAVE_VALUES
 GridUI.RATE_VALUES = RATE_VALUES
@@ -302,9 +302,9 @@ function GridUI:handle_normal_press(x, y)
     end
     if self.soundMode then
       if x <= 2 then self:set_scalar(y, 'envMode', x)
-      elseif x >= 4 and x <= 7 then self:set_scalar(y, 'geodeMode', x - 4)
-      elseif x >= 8 and x <= 11 then self:set_scalar(y, 'pitchEnv', x - 8)
-      elseif x >= 12 and x <= 15 then self:set_scalar(y, 'harmEnv', x - 12) end
+      elseif x >= 4 and x <= 6 then self:set_scalar(y, 'geodeMode', x - 4)
+      elseif x >= 8 and x <= 10 then self:set_scalar(y, 'harmEnvMode', x - 8)
+      elseif x >= 12 and x <= 14 then self:set_scalar(y, 'harmEnv', x - 12) end
       self:render_channel_row(y); self.g:refresh()
       return
     end
@@ -728,9 +728,9 @@ function GridUI:render_sound_row(ch)
   local c = self:chan(ch)
   for x = 0, GRID_W - 1 do self.g:set_led(x, ch, 0); self.g:set_strobe(x, ch, 'off') end
   for m = 0, 2 do self.g:set_led(m, ch, c.envMode == m and 15 or 4) end
-  for m = 0, 3 do self.g:set_led(m + 4, ch, c.geodeMode == m and 15 or 4) end
-  for m = 0, 3 do self.g:set_led(m + 8, ch, c.pitchEnv == m and 15 or 4) end
-  for m = 0, 3 do self.g:set_led(m + 12, ch, c.harmEnv == m and 15 or 4) end
+  for m = 0, 2 do self.g:set_led(m + 4, ch, c.geodeMode == m and 15 or 4) end
+  for m = 0, 2 do self.g:set_led(m + 8, ch, c.harmEnvMode == m and 15 or 4) end
+  for m = 0, 2 do self.g:set_led(m + 12, ch, c.harmEnv == m and 15 or 4) end
 end
 
 function GridUI:render_action_mode()
@@ -854,12 +854,6 @@ function GridUI:handle_kb_press(x, y)
 
   if y == 6 then
     if x == KB_EXIT_COL then self:exit_kb_mode(); return end
-    local name = scales.kb_names[x + 1]
-    if name then
-      self.engine.scale = scales.by_name[name]
-      self.on_edit{ type = 'global' }
-    end
-    self:render_all()
     return
   end
 
@@ -930,12 +924,7 @@ function GridUI:render_kb_page2()
 end
 
 function GridUI:render_kb_modifier_row()
-  local active = self.engine.scale
-  for x = 0, 7 do
-    local name = scales.kb_names[x + 1]
-    self.g:set_led(x, 6, scales.by_name[name] == active and 15 or 8)
-  end
-  for x = 8, GRID_W - 1 do self.g:set_led(x, 6, 0) end
+  for x = 0, GRID_W - 1 do self.g:set_led(x, 6, 0) end
   self.g:set_led(KB_EXIT_COL, 6, 15)
   self.g:set_strobe(KB_EXIT_COL, 6, 'fast')
 end
@@ -975,7 +964,7 @@ function GridUI:_status()
   elseif self.probMode then
     s = 'PROB — cols0-1 alt trig, cols11-14 prob%, col15 burst/hit'
   elseif self.soundMode then
-    s = 'SOUND — env/geode/pitchenv/harmenv'
+    s = 'SOUND — env/geode/harmenv/harmgeode'
   elseif self.actionMode then
     s = string.upper(self.actionMode) .. ' — tap a channel'
   elseif self.picker and self.picker.kind == 'step' then

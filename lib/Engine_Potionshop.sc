@@ -27,9 +27,10 @@ Engine_Potionshop : CroneEngine {
 
 	alloc {
 		// --- FM voice (mirrors FMVoice.triggerAt) ---
-		SynthDef("PotionFM", { arg out = 0, freq = 220, amp = 0.5, harm = 2,
+		SynthDef("PotionFM", { arg out = 0, freq = 220, amp = 0.5,
+			harmStart = 2, harmEnd = 2, harmDecay = 0.001,
 			modIndex = 8, attack = 0.001, ampDecay = 0.4, modDecay = 0.05;
-			var modEnv, modDepth, mod, ampEnv, car, sig;
+			var modEnv, modDepth, mod, ampEnv, car, sig, harmEnv;
 
 			// modulator depth: rise to peak in 1ms, then exponential decay.
 			// peak depth (Hz) = freq * modIndex * amp, matching the web app.
@@ -39,7 +40,12 @@ Engine_Potionshop : CroneEngine {
 				curve:  [\lin, \exp]
 			));
 			modDepth = freq * modIndex * amp * modEnv;
-			mod = SinOsc.ar(freq * harm, 0, modDepth);
+
+			// harmonicity envelope: sweep the FM ratio bright -> clean over the
+			// note (harmStart -> harmEnd). When the two are equal it's a static
+			// ratio (harm env "off"). Both endpoints are >= 2 so \exp is safe.
+			harmEnv = EnvGen.kr(Env.new([harmStart, harmEnd], [max(0.001, harmDecay)], \exp));
+			mod = SinOsc.ar(freq * harmEnv, 0, modDepth);
 
 			// percussive amp envelope; doneAction frees the synth on completion.
 			ampEnv = EnvGen.kr(
@@ -69,12 +75,13 @@ Engine_Potionshop : CroneEngine {
 			\in, masterBus.index, \out, context.out_b.index
 		]);
 
-		// trig(freq, amp, harm, modIndex, attack, ampDecay, modDecay)
-		this.addCommand("trig", "fffffff", { arg msg;
+		// trig(freq, amp, harmStart, harmEnd, harmDecay, modIndex, attack, ampDecay, modDecay)
+		this.addCommand("trig", "fffffffff", { arg msg;
 			Synth("PotionFM", [
 				\out, masterBus.index,
-				\freq, msg[1], \amp, msg[2], \harm, msg[3],
-				\modIndex, msg[4], \attack, msg[5], \ampDecay, msg[6], \modDecay, msg[7]
+				\freq, msg[1], \amp, msg[2],
+				\harmStart, msg[3], \harmEnd, msg[4], \harmDecay, msg[5],
+				\modIndex, msg[6], \attack, msg[7], \ampDecay, msg[8], \modDecay, msg[9]
 			], fmGroup);
 		});
 

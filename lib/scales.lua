@@ -71,11 +71,6 @@ scales.names = {
   'akebono', 'hijaz', 'kurd', 'bayati', 'rast', 'zen', 'wuSheng',
 }
 
--- 8 scales shown in the KB modifier row.
-scales.kb_names = {
-  'chromatic', 'major', 'minor', 'pentatonic', 'dorian', 'akebono', 'hijaz', 'kurd',
-}
-
 -- Curated 7-preset set shown on the scale picker's top row (grid cols 0..6).
 -- A strict subset of scales.names, so picker selections still resolve to a
 -- valid PARAMETERS-menu scale index.
