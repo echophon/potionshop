@@ -1,7 +1,8 @@
--- potionshop
--- Six-channel burst sequencer. 
--- Geode & sequins inspired
+--       _/ .    _  /     
+--   /)()//()/)_) /)()/) 
+-- /                /   
 --
+-- sequins burst sequencer 
 -- E1 channel E2 cursor E3 value 
 -- K2/K3 page back/fwd
 

@@ -111,6 +111,8 @@ local function default_channel()
     resetInterval = 0,
     rate = 1,
     octave = 0,     -- -2..2, whole-octave pitch shift (perf page)
+    altTrig = 0,    -- alt(B) note layering: 0=hold (add&hold) 1=step (per-hit)
+    harmTrig = 0,   -- alt(B) harm layering: 0=hold (add&hold) 1=step (per-hit)
   }
 end
 
@@ -255,15 +257,23 @@ function Burst:run_burst(ch, token, target_in)
     local c = self.channels[ch]
     local div_seq, reps_seq, note_seq = c.div, c.reps, c.note
     local div_seqB, reps_seqB, note_seqB = c.divB, c.repsB, c.noteB
+    -- harm A/B kept separate (like note) so harm-trig 'step' can advance the
+    -- B (alt) harm sequins per hit while the A harm stays held for the burst.
+    local harm_seq, harm_seqB = c.harm, c.harmB
     local div = math.max(1, div_seq() + div_seqB())
     local repsA = reps_seq()
     local repsBv = reps_seqB()
     local reps = (repsA == -1) and -1 or (repsA + repsBv)
-    local degree = note_seq() + note_seqB()
+    -- A/B note degrees kept separate so the alt-trig 'step' mode can advance the
+    -- B (alt) pitch sequins per hit while the A degree stays held for the burst.
+    local degreeA = note_seq()
+    local degreeB = note_seqB()
     local level = c.level() + c.levelB()
-    local harm = c.harm() + c.harmB()
+    local harmA = harm_seq()
+    local harmB = harm_seqB()
+    local harm = harmA + harmB
     local env = c.env() + c.envB()
-    local freq = scales.degree_to_freq(degree, self.scale, self.root)
+    local freq = scales.degree_to_freq(degreeA + degreeB, self.scale, self.root)
     -- finite bursts clamp to >=1 hit so a 0/negative B offset can't tight-loop.
     local total = (reps == -1) and INF or math.max(1, reps)
 
@@ -281,12 +291,32 @@ function Burst:run_burst(ch, token, target_in)
       -- identity check: a live grid edit / relaunch replaced a timing or
       -- position sequins, so restart this burst with the new values now.
       if c.div ~= div_seq or c.reps ~= reps_seq or c.note ~= note_seq
-         or c.divB ~= div_seqB or c.repsB ~= reps_seqB or c.noteB ~= note_seqB then
+         or c.divB ~= div_seqB or c.repsB ~= reps_seqB or c.noteB ~= note_seqB
+         or c.harm ~= harm_seq or c.harmB ~= harm_seqB then
         restarted = true
         break
       end
       self:wait_until_beat(target)
       if self.tokens[ch] ~= token then return nil end
+
+      -- ALT-TRIG STEP MODE: when c.altTrig == 1 the alt (B) pitch layer
+      -- arpeggiates — advance the captured B note sequins per hit and re-sum
+      -- with the held degreeA. i == 0 already consumed the burst-start draw.
+      -- Advancing here (above the probHit skip) keeps the arpeggio locked to the
+      -- beat grid: a skipped hit still consumes a B value.
+      if c.altTrig == 1 and i > 0 then
+        degreeB = note_seqB()
+        freq = scales.degree_to_freq(degreeA + degreeB, self.scale, self.root)
+      end
+
+      -- HARM-TRIG STEP MODE: independently arpeggiate the alt (B) harm layer,
+      -- advancing the captured B harm sequins per hit and re-summing with the
+      -- held harmA. Same beat-locked accounting as the note step mode above.
+      if c.harmTrig == 1 and i > 0 then
+        harmB = harm_seqB()
+        harm = harmA + harmB
+      end
+
       if c.probHit and math.random() > c.burstProb then
         -- per-hit skip: advance the playhead but don't trigger a voice.
         self:emit{ type = 'fire', ch = ch, beat = target,

@@ -147,6 +147,58 @@ check('looping still running', eng3:is_running(2) == true)
 eng3:stop(2)
 check('stop halts the channel', eng3:is_running(2) == false)
 
+-- alt-trig: 'hold' draws the B note once per burst (every hit shares it);
+-- 'step' advances the B note sequins per hit so the alt layer arpeggiates.
+-- A 3-hit single-shot burst with noteB {0,5,7}: hold => all three = degree 0;
+-- step => degrees 0, 5, 7.
+local function alt_trig_freqs(mode)
+  clock._reset()
+  local e = Burst.new()
+  e.quantize = 0
+  local f = {}
+  e:on(function(ev) if ev.type == 'fire' then f[#f + 1] = ev.freq end end)
+  e.channels[1].div   = seqx.new{4}
+  e.channels[1].reps  = seqx.new{3}     -- length-1 finite -> single 3-hit burst
+  e.channels[1].note  = seqx.new{0}
+  e.channels[1].noteB = seqx.new{0, 5, 7}
+  e.channels[1].altTrig = mode
+  e:launch(1)
+  clock._run_until(4)
+  return f
+end
+local hold = alt_trig_freqs(0)
+check('alt-trig hold holds one B offset across the burst',
+  #hold == 3 and approx(hold[1], hold[2]) and approx(hold[2], hold[3]))
+local step = alt_trig_freqs(1)
+check('alt-trig step arpeggiates the B pitch per hit',
+  #step == 3 and approx(step[1], scales.degree_to_freq(0, major))
+  and approx(step[2], scales.degree_to_freq(5, major))
+  and approx(step[3], scales.degree_to_freq(7, major)))
+
+-- harm-trig mirrors alt-trig for the B harm layer (harmEnv off => ev.harm is the
+-- raw harmA + harmB sum). harm {2}, harmB {0,3,6}: hold => 2,2,2; step => 2,5,8.
+local function harm_trig_harms(mode)
+  clock._reset()
+  local e = Burst.new()
+  e.quantize = 0
+  local h = {}
+  e:on(function(ev) if ev.type == 'fire' then h[#h + 1] = ev.harm end end)
+  e.channels[1].div   = seqx.new{4}
+  e.channels[1].reps  = seqx.new{3}
+  e.channels[1].harm  = seqx.new{2}
+  e.channels[1].harmB = seqx.new{0, 3, 6}
+  e.channels[1].harmTrig = mode
+  e:launch(1)
+  clock._run_until(4)
+  return h
+end
+local h_hold = harm_trig_harms(0)
+check('harm-trig hold holds one B harm offset across the burst',
+  #h_hold == 3 and approx(h_hold[1], 2) and approx(h_hold[2], 2) and approx(h_hold[3], 2))
+local h_step = harm_trig_harms(1)
+check('harm-trig step arpeggiates the B harm per hit',
+  #h_step == 3 and approx(h_step[1], 2) and approx(h_step[2], 5) and approx(h_step[3], 8))
+
 -- quantization: an off-grid division (triplet, 4/3 beats) must snap every
 -- event FORWARD to the quarter-note grid (quantize=4 -> step 1 beat). We read
 -- clock.get_beats() inside the listener = the actual (snapped) firing instant.
@@ -282,8 +334,16 @@ check('scale picker closed via QNT', ctl.picker == nil)
 -- prob mode (row6 col 13)
 ctl:press(13, 6)
 check('PROB mode entered', ctl.probMode == true)
-ctl:press(7, 0)  -- burstProb = 7/14 = 0.5 on channel 0
-check('prob slider sets burstProb ~0.5', approx(geng.channels[1].burstProb, 0.5))
+ctl:press(12, 0)  -- PROB_COLS[2] -> PROB_VALUES[2] = 0.5 on channel 0
+check('prob option sets burstProb 0.5', approx(geng.channels[1].burstProb, 0.5))
+ctl:press(1, 0)   -- ALT_TRIG_COLS[2] -> altTrig = 1 (step) on channel 0
+check('alt-trig key sets altTrig to step', geng.channels[1].altTrig == 1)
+ctl:press(0, 0)   -- ALT_TRIG_COLS[1] -> altTrig = 0 (hold)
+check('alt-trig key sets altTrig to hold', geng.channels[1].altTrig == 0)
+ctl:press(4, 0)   -- HARM_TRIG_COLS[2] -> harmTrig = 1 (step) on channel 0
+check('harm-trig key sets harmTrig to step', geng.channels[1].harmTrig == 1)
+ctl:press(3, 0)   -- HARM_TRIG_COLS[1] -> harmTrig = 0 (hold)
+check('harm-trig key sets harmTrig to hold', geng.channels[1].harmTrig == 0)
 ctl:press(13, 6)
 check('PROB mode exited', ctl.probMode == false)
 
@@ -355,15 +415,21 @@ check('snd E3 steps geodeMode within table', seng.channels[1].geodeMode == g0 + 
 sui:enc(3, 99)
 check('snd E3 clamps at table end', seng.channels[1].geodeMode == #GridUI.GEODE_MODE_NAMES - 1)
 
--- prob page: prob snaps to the grid slider's k/14 columns
+-- prob page: prob steps the discrete 25/50/75/100% set
 sui:set_page(4)
 sui.sel_line[4] = 1
 seng.channels[1].burstProb = 1
 sui:enc(3, -1)
-check('prob E3 snaps to k/14', approx(seng.channels[1].burstProb, 13 / 14))
+check('prob E3 steps down one discrete value', approx(seng.channels[1].burstProb, 0.75))
 sui.sel_line[4] = 2
 sui:enc(3, 1)
 check('prob mode line toggles probHit', seng.channels[1].probHit == true)
+sui.sel_line[4] = 3
+sui:enc(3, 1)
+check('alt-trig line steps altTrig to step', seng.channels[1].altTrig == 1)
+sui.sel_line[4] = 4
+sui:enc(3, 1)
+check('harm-trig line steps harmTrig to step', seng.channels[1].harmTrig == 1)
 
 -- perf page: values come from the shared interval/octave/rate tables
 sui:set_page(5)
@@ -409,6 +475,24 @@ check('grid PROB press switches screen to prob page', sui.page == 4)
 sctl:press(13, 6)  -- toggle PROB off
 sui:redraw()
 check('grid mode off returns screen to main page', sui.page == 1)
+
+-- channel focus follows the grid (grid -> screen sync)
+sui.sel_ch = 0
+sctl:press(2, 3)        -- step press on channel row 3 (0-based)
+sui:redraw()
+check('grid channel edit pulls screen focus to that channel', sui.sel_ch == 3)
+sctl:close_picker()     -- that press opened a step picker; dismiss it
+-- E1 stays free between grid touches: focus is edge-triggered, not pinned
+sui:enc(1, -1)
+check('E1 still moves screen channel after a grid focus', sui.sel_ch == 2)
+sui:redraw()
+check('redraw does not yank focus back to the grid channel', sui.sel_ch == 2)
+-- re-editing the same grid channel re-pulls focus (focusSeq bumped)
+sctl:press(0, 3)        -- another step press on channel row 3
+sui:redraw()
+check('re-touching the same grid channel re-pulls focus', sui.sel_ch == 3)
+sctl:close_picker()
+sui.sel_ch = 0  -- restore for the channel-1 edit tests below
 
 -- grid mid-gesture: footer swaps step squares for the status line
 sctl:press(14, 7)  -- enter randomize action mode on the grid
@@ -624,8 +708,8 @@ pctl:press(0, 0)  -- open step picker ch0 col0
 pctl:press(5, 0)  -- pick note value 5
 check('grid step edit reflects into text param', fake:get('ch1_note_a') == '5 8 5')
 pctl:press(13, 6)  -- PROB mode
-pctl:press(7, 0)   -- burstProb = 7/14
-check('grid prob slider reflects into param', fake:get('ch1_prob') == 7)
+pctl:press(12, 0)  -- PROB_COLS[2] -> burstProb 0.5 -> prob option index 2
+check('grid prob option reflects into param', fake:get('ch1_prob') == 2)
 pctl:press(13, 6)  -- exit PROB
 check('grid edits fired zero param actions', fake.fires == f0)
 
@@ -696,15 +780,15 @@ pctl:press(14, 6)  -- close picker
 
 -- render coalescing: actions raise the flag, flush repaints once
 psync.render_pending = false
-fake:set('ch1_prob', 10)
+fake:set('ch1_prob', 3)
 check('param action requests coalesced render', psync.render_pending == true)
 psync:flush()
 check('flush clears the pending render', psync.render_pending == false)
 
 -- pset-load hook: action_read re-reflects everything
-peng.channels[5].burstProb = 3 / 14
+peng.channels[5].burstProb = 0.5
 fake.action_read()
-check('action_read reflects engine state into params', fake:get('ch5_prob') == 3)
+check('action_read reflects engine state into params', fake:get('ch5_prob') == 2)
 
 -- ---- outputs: per-channel midi / crow / i2c routing ----------------------
 local Outputs = require 'outputs'

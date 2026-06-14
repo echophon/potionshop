@@ -38,7 +38,7 @@ local GridUI = require 'grid_ui'
 
 local PARAMS = {'div', 'reps', 'note', 'level', 'harm', 'env'}
 local PAGES  = {'main', 'alt', 'snd', 'prob', 'perf'}
-local LINES_PER_PAGE = {1 + #PARAMS, 1 + #PARAMS, 4, 2, 3}  -- main/alt line 1 = run
+local LINES_PER_PAGE = {1 + #PARAMS, 1 + #PARAMS, 4, 4, 3}  -- main/alt line 1 = run
 
 local NOTE_NAMES = {'c','c#','d','d#','e','f','f#','g','g#','a','a#','b'}
 
@@ -88,6 +88,7 @@ function Screen.new(engine, controller)
   self.ctl = controller
   self.SPV = controller.STEP_PICKER_VALUES
   self.sel_ch = 0
+  self._focus_seen = 0  -- last grid focusSeq adopted (edge-trigger; see _sync_focus_from_grid)
   self.sel_line = {4, 4, 1, 1, 1}  -- per-page focused line (main/alt default to note)
   self.sel_step = 0
   self.page = 1
@@ -234,10 +235,27 @@ function Screen:_sync_page_from_grid()
     or (self:_seq_page() and self.page or 1)
 end
 
+-- Channel focus follows the grid: the grid bumps focusSeq each time a press
+-- targets a channel. We adopt its focusCh once per bump (edge-triggered, so E1
+-- stays free to scroll channels between grid touches, and a repeat edit of the
+-- same channel still pulls focus back).
+function Screen:_sync_focus_from_grid()
+  local c = self.ctl
+  if c.focusSeq ~= self._focus_seen then
+    self._focus_seen = c.focusSeq
+    if self.sel_ch ~= c.focusCh then
+      self.sel_ch = c.focusCh
+      self:_clamp_step()
+      self.dirty = true
+    end
+  end
+end
+
 -- ---- input ---------------------------------------------------------------
 
 function Screen:enc(n, d)
   self:_sync_page_from_grid()
+  self:_sync_focus_from_grid()
   if n == 1 then
     self.sel_ch = clamp(self.sel_ch + d, 0, 5)
     self:_clamp_step()
@@ -328,12 +346,16 @@ end
 function Screen:_edit_prob(d)
   local ch = self.sel_ch
   local c = self.engine.channels[ch + 1]
-  if self.sel_line[4] == 1 then
-    -- snap to the grid slider's 0..14 columns so edits stay grid-reachable
-    local k = clamp(round(c.burstProb * 14) + d, 0, 14)
-    self.ctl:set_scalar(ch, 'burstProb', k / 14)
-  else
+  local line = self.sel_line[4]
+  if line == 1 then
+    -- step the discrete 25/50/75/100% set shared with the grid prob page
+    self.ctl:set_scalar(ch, 'burstProb', step_table(c.burstProb, GridUI.PROB_VALUES, d))
+  elseif line == 2 then
     self.ctl:set_scalar(ch, 'probHit', not c.probHit)
+  elseif line == 3 then
+    self.ctl:set_scalar(ch, 'altTrig', clamp(c.altTrig + d, 0, #GridUI.ALT_TRIG_MODE_NAMES - 1))
+  else
+    self.ctl:set_scalar(ch, 'harmTrig', clamp(c.harmTrig + d, 0, #GridUI.ALT_TRIG_MODE_NAMES - 1))
   end
 end
 
@@ -355,6 +377,7 @@ end
 function Screen:key(n, z)
   if z ~= 1 then return end
   self:_sync_page_from_grid()
+  self:_sync_focus_from_grid()
   if n == 2 or n == 3 then
     self:set_page(clamp(self.page + (n == 3 and 1 or -1), 1, #PAGES))
     if self:_seq_page() then self:_sync_selected_param() end
@@ -506,6 +529,8 @@ function Screen:page_lines()
     lines = {
       {'prob', round(c.burstProb * 100) .. '%'},
       {'mode', c.probHit and 'hit' or 'burst'},
+      {'note', GridUI.ALT_TRIG_MODE_NAMES[c.altTrig + 1]},
+      {'harm', GridUI.ALT_TRIG_MODE_NAMES[c.harmTrig + 1]},
     }
   else
     local iv = c.resetInterval
@@ -578,6 +603,7 @@ end
 
 function Screen:redraw()
   self:_sync_page_from_grid()
+  self:_sync_focus_from_grid()
   self.dirty = false
   screen.clear()
   screen.font_face(1)

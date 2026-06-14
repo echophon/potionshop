@@ -47,6 +47,9 @@ for i, v in ipairs(GridUI.RESET_INTERVALS) do
   RESET_NAMES[i] = (v == 0) and 'off' or (v .. (v == 1 and ' bar' or ' bars'))
 end
 local PROB_MODE_NAMES = {'burst', 'hit'}
+local PROB_PCT_NAMES = {}
+for i, v in ipairs(GridUI.PROB_VALUES) do PROB_PCT_NAMES[i] = (v * 100) .. '%' end
+local ALT_TRIG_NAMES = GridUI.ALT_TRIG_MODE_NAMES
 local NOTE_NAMES = {'C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'}
 
 local function round(x) return math.floor(x + 0.5) end
@@ -223,10 +226,10 @@ function M:_add_channel_params(n)
     end)
   end)
   def(1, function()
-    params:add_number(id('prob'), 'probability', 0, 14, round(c.burstProb * 14),
-      function(param) return round(param:get() / 14 * 100) .. '%' end)
-    params:set_action(id('prob'), function(v)
-      c.burstProb = v / 14
+    params:add_option(id('prob'), 'probability', PROB_PCT_NAMES,
+      GridUI.nearest_index(GridUI.PROB_VALUES, c.burstProb))
+    params:set_action(id('prob'), function(i)
+      c.burstProb = GridUI.PROB_VALUES[i]
       self:request_render()
     end)
   end)
@@ -234,6 +237,20 @@ function M:_add_channel_params(n)
     params:add_option(id('prob_mode'), 'prob mode', PROB_MODE_NAMES, c.probHit and 2 or 1)
     params:set_action(id('prob_mode'), function(i)
       c.probHit = (i == 2)
+      self:request_render()
+    end)
+  end)
+  def(1, function()
+    params:add_option(id('alt_trig'), 'alt trig', ALT_TRIG_NAMES, c.altTrig + 1)
+    params:set_action(id('alt_trig'), function(i)
+      c.altTrig = i - 1
+      self:request_render()
+    end)
+  end)
+  def(1, function()
+    params:add_option(id('harm_trig'), 'harm trig', ALT_TRIG_NAMES, c.harmTrig + 1)
+    params:set_action(id('harm_trig'), function(i)
+      c.harmTrig = i - 1
       self:request_render()
     end)
   end)
@@ -417,8 +434,10 @@ function M:reflect_scalars(n)
   if not params:lookup_param(id('run')) then return end
   params:set(id('run'), self.engine:is_running(n) and 1 or 0, true)
   params:set(id('rate'), GridUI.nearest_index(GridUI.RATE_VALUES, c.rate), true)
-  params:set(id('prob'), round(c.burstProb * 14), true)
+  params:set(id('prob'), GridUI.nearest_index(GridUI.PROB_VALUES, c.burstProb), true)
   params:set(id('prob_mode'), c.probHit and 2 or 1, true)
+  params:set(id('alt_trig'), c.altTrig + 1, true)
+  params:set(id('harm_trig'), c.harmTrig + 1, true)
   params:set(id('env_mode'), c.envMode + 1, true)
   params:set(id('geode'), c.geodeMode + 1, true)
   params:set(id('pitch_env'), c.pitchEnv + 1, true)

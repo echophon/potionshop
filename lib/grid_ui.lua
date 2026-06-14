@@ -20,7 +20,9 @@
 --             · 12 COPY · 13 PASTE · 14 RANDOMIZE · 15 MUTATE
 --   CLR/COPY/PASTE act on the MAIN (A-layer) sequins of the tapped channel only;
 --   the B (alt) layer is left intact so it can keep variating the copied sequins.
---   PROB:  rows 0-5 = prob slider (cols 0..14) · col 15 burst/hit toggle
+--   PROB:  rows 0-5 = note alt-trig hold/step (cols 0-1) · harm alt-trig
+--          hold/step (cols 3-4) · prob 25/50/75/100% (cols 11-14,
+--          right-justified) · col 15 burst/hit toggle
 --   PERF:  rows 0-5 = reset off/1/2/4 bars (cols 0..3) · octave -2..+2 (cols 5..9)
 --          · rate (cols 11..15)
 --   SND:   rows 0-5 = env(0-2) · geode(4-7) · pitch env(8-11) · harm env(12-15)
@@ -77,11 +79,23 @@ local OCTAVE_VALUES = {-2, -1, 0, 1, 2}
 local OCTAVE_COLS   = {5, 6, 7, 8, 9}
 local RATE_VALUES = {0.25, 0.5, 1, 2, 4}
 local RATE_COLS   = {11, 12, 13, 14, 15}
+-- PROB page: alt-trig modes packed left, prob options right-justified, hit toggle
+-- at the far right (col 15, unchanged). burstProb is now a discrete 4-value set.
+local ALT_TRIG_COLS  = {0, 1}                -- note alt(B) layer: hold / step
+local HARM_TRIG_COLS = {3, 4}                -- harm alt(B) layer: hold / step
+local PROB_VALUES   = {0.25, 0.5, 0.75, 1.0}
+local PROB_COLS     = {11, 12, 13, 14}
+local PROB_HIT_COL  = 15
 
 local ENV_MODE_NAMES       = {'shape', 'burst', 'hit'}
 local GEODE_MODE_NAMES     = {'off', 'transient', 'sustain', 'cycle'}
 local PITCH_ENV_MODE_NAMES = {'off', 'fast', 'med', 'slow'}
 local HARM_ENV_MODE_NAMES  = {'off', 'fast', 'med', 'slow'}
+-- alt(B)-layer trigger modes: how a B sequins feeds a burst. Shared by the note
+-- (altTrig) and harm (harmTrig) layers.
+--   hold = add&hold (B drawn once per burst, summed onto A for every hit)
+--   step = advance the B sequins per hit (arpeggiates the alt layer)
+local ALT_TRIG_MODE_NAMES  = {'hold', 'step'}
 
 local DEFAULT_VALUE   = {div = 4, reps = 1, note = 0, level = 0.5, harm = 2, env = 0}
 local DEFAULT_VALUE_B = {div = 0, reps = 0, note = 0, level = 0, harm = 0, env = 0}
@@ -157,6 +171,8 @@ GridUI.HARM_ENV_MODE_NAMES = HARM_ENV_MODE_NAMES
 GridUI.RESET_INTERVALS = RESET_INTERVALS
 GridUI.OCTAVE_VALUES = OCTAVE_VALUES
 GridUI.RATE_VALUES = RATE_VALUES
+GridUI.PROB_VALUES = PROB_VALUES
+GridUI.ALT_TRIG_MODE_NAMES = ALT_TRIG_MODE_NAMES
 
 -- opts.on_status(string): pushed status text (for screen). opts.on_redraw():
 -- called after any state change so the screen can refresh too. opts.on_edit(ev):
@@ -175,6 +191,12 @@ function GridUI.new(engine, grid, opts)
 
   self.selectedParam = 'note'
   self.paramLayer = 'A'        -- 'A' | 'B'
+  -- last channel touched by a grid press + a generation counter bumped on every
+  -- such touch. The screen pulls these (edge-triggered on focusSeq) so its focus
+  -- follows whichever channel the grid is editing, even on a repeat edit of the
+  -- same channel. ch is 0-based.
+  self.focusCh = 0
+  self.focusSeq = 0
   self.picker = nil            -- {kind='step',ch,col,layer} | {kind='scale'} | nil
   self.probMode = false
   self.perfMode = false
@@ -213,6 +235,17 @@ function GridUI:refresh() self:render_all() end
 -- channel-state accessor (ch is 0-based)
 function GridUI:chan(ch) return self.engine.channels[ch + 1] end
 
+-- mark a channel as the grid's current focus. Bumps focusSeq so the screen
+-- re-adopts even when the same channel is touched again. ch is 0-based.
+function GridUI:_focus(ch)
+  self.focusCh = ch
+  self.focusSeq = self.focusSeq + 1
+  -- nudge the screen to repaint: some channel-row paths (perf/prob/snd) only
+  -- redraw their grid row and never reach render_all's on_redraw, so without
+  -- this the focus jump wouldn't show until the next fire flash.
+  self.on_redraw()
+end
+
 -- single edit path for channel scalar fields: grid and screen both write
 -- through here so on_edit sees every mutation. ch is 0-based.
 function GridUI:set_scalar(ch, field, value)
@@ -230,6 +263,7 @@ end
 
 function GridUI:handle_normal_press(x, y)
   if y < 6 then
+    self:_focus(y)
     if self.perfMode then
       local rate_idx = index_of(RATE_COLS, x)
       if rate_idx ~= -1 then
@@ -251,10 +285,17 @@ function GridUI:handle_normal_press(x, y)
       return
     end
     if self.probMode then
-      if x == 15 then
+      local trig_idx = index_of(ALT_TRIG_COLS, x)
+      local harm_idx = index_of(HARM_TRIG_COLS, x)
+      local prob_idx = index_of(PROB_COLS, x)
+      if x == PROB_HIT_COL then
         self:set_scalar(y, 'probHit', not self:chan(y).probHit)
-      else
-        self:set_scalar(y, 'burstProb', x / 14)
+      elseif trig_idx ~= -1 then
+        self:set_scalar(y, 'altTrig', trig_idx)
+      elseif harm_idx ~= -1 then
+        self:set_scalar(y, 'harmTrig', harm_idx)
+      elseif prob_idx ~= -1 then
+        self:set_scalar(y, 'burstProb', PROB_VALUES[prob_idx + 1])
       end
       self:render_channel_row(y); self.g:refresh()
       return
@@ -287,6 +328,7 @@ function GridUI:handle_picker_press(x, y)
       self:remove_step(p.ch, p.col, p.layer)
       self:close_picker()
     else
+      self:_focus(y)
       self:open_step_picker(y, x)
     end
     return
@@ -491,6 +533,7 @@ function GridUI:handle_row6(x)
   end
 
   if self.actionMode and x < 6 then
+    self:_focus(x)
     if self.actionMode == 'randomize' then
       self.engine:randomize(x + 1)
       self.on_edit{ type = 'channel', ch = x }
@@ -504,6 +547,7 @@ function GridUI:handle_row6(x)
   end
 
   if x < 6 then
+    self:_focus(x)
     if self.engine:is_running(x + 1) then self.engine:stop(x + 1)
     else self.engine:launch(x + 1) end
   end
@@ -648,13 +692,20 @@ end
 
 function GridUI:render_prob_row(ch)
   local c = self:chan(ch)
-  local col = round(c.burstProb * 14)
-  for i = 0, 14 do
-    self.g:set_led(i, ch, i == col and 15 or 1)
-    self.g:set_strobe(i, ch, 'off')
+  for x = 0, GRID_W - 1 do self.g:set_led(x, ch, 0); self.g:set_strobe(x, ch, 'off') end
+  -- alt-trig modes (left): note layer cols 0-1, harm layer cols 3-4
+  for i = 1, #ALT_TRIG_MODE_NAMES do
+    self.g:set_led(ALT_TRIG_COLS[i], ch, c.altTrig == (i - 1) and 15 or 4)
+    self.g:set_led(HARM_TRIG_COLS[i], ch, c.harmTrig == (i - 1) and 15 or 4)
   end
-  self.g:set_led(15, ch, c.probHit and 14 or 4)
-  self.g:set_strobe(15, ch, c.probHit and 'slow' or 'off')
+  -- prob options (right-justified): nearest discrete value highlighted
+  local sel = nearest_index(PROB_VALUES, c.burstProb)
+  for i = 1, #PROB_VALUES do
+    self.g:set_led(PROB_COLS[i], ch, i == sel and 15 or 4)
+  end
+  -- burst/hit toggle (far right)
+  self.g:set_led(PROB_HIT_COL, ch, c.probHit and 14 or 4)
+  self.g:set_strobe(PROB_HIT_COL, ch, c.probHit and 'slow' or 'off')
 end
 
 function GridUI:render_perf_row(ch)
@@ -922,7 +973,7 @@ function GridUI:_status()
   elseif self.perfMode then
     s = 'PERF — cols0-3 reset, cols5-9 oct, cols11-15 rate'
   elseif self.probMode then
-    s = 'PROB — slider 0-14, col15 burst/hit'
+    s = 'PROB — cols0-1 alt trig, cols11-14 prob%, col15 burst/hit'
   elseif self.soundMode then
     s = 'SOUND — env/geode/pitchenv/harmenv'
   elseif self.actionMode then
