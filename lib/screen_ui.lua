@@ -227,12 +227,13 @@ function Screen:set_page(p)
 end
 
 -- The grid's PERF/PROB/SND buttons toggle the same modes set_page sets; follow
--- them so the screen tab always matches what the grid is showing. `alt` is a
--- screen-only page (no grid mode), so it survives while no mode is active.
+-- them so the screen tab always matches what the grid is showing. With no mode
+-- active we're on a sequence page: follow the grid's paramLayer so re-pressing a
+-- row-7 param (the double-press that flips A↔B) swaps the screen to main/alt.
 function Screen:_sync_page_from_grid()
   local c = self.ctl
   self.page = c.soundMode and 3 or c.probMode and 4 or c.perfMode and 5
-    or (self:_seq_page() and self.page or 1)
+    or ((c.paramLayer == 'B') and 2 or 1)
 end
 
 -- Channel focus follows the grid: the grid bumps focusSeq each time a press
