@@ -391,7 +391,8 @@ function Burst:fire(ch, beat, freq, level, harm, env, div, total, hit_idx)
     engine.trig(geo_freq, actual_level, geo_harm, self.modIndex, attack, amp_dec, mod_dec)
   end
   if out then
-    out:note(ch, { freq = geo_freq, level = actual_level, dur = attack + amp_dec })
+    out:note(ch, { freq = geo_freq, level = actual_level, harm = geo_harm,
+                   dur = attack + amp_dec })
   end
 
   self:emit{ type = 'fire', ch = ch, beat = beat,

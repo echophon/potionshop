@@ -11,9 +11,12 @@
 -- script's local geode shaping), not JF's own geode engine.
 --
 -- Burst:fire calls `note()` with the FINAL per-hit values (geode-bent freq,
--- accented level, computed envelope length), so external voices track the
--- internal voice's dynamics exactly: MIDI velocity follows the hit level,
--- MIDI note length and the crow envelope follow the FM amp decay.
+-- accented level, geode-shaped harmonicity, computed envelope length), so
+-- external voices track the internal voice's dynamics exactly: MIDI velocity
+-- follows the hit level, MIDI note length and the crow envelope follow the FM
+-- amp decay. Harmonicity (with its harm-geode envelope baked in) rides out too:
+-- MIDI sends it on the modwheel (CC1) per hit, and ER-301 puts it on a second
+-- CV port (channel + num_channels, i.e. CV 7..12) as a plain step per hit.
 --
 -- The module is dependency-injected ({params, midi, crow}) like params_sync,
 -- so the off-hardware tests drive it with fakes; nothing here touches norns
@@ -45,6 +48,19 @@ function M.note_to_volts(note) return (note - 60) / 12 end
 -- hit level (0..1, geode-accented) -> MIDI velocity. Linear; level<=0 hits
 -- never reach here (note() drops them, matching the silent internal voice).
 function M.velocity(level) return clamp(round(level * 127), 1, 127) end
+
+-- harmonicity ratio -> normalized 0..1 over the grid's harm picker span
+-- (STEP_PICKER_VALUES.harm = 2 + i*0.75, i = 0..31, so 2 .. 25.25). The value
+-- arriving here is geo_harm: harmonicity already shaped by the harm-geode
+-- envelope per hit, so the normalized result carries that envelope's motion.
+local HARM_MIN, HARM_MAX = 2, 2 + 31 * 0.75
+function M.harm_norm(harm) return clamp((harm - HARM_MIN) / (HARM_MAX - HARM_MIN), 0, 1) end
+
+-- ER-301 modulation CV: harmonicity over 0..5 V, a plain step per hit.
+function M.harm_to_volts(harm) return M.harm_norm(harm) * 5 end
+
+-- MIDI modwheel (CC1): harmonicity across the full 0..127 range.
+function M.harm_to_cc(harm) return round(M.harm_norm(harm) * 127) end
 
 -- ---- construction ---------------------------------------------------------
 
@@ -125,8 +141,10 @@ function M:note(ch, ev)
   if d == AUDIO or ev.level <= 0 then return end
   local note = M.freq_to_note(ev.freq)
   local volts = M.note_to_volts(note)
+  local harm = ev.harm or HARM_MIN
   if d == MIDI or d == AUDIO_MIDI then
     self:midi_note(ch, round(note), M.velocity(ev.level), ev.dur)
+    self:midi_cc(ch, 1, M.harm_to_cc(harm))  -- modwheel = harmonicity
   elseif d == CROW12 then
     self:crow_pair(1, 2, volts, ev)
   elseif d == CROW34 then
@@ -138,7 +156,14 @@ function M:note(ch, ev)
   elseif d == ER301 and self.crow then
     self.crow.ii.er301.cv(ch, volts)
     self.crow.ii.er301.tr_pulse(ch)
+    self.crow.ii.er301.cv(ch + self.num_channels, M.harm_to_volts(harm))  -- harm CV on port 7..12
   end
+end
+
+function M:midi_cc(ch, cc, val)
+  local conn = self.midi_conn[ch]
+  if not conn then return end
+  conn:cc(cc, val, self.midi_chan[ch] or 1)
 end
 
 -- CV pitch on `cv_out`, one-shot AR envelope on `env_out` whose peak follows

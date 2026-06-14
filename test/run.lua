@@ -801,6 +801,7 @@ local fake_midi = {
       dev = dev,
       note_on  = function(_, note, vel, ch) midi_log[#midi_log + 1] = {'on', note, vel, ch} end,
       note_off = function(_, note, vel, ch) midi_log[#midi_log + 1] = {'off', note, vel, ch} end,
+      cc       = function(_, cc, val, ch) midi_log[#midi_log + 1] = {'cc', cc, val, ch} end,
     }
   end,
 }
@@ -830,6 +831,10 @@ check('note_to_volts C5 = +1V', approx(Outputs.note_to_volts(72), 1))
 check('velocity scales level linearly', Outputs.velocity(0.5) == 64)
 check('velocity floors at 1', Outputs.velocity(0.001) == 1)
 check('velocity caps at 127', Outputs.velocity(1.5) == 127)
+check('harm_to_volts: unison harm = 0V', approx(Outputs.harm_to_volts(2), 0))
+check('harm_to_volts: max harm = 5V', approx(Outputs.harm_to_volts(2 + 31 * 0.75), 5))
+check('harm_to_cc: unison harm = 0', Outputs.harm_to_cc(2) == 0)
+check('harm_to_cc: max harm = 127', Outputs.harm_to_cc(2 + 31 * 0.75) == 127)
 
 clock._reset()
 local ofake = Paramset.new()
@@ -845,23 +850,27 @@ check('audio destination sends nothing external', #midi_log == 0 and #crow_log =
 ofake:set('ch1_output', Outputs.DEST.MIDI)
 ofake:set('ch1_midi_chan', 5)
 check('midi destination disables internal audio', outs:wants_audio(1) == false)
-outs:note(1, {freq = 261.6256, level = 0.5, dur = 0.5})
+outs:note(1, {freq = 261.6256, level = 0.5, harm = 2 + 31 * 0.75, dur = 0.5})
 check('midi note_on: middle C, vel 64, chan 5',
-  #midi_log == 1 and midi_log[1][1] == 'on' and midi_log[1][2] == 60
+  midi_log[1][1] == 'on' and midi_log[1][2] == 60
   and midi_log[1][3] == 64 and midi_log[1][4] == 5)
+check('midi modwheel (cc1) = harmonicity, per hit, on the channel',
+  #midi_log == 2 and midi_log[2][1] == 'cc' and midi_log[2][2] == 1
+  and midi_log[2][3] == 127 and midi_log[2][4] == 5)
 clock._run_until(4)  -- 0.5 s at 120 bpm = 1 beat
 check('midi note_off scheduled after dur',
-  #midi_log == 2 and midi_log[2][1] == 'off' and midi_log[2][2] == 60)
+  #midi_log == 3 and midi_log[3][1] == 'off' and midi_log[3][2] == 60)
 
--- retrigger same pitch: old note cut first, stale timer's off dropped
+-- retrigger same pitch: old note cut first, stale timer's off dropped. Each hit
+-- also emits its modwheel cc, so the sequence is on,cc / off,on,cc.
 midi_log = {}
 outs:note(1, {freq = 261.6256, level = 0.5, dur = 0.5})
 outs:note(1, {freq = 261.6256, level = 0.9, dur = 0.5})
 check('retrigger cuts the held note first',
-  midi_log[1][1] == 'on' and midi_log[2][1] == 'off' and midi_log[3][1] == 'on')
+  midi_log[1][1] == 'on' and midi_log[3][1] == 'off' and midi_log[4][1] == 'on')
 clock._run_until(8)
-check('exactly one note_off after retrigger settles', #midi_log == 4
-  and midi_log[4][1] == 'off')
+check('exactly one note_off after retrigger settles', #midi_log == 6
+  and midi_log[6][1] == 'off')
 
 -- zero-level hits are silent everywhere (matches the internal voice)
 midi_log = {}
@@ -908,9 +917,11 @@ check('last jf channel leaving sends jf.mode(0)', crow_log[3][1] == 'jf_mode'
 -- er301: cv + tr_pulse on the channel-numbered port
 ofake:set('ch5_output', Outputs.DEST.ER301)
 crow_log = {}
-outs:note(5, {freq = 523.2511, level = 0.5, dur = 0.5})
+outs:note(5, {freq = 523.2511, level = 0.5, harm = 2 + 31 * 0.75, dur = 0.5})
 check('er301 cv + tr on port = channel', crow_log[1][1] == '301cv' and crow_log[1][2] == 5
   and approx(crow_log[1][3], 1) and crow_log[2][1] == '301tr' and crow_log[2][2] == 5)
+check('er301 harm CV on port channel+6 (7..12)', crow_log[3][1] == '301cv'
+  and crow_log[3][2] == 11 and approx(crow_log[3][3], 5))
 
 -- burst integration: fire() respects wants_audio and forwards final values
 engine = { trigs = 0 }
@@ -918,12 +929,12 @@ engine.trig = function() engine.trigs = engine.trigs + 1 end
 local oeng = Burst.new()
 oeng.outputs = outs
 midi_log = {}
-oeng:fire(1, 0, 440, 0.5, 2, 0, 4, 4, 0)  -- ch1 is midi: external only
-check('fire on midi channel skips engine.trig', engine.trigs == 0 and #midi_log == 1)
+oeng:fire(1, 0, 440, 0.5, 2, 0, 4, 4, 0)  -- ch1 is midi: external only (note_on + modwheel cc)
+check('fire on midi channel skips engine.trig', engine.trigs == 0 and #midi_log == 2)
 ofake:set('ch1_output', Outputs.DEST.AUDIO_MIDI)
 midi_log = {}
 oeng:fire(1, 0, 440, 0.5, 2, 0, 4, 4, 0)
-check('audio+midi fires both', engine.trigs == 1 and #midi_log == 1)
+check('audio+midi fires both', engine.trigs == 1 and #midi_log == 2)
 oeng:fire(2, 0, 440, 0.5, 2, 0, 4, 4, 0)  -- ch2 is on crow 3+4
 check('fire on crow channel skips engine.trig', engine.trigs == 1)
 engine = nil
