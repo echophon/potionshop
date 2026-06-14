@@ -5,7 +5,7 @@
 --
 -- Layout: a global block (scale / quantize / mod_index) plus one group per
 -- channel ("CHANNEL 1".."CHANNEL 6"). Each group holds the channel scalars
--- (run, voice, rate, prob, modes, reset, lock, action triggers) and, per
+-- (run, rate, prob, modes, reset, clear/copy/paste + action triggers) and, per
 -- sequence parameter x layer (div/reps/note/level/harm/env x A/B), a
 -- separator-headed block of three params:
 --   chN_<p>_<a|b>        text — the whole sequence as a space-separated string
@@ -24,8 +24,8 @@
 -- Sync invariant (this is what prevents feedback loops): params -> engine
 -- only ever happens inside param ACTIONS, which mutate through the same
 -- controller paths the grid uses (commit_step / set_scalar / launch), so
--- side effects like locked-length sync and the JF harm broadcast behave
--- identically; engine/UI -> params only ever happens via SILENT params:set
+-- side effects (on_edit reflection, clipboard) behave identically;
+-- engine/UI -> params only ever happens via SILENT params:set
 -- (third arg true), which never fires actions. Reflection of off-grid engine
 -- values (the boot level default, mutate jitter) snaps for display only —
 -- the engine keeps its exact value until the user actually edits that param.
@@ -41,9 +41,11 @@ local SEQ_PARAMS = GridUI.PARAMS  -- {'div','reps','note','level','harm','env'}
 local SPV        = GridUI.STEP_PICKER_VALUES
 local MAX_STEPS  = 16
 
-local VOICES = {'fm', 'jf', 'mg'}
-local VOICE_INDEX = {fm = 1, jf = 2, mg = 3}
 local RATE_NAMES = {'0.25x', '0.5x', '1x', '2x', '4x'}
+local RESET_NAMES = {}
+for i, v in ipairs(GridUI.RESET_INTERVALS) do
+  RESET_NAMES[i] = (v == 0) and 'off' or (v .. (v == 1 and ' bar' or ' bars'))
+end
 local PROB_MODE_NAMES = {'burst', 'hit'}
 
 local function round(x) return math.floor(x + 0.5) end
@@ -209,13 +211,6 @@ function M:_add_channel_params(n)
     end)
   end)
   def(1, function()
-    params:add_option(id('voice'), 'voice', VOICES, VOICE_INDEX[c.voiceType] or 1)
-    params:set_action(id('voice'), function(i)
-      c.voiceType = VOICES[i]
-      self:request_render()
-    end)
-  end)
-  def(1, function()
     params:add_option(id('rate'), 'rate', RATE_NAMES,
       GridUI.nearest_index(GridUI.RATE_VALUES, c.rate))
     params:set_action(id('rate'), function(i)
@@ -255,24 +250,21 @@ function M:_add_channel_params(n)
     end)
   end
   def(1, function()
-    params:add_number(id('reset'), 'reset', 0, 8, c.resetInterval,
-      function(param)
-        local v = param:get()
-        if v == 0 then return 'off' end
-        return v .. (v == 1 and ' bar' or ' bars')
-      end)
-    params:set_action(id('reset'), function(v)
-      c.resetInterval = v
+    params:add_option(id('reset'), 'reset', RESET_NAMES,
+      GridUI.nearest_index(GridUI.RESET_INTERVALS, c.resetInterval))
+    params:set_action(id('reset'), function(i)
+      c.resetInterval = GridUI.RESET_INTERVALS[i]
       self:request_render()
     end)
   end)
   def(1, function()
-    params:add_binary(id('lock'), 'lock', 'toggle', c.locked and 1 or 0)
-    params:set_action(id('lock'), function(v)
-      local on = v > 0
-      if c.locked == on then return end
-      c.locked = on
-      if on then ctl:enforce_lock_on_entry(n - 1) end
+    params:add_number(id('octave'), 'octave', -2, 2, c.octave,
+      function(param)
+        local v = param:get()
+        return (v > 0 and '+' or '') .. v
+      end)
+    params:set_action(id('octave'), function(v)
+      c.octave = v
       self:request_render()
     end)
   end)
@@ -295,10 +287,24 @@ function M:_add_channel_params(n)
     end)
   end)
   def(1, function()
-    params:add_trigger(id('clear'), 'clear selected param!')
+    params:add_trigger(id('clear'), 'clear channel!')
     params:set_action(id('clear'), function()
       if not self.triggers_enabled then return end
-      ctl:clear_channel_param(n - 1)  -- clears the grid-selected param, like CLR
+      ctl:clear_channel(n - 1)  -- clears all six MAIN (A-layer) sequins, like CLR
+    end)
+  end)
+  def(1, function()
+    params:add_trigger(id('copy'), 'copy channel')
+    params:set_action(id('copy'), function()
+      if not self.triggers_enabled then return end
+      ctl:copy_channel(n - 1)  -- snapshots the MAIN (A-layer) sequins to clipboard
+    end)
+  end)
+  def(1, function()
+    params:add_trigger(id('paste'), 'paste channel')
+    params:set_action(id('paste'), function()
+      if not self.triggers_enabled then return end
+      ctl:paste_channel(n - 1)  -- writes the clipboard into the MAIN (A-layer) sequins
     end)
   end)
 
@@ -313,9 +319,9 @@ function M:_add_channel_params(n)
         local vals = seqx.values(ctl:seq_ref(n - 1, p, layer))
         params:add_text(text_id, label, M.to_text(p, layer, vals))
         params:set_action(text_id, function(str)
-          -- commit_step handles empty (-> layer default) and fires the same
-          -- locked-sync / JF-broadcast side effects as a grid edit; the
-          -- resulting on_edit reflection silently normalizes the string
+          -- commit_step handles empty (-> layer default) exactly as a grid
+          -- edit does; the resulting on_edit reflection silently normalizes
+          -- the string
           ctl:commit_step(n - 1, p, M.from_text(p, layer, str), layer)
           self:request_render()
         end)
@@ -406,7 +412,6 @@ function M:reflect_scalars(n)
   local function id(suffix) return 'ch' .. n .. '_' .. suffix end
   if not params:lookup_param(id('run')) then return end
   params:set(id('run'), self.engine:is_running(n) and 1 or 0, true)
-  params:set(id('voice'), VOICE_INDEX[c.voiceType] or 1, true)
   params:set(id('rate'), GridUI.nearest_index(GridUI.RATE_VALUES, c.rate), true)
   params:set(id('prob'), round(c.burstProb * 14), true)
   params:set(id('prob_mode'), c.probHit and 2 or 1, true)
@@ -414,8 +419,8 @@ function M:reflect_scalars(n)
   params:set(id('geode'), c.geodeMode + 1, true)
   params:set(id('pitch_env'), c.pitchEnv + 1, true)
   params:set(id('harm_env'), c.harmEnv + 1, true)
-  params:set(id('reset'), c.resetInterval, true)
-  params:set(id('lock'), c.locked and 1 or 0, true)
+  params:set(id('reset'), GridUI.nearest_index(GridUI.RESET_INTERVALS, c.resetInterval), true)
+  params:set(id('octave'), c.octave, true)
 end
 
 function M:reflect_channel(n)

@@ -17,16 +17,16 @@
 --   E3 = edit under the cursor. run: right = launch, left = stop. steps:
 --        change the value (grid-reachable snapped); decrement below the
 --        lowest value to remove the step; on `_`, increment to append one.
---   K2 / K3 = page back / forward (main · alt · snd · prob · rst, clamped)
+--   K2 / K3 = page back / forward (main · alt · snd · prob · perf, clamped)
 --   K1 = untouched — left to the norns system menus
 --
 -- Pages: `main` edits launch + the six A-layer param sequences (via the same
 -- commit_step path the grid uses); `alt` is its clone for the B (additive
 -- offset) layer, snapping to the same extended value set params_sync uses
--- (literal 0 = no offset, plus the picker grid); `snd` / `prob` / `rst` edit
+-- (literal 0 = no offset, plus the picker grid); `snd` / `prob` / `perf` edit
 -- the selected channel's mode fields — the same fields the grid's soundMode/
--- probMode/resetMode presses set, picking only from GridUI's shared value
--- tables. The grid's RST/PROB/SND buttons still switch the matching pages;
+-- probMode/perfMode presses set, picking only from GridUI's shared value
+-- tables. The grid's PERF/PROB/SND buttons still switch the matching pages;
 -- the screen tab follows, and main/alt drive the grid's paramLayer.
 --
 -- Redraw model: state changes set `dirty`; the host calls tick() at ~15 Hz
@@ -37,8 +37,8 @@ local seqx   = require 'seqx'
 local GridUI = require 'grid_ui'
 
 local PARAMS = {'div', 'reps', 'note', 'level', 'harm', 'env'}
-local PAGES  = {'main', 'alt', 'snd', 'prob', 'rst'}
-local LINES_PER_PAGE = {1 + #PARAMS, 1 + #PARAMS, 4, 2, 2}  -- main/alt line 1 = run
+local PAGES  = {'main', 'alt', 'snd', 'prob', 'perf'}
+local LINES_PER_PAGE = {1 + #PARAMS, 1 + #PARAMS, 4, 2, 3}  -- main/alt line 1 = run
 
 local NOTE_NAMES = {'c','c#','d','d#','e','f','f#','g','g#','a','a#','b'}
 
@@ -205,7 +205,7 @@ function Screen:set_page(p)
   c.picker = nil; c.kbMode = false; c.actionMode = nil
   c.soundMode = (self.page == 3)
   c.probMode  = (self.page == 4)
-  c.resetMode = (self.page == 5)
+  c.perfMode = (self.page == 5)
   if self:_seq_page() then
     c.paramLayer = self:layer()
     self:_clamp_step()
@@ -214,12 +214,12 @@ function Screen:set_page(p)
   self.dirty = true
 end
 
--- The grid's RST/PROB/SND buttons toggle the same modes set_page sets; follow
+-- The grid's PERF/PROB/SND buttons toggle the same modes set_page sets; follow
 -- them so the screen tab always matches what the grid is showing. `alt` is a
 -- screen-only page (no grid mode), so it survives while no mode is active.
 function Screen:_sync_page_from_grid()
   local c = self.ctl
-  self.page = c.soundMode and 3 or c.probMode and 4 or c.resetMode and 5
+  self.page = c.soundMode and 3 or c.probMode and 4 or c.perfMode and 5
     or (self:_seq_page() and self.page or 1)
 end
 
@@ -249,7 +249,7 @@ function Screen:_edit_value(d)
   if self:_seq_page() then self:_edit_main(d)
   elseif self.page == 3 then self:_edit_snd(d)
   elseif self.page == 4 then self:_edit_prob(d)
-  elseif self.page == 5 then self:_edit_rst(d) end
+  elseif self.page == 5 then self:_edit_perf(d) end
   self.ctl:render_all()
 end
 
@@ -326,11 +326,14 @@ function Screen:_edit_prob(d)
   end
 end
 
-function Screen:_edit_rst(d)
+function Screen:_edit_perf(d)
   local ch = self.sel_ch
   local c = self.engine.channels[ch + 1]
-  if self.sel_line[5] == 1 then
+  local line = self.sel_line[5]
+  if line == 1 then
     self.ctl:set_scalar(ch, 'resetInterval', step_table(c.resetInterval, GridUI.RESET_INTERVALS, d))
+  elseif line == 2 then
+    self.ctl:set_scalar(ch, 'octave', step_table(c.octave, GridUI.OCTAVE_VALUES, d))
   else
     self.ctl:set_scalar(ch, 'rate', step_table(c.rate, GridUI.RATE_VALUES, d))
   end
@@ -457,6 +460,7 @@ function Screen:page_lines()
     local iv = c.resetInterval
     lines = {
       {'reset', iv == 0 and 'off' or (iv .. (iv == 1 and ' bar' or ' bars'))},
+      {'oct',   (c.octave > 0 and '+' or '') .. c.octave},
       {'rate',  fmt_rate(c.rate)},
     }
   end

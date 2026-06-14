@@ -86,7 +86,7 @@ for _ = 1, 200 do
   for _, v in ipairs(seqx.values(c.env)) do local k = v * 31 if not (approx(k, math.floor(k+0.5)) and k >= 0 and k <= 15) then ok_env = false end end
   local dl = seqx.len(c.div)
   if not (dl >= 2 and dl <= 4) then ok_len = false end
-  if seqx.len(c.level) ~= 1 then ok_len = false end  -- unlocked -> length 1
+  if seqx.len(c.level) ~= 1 then ok_len = false end  -- tonal params -> length 1
 end
 check('div values all in MUSICAL_DIVS', ok_div)
 check('reps values all in {1,2,3,4}', ok_reps)
@@ -94,7 +94,7 @@ check('note values 0..15 integer', ok_note)
 check('level values land on picker grid (i/31, i=1..16)', ok_level)
 check('harm values land on picker grid (2+i*0.75)', ok_harm)
 check('env values land on picker grid (i/31)', ok_env)
-check('lengths: div/reps/note 2..4, level len 1 unlocked', ok_len)
+check('lengths: div/reps/note 2..4, level len 1', ok_len)
 
 -- ---- burst: clock-coroutine scheduling --------------------------------
 print('burst scheduling:')
@@ -110,6 +110,21 @@ eng2:launch(1)
 check('single-shot fired exactly one hit', #fires == 1)
 check('single-shot stopped the channel', eng2:is_running(1) == false)
 check('fire freq = degree_to_freq(0, major) = C1', approx(fires[1].freq, 32.7032))
+
+-- octave scalar: applied per hit in fire, so external outputs and the ghost
+-- note see the shifted freq
+clock._reset()
+eng2.channels[1].reps = seqx.new{1}
+eng2.channels[1].octave = 1
+fires = {}
+eng2:launch(1)
+check('octave +1 doubles fire freq', approx(fires[1].freq, 32.7032 * 2))
+eng2.channels[1].octave = -2
+fires = {}
+clock._reset()
+eng2.channels[1].reps = seqx.new{1}
+eng2:launch(1)
+check('octave -2 quarters fire freq', approx(fires[1].freq, 32.7032 / 4))
 
 -- looping: default reps {2,2} keeps running across bursts
 clock._reset()
@@ -227,6 +242,28 @@ check('SND mode entered', ctl.soundMode == true)
 ctl:press(5, 0)  -- col5 -> geode index 1 (transient) on channel 0
 check('SND sets geodeMode to 1', geng.channels[1].geodeMode == 1)
 
+-- PERF mode (row6 col 12): reset cols 0-3, octave cols 5-9, rate cols 11-15
+ctl:press(12, 6)
+check('PERF mode entered', ctl.perfMode == true)
+ctl:press(3, 0)   -- reset col 3 -> 4 bars
+check('PERF reset col3 sets 4-bar interval', geng.channels[1].resetInterval == 4)
+ctl:press(4, 0)   -- blank gap column: no-op
+check('PERF col4 is a no-op gap', geng.channels[1].resetInterval == 4)
+ctl:press(5, 0)   -- octave col 5 -> -2
+check('PERF octave col5 sets -2', geng.channels[1].octave == -2)
+ctl:press(9, 0)   -- octave col 9 -> +2
+check('PERF octave col9 sets +2', geng.channels[1].octave == 2)
+ctl:press(14, 0)  -- rate col 14 -> 2x
+check('PERF rate col14 sets 2x', geng.channels[1].rate == 2)
+ctl:press(12, 6)
+check('PERF mode exited', ctl.perfMode == false)
+
+-- KB mode now enters/exits on row6 col 11
+ctl:press(11, 6)
+check('KB mode entered on col 11', ctl.kbMode == true)
+ctl:press(11, 6)
+check('KB mode exited on col 11', ctl.kbMode == false)
+
 -- ---- screen_ui: pages, edits, fire reactivity --------------------------
 screen = require 'screen'  -- global drawing API stub, like norns
 local ScreenUI = require 'screen_ui'
@@ -245,7 +282,7 @@ for p = 1, 5 do
   if not ok then pages_ok = false; print('      redraw error page ' .. p .. ': ' .. tostring(err)) end
 end
 check('redraw runs clean on all 5 pages', pages_ok)
-check('set_page syncs grid modes (rst -> resetMode)', sctl.resetMode == true)
+check('set_page syncs grid modes (perf -> perfMode)', sctl.perfMode == true)
 
 -- main page: E3 edits land exactly on the step picker grid
 sui:set_page(1)
@@ -277,12 +314,17 @@ sui.sel_line[4] = 2
 sui:enc(3, 1)
 check('prob mode line toggles probHit', seng.channels[1].probHit == true)
 
--- rst page: values come from the shared interval/rate tables
+-- perf page: values come from the shared interval/octave/rate tables
 sui:set_page(5)
 sui.sel_line[5] = 1
 sui:enc(3, 3)
-check('rst E3 lands in RESET_INTERVALS', in_set(seng.channels[1].resetInterval, GridUI.RESET_INTERVALS))
+check('perf E3 lands in RESET_INTERVALS', in_set(seng.channels[1].resetInterval, GridUI.RESET_INTERVALS))
 sui.sel_line[5] = 2
+sui:enc(3, 1)
+check('oct E3 lands in OCTAVE_VALUES', in_set(seng.channels[1].octave, GridUI.OCTAVE_VALUES))
+check('oct E3 stepped up one octave', seng.channels[1].octave == 1)
+sui:enc(3, -1)  -- restore octave 0: the fire tests below expect an unshifted c1
+sui.sel_line[5] = 3
 sui:enc(3, 1)
 check('rate E3 lands in RATE_VALUES', in_set(seng.channels[1].rate, GridUI.RATE_VALUES))
 
@@ -384,7 +426,7 @@ check('K2 pages back to alt (soundMode off)',
 sui:key(2, 1)
 check('K2 back to main restores layer A', sui.page == 1 and sctl.paramLayer == 'A')
 sui:key(2, 1)
-check('K2 clamps at main (no wrap)', sui.page == 1 and sctl.resetMode == false)
+check('K2 clamps at main (no wrap)', sui.page == 1 and sctl.perfMode == false)
 
 -- alt page: clone of main editing the B (offset) layer
 sui:set_page(2)
@@ -557,21 +599,33 @@ check('engine launch reflects run=1 silently', fake:get('ch1_run') == 1 and fake
 peng:stop(1)
 check('engine stop reflects run=0 silently', fake:get('ch1_run') == 0)
 
--- JF harm broadcast: param edit on one JF channel propagates + reflects
-fake:set('ch1_voice', 2)  -- jf
-fake:set('ch2_voice', 2)  -- jf
-fake:set('ch1_harm_a', '3.5')
-check('JF harm broadcast hits sibling engine channel',
-  approx(seqx.values(peng.channels[2].harm)[1], 3.5))
-check('JF harm broadcast reflected to sibling param', fake:get('ch2_harm_a') == '3.5')
+-- copy/paste: snapshot ch1's MAIN (A-layer) sequins and paste into ch5
+fake:set('ch1_div_a', '4 8 16')
+fake:set('ch1_note_a', '1 2 3 4')
+fake:set('ch1_copy', 1)
+fake:set('ch5_paste', 1)
+local cp_ok = true
+for _, p in ipairs(GridUI.PARAMS) do
+  if not vals_eq(seqx.values(peng.channels[5][p]),
+                 seqx.values(peng.channels[1][p])) then cp_ok = false end
+end
+check('copy+paste duplicates all MAIN sequins across channels', cp_ok)
+check('paste reflected into dest text param',
+  vals_eq(ParamsSync.from_text('note', 'A', fake:get('ch5_note_a')), {1, 2, 3, 4}))
 
--- locked channel: length change syncs sibling sequences and their params
-fake:set('ch3_lock', 1)
-check('lock param sets locked', peng.channels[3].locked == true)
-fake:set('ch3_div_a', '4 8 16 2')
-check('locked div edit syncs level length', seqx.len(peng.channels[3].level) == 4)
-check('locked sync reflected into level text param',
-  #ParamsSync.from_text('level', 'A', fake:get('ch3_level_a')) == 4)
+-- clear: resets all six MAIN sequins to defaults, leaving the ALT (B) layer intact
+fake:set('ch6_div_a', '4 8 16')
+fake:set('ch6_note_b', '1 2 3')  -- B-layer offset must survive clear
+fake:set('ch6_clear', 1)
+local CLEAR_DEFAULTS = {div = 4, reps = 1, note = 0, level = 0.5, harm = 2, env = 0}
+local cl_ok = true
+for _, p in ipairs(GridUI.PARAMS) do
+  local v = seqx.values(peng.channels[6][p])
+  if #v ~= 1 or not approx(v[1], CLEAR_DEFAULTS[p]) then cl_ok = false end
+end
+check('clear resets all MAIN sequins to defaults', cl_ok)
+check('clear leaves ALT (B) layer intact',
+  vals_eq(seqx.values(peng.channels[6].noteB), {1, 2, 3}))
 
 -- randomize trigger: result reflects exactly (grid-reachability contract)
 fake:set('ch4_randomize', 1)

@@ -108,10 +108,9 @@ local function default_channel()
     geodeMode = 0,  -- 0=off 1=transient 2=sustain 3=cycle
     pitchEnv = 0,
     harmEnv = 0,
-    locked = false,
     resetInterval = 0,
     rate = 1,
-    voiceType = 'fm',  -- 'fm' | 'jf' | 'mg'  (jf/mg route to FM this pass)
+    octave = 0,     -- -2..2, whole-octave pitch shift (perf page)
   }
 end
 
@@ -157,14 +156,6 @@ function Burst:running_channels()
   local out = {}
   for i = 1, NUM_CHANNELS do out[i] = self.running[i] end
   return out
-end
-
-function Burst:get_voice_type(ch) return self.channels[ch].voiceType end
-
-function Burst:toggle_voice(ch)
-  local c = self.channels[ch]
-  c.voiceType = (c.voiceType == 'fm') and 'jf'
-    or (c.voiceType == 'jf') and 'mg' or 'fm'
 end
 
 -- ---- sequins reset -----------------------------------------------------
@@ -300,6 +291,10 @@ end
 
 function Burst:fire(ch, beat, freq, level, harm, env, div, total, hit_idx)
   local c = self.channels[ch]
+  -- octave shift is applied per hit, not per burst: looping channels
+  -- (reps = -1) never redraw freq, so a burst-start shift would be inaudible
+  -- on them. Shifting here also feeds the final freq to external outputs.
+  freq = freq * (2 ^ c.octave)
   local geo_run = clamp(level, 0, 1)
   local actual_level = Burst.burst_level_for_hit(level, c.geodeMode, env, hit_idx, total)
 
@@ -374,7 +369,7 @@ function Burst:randomize(ch)
   c.div  = seqx.new(fill(len, function() return pick(MUSICAL_DIVS) end))
   c.reps = seqx.new(fill(len, function() return pick{1, 2, 2, 3, 4} end))
   c.note = seqx.new(fill(len, function() return ri(16) end))
-  local t_len = c.locked and len or 1
+  local t_len = 1
   c.level = seqx.new(fill(t_len, function() return (ri(16) + 1) / 31 end))
   c.harm  = seqx.new(fill(t_len, function() return 2 + ri(16) * 0.75 end))
   c.env   = seqx.new(fill(t_len, function() return ri(16) / 31 end))

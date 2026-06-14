@@ -13,12 +13,16 @@
 -- 1-based at the call site (engine:launch(ch+1), engine.channels[ch+1], ...).
 --
 -- Layout reference (rows/cols, 0-based):
---   rows 0..5 = per-channel step view: cols 0..7 = A layer · cols 8..15 = B layer
---   row 6     = 0..5 launch · 6..10 dark · 11 RST · 12 KB · 13 PROB · 14 QNT · 15 SND
---   row 7     = 0..5 param (div/reps/note/level/harm/env) · 11 VOICE
---             · 12 CLR · 13 LOCK · 14 RANDOMIZE · 15 MUTATE
+--   rows 0..5 = per-channel step view: up to 16 steps of the active layer
+--               (paramLayer A/B; flipped by re-pressing the row-7 param button)
+--   row 6     = 0..5 launch · 6..10 dark · 11 KB · 12 PERF · 13 PROB · 14 QNT · 15 SND
+--   row 7     = 0..5 param (div/reps/note/level/harm/env) · 11 CLR
+--             · 12 COPY · 13 PASTE · 14 RANDOMIZE · 15 MUTATE
+--   CLR/COPY/PASTE act on the MAIN (A-layer) sequins of the tapped channel only;
+--   the B (alt) layer is left intact so it can keep variating the copied sequins.
 --   PROB:  rows 0-5 = prob slider (cols 0..14) · col 15 burst/hit toggle
---   RST:   rows 0-5 = reset interval (cols 0..8) · rate (cols 11..15)
+--   PERF:  rows 0-5 = reset off/1/2/4 bars (cols 0..3) · octave -2..+2 (cols 5..9)
+--          · rate (cols 11..15)
 --   SND:   rows 0-5 = env(0-2) · geode(4-7) · pitch env(8-11) · harm env(12-15)
 --   scale picker: row 0 scales · rows 1-2 note-mask keyboard · rows 3-4 quantize
 --   step picker:  rows 0-1 value grid
@@ -32,26 +36,28 @@ local NUM_CHANNELS = 6
 local PARAMS = {'div', 'reps', 'note', 'level', 'harm', 'env'}
 
 -- row 7
-local VOICE_TOGGLE_COL = 11
-local CLR_BUTTON_COL = 12
-local LOCK_BUTTON_COL = 13
+local CLR_BUTTON_COL = 11
+local COPY_BUTTON_COL = 12
+local PASTE_BUTTON_COL = 13
 local RANDOMIZE_BUTTON_COL = 14
 local MUTATE_BUTTON_COL = 15
 -- row 6 right side
-local ROW6_RST_COL = 11
-local ROW6_KB_COL = 12
+local ROW6_KB_COL = 11
+local ROW6_PERF_COL = 12
 local ROW6_PROB_COL = 13
 local ROW6_QNT_COL = 14
 local ROW6_SND_COL = 15
--- KB mode (row 7 cols)
-local KB_EXIT_COL = 12
+-- KB mode (exit on row 6, same col as entry; page/clear on row 7)
+local KB_EXIT_COL = 11
 local KB_PAGE_BUTTON_COL = 13
 local KB_CLEAR_BUTTON_COL = 14
 
 local BLACK_KEYS = {1, 3, 6, 8, 10}
 local WHITE_KEYS = {0, 2, 4, 5, 7, 9, 11}
-local RESET_INTERVALS = {0, 1, 2, 3, 4, 5, 6, 7, 8}
-local RESET_COLS      = {0, 1, 2, 3, 4, 5, 6, 7, 8}
+local RESET_INTERVALS = {0, 1, 2, 4}
+local RESET_COLS      = {0, 1, 2, 3}
+local OCTAVE_VALUES = {-2, -1, 0, 1, 2}
+local OCTAVE_COLS   = {5, 6, 7, 8, 9}
 local RATE_VALUES = {0.25, 0.5, 1, 2, 4}
 local RATE_COLS   = {11, 12, 13, 14, 15}
 
@@ -132,6 +138,7 @@ GridUI.GEODE_MODE_NAMES = GEODE_MODE_NAMES
 GridUI.PITCH_ENV_MODE_NAMES = PITCH_ENV_MODE_NAMES
 GridUI.HARM_ENV_MODE_NAMES = HARM_ENV_MODE_NAMES
 GridUI.RESET_INTERVALS = RESET_INTERVALS
+GridUI.OCTAVE_VALUES = OCTAVE_VALUES
 GridUI.RATE_VALUES = RATE_VALUES
 
 -- opts.on_status(string): pushed status text (for screen). opts.on_redraw():
@@ -153,9 +160,10 @@ function GridUI.new(engine, grid, opts)
   self.paramLayer = 'A'        -- 'A' | 'B'
   self.picker = nil            -- {kind='step',ch,col,layer} | {kind='scale'} | nil
   self.probMode = false
-  self.resetMode = false
+  self.perfMode = false
   self.soundMode = false
-  self.actionMode = nil        -- 'randomize'|'mutate'|'clear'|'lock'|'voice'|nil
+  self.actionMode = nil        -- 'randomize'|'mutate'|'clear'|'copy'|'paste'|nil
+  self.clipboard = nil         -- {param = {vals...}} snapshot of a channel's A layer
   self.status = ''
 
   self.customMask = {}
@@ -171,7 +179,7 @@ function GridUI.new(engine, grid, opts)
 
   engine:on(function(ev)
     if ev.type == 'fire' then
-      if self.kbMode or self.picker or self.probMode or self.resetMode or self.soundMode then return end
+      if self.kbMode or self.picker or self.probMode or self.perfMode or self.soundMode then return end
       self:render_channel_row(ev.ch - 1)
       self.g:refresh()
     elseif ev.type == 'launch' or ev.type == 'stop' then
@@ -205,10 +213,16 @@ end
 
 function GridUI:handle_normal_press(x, y)
   if y < 6 then
-    if self.resetMode then
+    if self.perfMode then
       local rate_idx = index_of(RATE_COLS, x)
       if rate_idx ~= -1 then
         self:set_scalar(y, 'rate', RATE_VALUES[rate_idx + 1])
+        self:render_channel_row(y); self.g:refresh()
+        return
+      end
+      local oct_idx = index_of(OCTAVE_COLS, x)
+      if oct_idx ~= -1 then
+        self:set_scalar(y, 'octave', OCTAVE_VALUES[oct_idx + 1])
         self:render_channel_row(y); self.g:refresh()
         return
       end
@@ -378,60 +392,43 @@ function GridUI:commit_step_raw(ch, param, vals, layer)
   if layer == 'A' then c[param] = seqx.new(final)
   else c[param .. 'B'] = seqx.new(final) end
   self.on_edit{ type = 'seq', ch = ch, param = param, layer = layer }
-  -- Shared INTONE: harm on a JF channel broadcasts to all JF channels.
-  if param == 'harm' and layer == 'A' and c.voiceType == 'jf' then
-    for i = 0, NUM_CHANNELS - 1 do
-      local oc = self:chan(i)
-      if i ~= ch and oc.voiceType == 'jf' then
-        local copy = {} for k = 1, #final do copy[k] = final[k] end
-        oc.harm = seqx.new(copy)
-        self.on_edit{ type = 'seq', ch = i, param = 'harm', layer = 'A' }
-      end
-    end
-  end
 end
 
 function GridUI:commit_step(ch, param, vals, layer)
-  local old_len = #seqx.values(self:seq_ref(ch, param, layer))
   self:commit_step_raw(ch, param, vals, layer)
-  local new_len = math.max(1, #vals)
-  if self:chan(ch).locked and layer == 'A' and new_len ~= old_len then
-    self:sync_locked_params(ch, new_len, param)
-  end
 end
 
-function GridUI:sync_locked_params(ch, target_len, skip_param)
+-- CLR/COPY/PASTE all act on the MAIN (A-layer) sequins only, leaving the B (alt)
+-- layer untouched so it can keep variating whatever was cleared/copied/pasted.
+
+function GridUI:clear_channel(ch)
   for _, param in ipairs(PARAMS) do
-    if param ~= skip_param then
-      local cur = seqx.values(self:seq_ref(ch, param, 'A'))
-      if #cur ~= target_len then
-        local nxt = {}
-        if target_len > #cur then
-          for i = 1, #cur do nxt[i] = cur[i] end
-          for i = #cur + 1, target_len do nxt[i] = cur[#cur] end
-        else
-          for i = 1, target_len do nxt[i] = cur[i] end
-        end
-        self:commit_step_raw(ch, param, nxt, 'A')
-      end
+    self:commit_step_raw(ch, param, {DEFAULT_VALUE[param]}, 'A')
+  end
+  self:render_all()
+end
+
+function GridUI:copy_channel(ch)
+  local buf = {}
+  for _, param in ipairs(PARAMS) do
+    local cur = seqx.values(self:seq_ref(ch, param, 'A'))
+    local vals = {}
+    for i = 1, #cur do vals[i] = cur[i] end
+    buf[param] = vals
+  end
+  self.clipboard = buf
+end
+
+function GridUI:paste_channel(ch)
+  if not self.clipboard then return end
+  for _, param in ipairs(PARAMS) do
+    local vals = self.clipboard[param]
+    if vals then
+      local copy = {}
+      for i = 1, #vals do copy[i] = vals[i] end
+      self:commit_step_raw(ch, param, copy, 'A')
     end
   end
-end
-
-function GridUI:enforce_lock_on_entry(ch)
-  local max_len = 1
-  for _, p in ipairs(PARAMS) do
-    max_len = math.max(max_len, #seqx.values(self:seq_ref(ch, p, 'A')))
-  end
-  self:sync_locked_params(ch, max_len, nil)
-end
-
-function GridUI:clear_channel_param(ch)
-  local param = self.selectedParam
-  -- through commit_step_raw (not commit_step): clearing must not lock-sync,
-  -- but observers still need to see both layers reset
-  self:commit_step_raw(ch, param, {DEFAULT_VALUE[param]}, 'A')
-  self:commit_step_raw(ch, param, {0}, 'B')
   self:render_all()
 end
 
@@ -439,44 +436,33 @@ end
 
 function GridUI:_exclusive_mode(field)
   -- set self[field]=true and clear the other latch modes + action mode
-  self.probMode = false; self.resetMode = false; self.soundMode = false
+  self.probMode = false; self.perfMode = false; self.soundMode = false
   self.actionMode = nil
   self[field] = true
 end
 
 function GridUI:handle_row6(x)
   if x == ROW6_KB_COL then self:enter_kb_mode(); return end
-  if x == ROW6_RST_COL then
-    local was = self.resetMode
+  if x == ROW6_PERF_COL then
+    local was = self.perfMode
     self.probMode = false; self.soundMode = false; self.actionMode = nil
-    self.resetMode = not was
+    self.perfMode = not was
     self:render_all(); return
   end
   if x == ROW6_PROB_COL then
     local was = self.probMode
-    self.soundMode = false; self.resetMode = false; self.actionMode = nil
+    self.soundMode = false; self.perfMode = false; self.actionMode = nil
     self.probMode = not was
     self:render_all(); return
   end
   if x == ROW6_QNT_COL then self:open_scale_picker(); return end
   if x == ROW6_SND_COL then
     local was = self.soundMode
-    self.probMode = false; self.resetMode = false; self.actionMode = nil
+    self.probMode = false; self.perfMode = false; self.actionMode = nil
     self.soundMode = not was
     self:render_all(); return
   end
 
-  if self.actionMode == 'voice' and x < 6 then
-    self.engine:toggle_voice(x + 1)
-    self.on_edit{ type = 'scalar', ch = x }
-    self:render_all(); return
-  end
-  if self.actionMode == 'lock' and x < 6 then
-    local c = self:chan(x)
-    self:set_scalar(x, 'locked', not c.locked)
-    if c.locked then self:enforce_lock_on_entry(x) end
-    self:render_all(); return
-  end
   if self.actionMode and x < 6 then
     if self.actionMode == 'randomize' then
       self.engine:randomize(x + 1)
@@ -484,7 +470,9 @@ function GridUI:handle_row6(x)
     elseif self.actionMode == 'mutate' then
       self.engine:mutate(x + 1)
       self.on_edit{ type = 'channel', ch = x }
-    elseif self.actionMode == 'clear' then self:clear_channel_param(x) end
+    elseif self.actionMode == 'clear' then self:clear_channel(x)
+    elseif self.actionMode == 'copy' then self:copy_channel(x)
+    elseif self.actionMode == 'paste' then self:paste_channel(x) end
     self:render_all(); return
   end
 
@@ -504,9 +492,9 @@ function GridUI:handle_row7(x)
     end
     self.picker = nil
     self:render_all()
-  elseif x == VOICE_TOGGLE_COL then self:_toggle_action('voice')
   elseif x == CLR_BUTTON_COL then self:_toggle_action('clear')
-  elseif x == LOCK_BUTTON_COL then self:_toggle_action('lock')
+  elseif x == COPY_BUTTON_COL then self:_toggle_action('copy')
+  elseif x == PASTE_BUTTON_COL then self:_toggle_action('paste')
   elseif x == RANDOMIZE_BUTTON_COL then self:_toggle_action('randomize')
   elseif x == MUTATE_BUTTON_COL then self:_toggle_action('mutate')
   end
@@ -516,7 +504,7 @@ function GridUI:_toggle_action(name)
   if self.actionMode == name then self.actionMode = nil
   else
     self.actionMode = name
-    self.probMode = false; self.resetMode = false; self.soundMode = false
+    self.probMode = false; self.perfMode = false; self.soundMode = false
   end
   self:render_all()
 end
@@ -594,7 +582,7 @@ end
 
 function GridUI:render_channel_row(ch)
   if self.probMode then self:render_prob_row(ch); return end
-  if self.resetMode then self:render_reset_row(ch); return end
+  if self.perfMode then self:render_perf_row(ch); return end
   if self.soundMode then self:render_sound_row(ch); return end
   local param = self.selectedParam
   local layer = self.paramLayer
@@ -630,11 +618,16 @@ function GridUI:render_prob_row(ch)
   self.g:set_strobe(15, ch, c.probHit and 'slow' or 'off')
 end
 
-function GridUI:render_reset_row(ch)
+function GridUI:render_perf_row(ch)
   local c = self:chan(ch)
   for x = 0, GRID_W - 1 do self.g:set_led(x, ch, 0); self.g:set_strobe(x, ch, 'off') end
   for i = 1, #RESET_INTERVALS do
     self.g:set_led(RESET_COLS[i], ch, RESET_INTERVALS[i] == c.resetInterval and 15 or 3)
+  end
+  for i = 1, #OCTAVE_VALUES do
+    -- center (0) sits a touch brighter so the no-shift column reads as home
+    local base = OCTAVE_VALUES[i] == 0 and 5 or 3
+    self.g:set_led(OCTAVE_COLS[i], ch, OCTAVE_VALUES[i] == c.octave and 15 or base)
   end
   for i = 1, #RATE_VALUES do
     self.g:set_led(RATE_COLS[i], ch, RATE_VALUES[i] == c.rate and 15 or 3)
@@ -653,17 +646,11 @@ end
 function GridUI:render_action_mode()
   local mark_running = self.actionMode == 'randomize' or self.actionMode == 'mutate'
   for x = 0, 5 do
-    local b
-    if self.actionMode == 'lock' then b = self:chan(x).locked and 15 or 4
-    elseif self.actionMode == 'voice' then
-      local vt = self.engine:get_voice_type(x + 1)
-      b = (vt == 'mg') and 15 or (vt == 'jf') and 10 or 4
-    else b = 10 end
-    self.g:set_led(x, 6, b)
+    self.g:set_led(x, 6, 10)
     self.g:set_strobe(x, 6, (mark_running and self.engine:is_running(x + 1)) and 'slow' or 'off')
   end
   for x = 6, 11 do self.g:set_led(x, 6, 0) end
-  self.g:set_led(ROW6_RST_COL, 6, 8)
+  self.g:set_led(ROW6_PERF_COL, 6, 8)
   self.g:set_led(ROW6_KB_COL, 6, 8)
   self.g:set_led(ROW6_PROB_COL, 6, 8)
   self.g:set_led(ROW6_QNT_COL, 6, 8)
@@ -680,8 +667,8 @@ function GridUI:render_row6()
     end
     for x = 6, 11 do self.g:set_led(x, 6, 0) end
   end
-  self.g:set_led(ROW6_RST_COL, 6, self.resetMode and 15 or 8)
-  self.g:set_strobe(ROW6_RST_COL, 6, self.resetMode and 'fast' or 'off')
+  self.g:set_led(ROW6_PERF_COL, 6, self.perfMode and 15 or 8)
+  self.g:set_strobe(ROW6_PERF_COL, 6, self.perfMode and 'fast' or 'off')
   self.g:set_led(ROW6_KB_COL, 6, 8)
   self.g:set_led(ROW6_PROB_COL, 6, self.probMode and 15 or 8)
   self.g:set_strobe(ROW6_PROB_COL, 6, self.probMode and 'fast' or 'off')
@@ -701,9 +688,9 @@ function GridUI:render_row7()
     self.g:set_led(col, 7, self.actionMode == name and 15 or 4)
     self.g:set_strobe(col, 7, self.actionMode == name and 'fast' or 'off')
   end
-  action_led(VOICE_TOGGLE_COL, 'voice')
   action_led(CLR_BUTTON_COL, 'clear')
-  action_led(LOCK_BUTTON_COL, 'lock')
+  action_led(COPY_BUTTON_COL, 'copy')
+  action_led(PASTE_BUTTON_COL, 'paste')
   action_led(RANDOMIZE_BUTTON_COL, 'randomize')
   action_led(MUTATE_BUTTON_COL, 'mutate')
 end
@@ -880,7 +867,7 @@ function GridUI:current_page()
   if self.kbMode then return 'KB' end
   if self.picker and self.picker.kind == 'scale' then return 'SCALE' end
   if self.picker and self.picker.kind == 'step' then return 'PICK' end
-  if self.resetMode then return 'RST' end
+  if self.perfMode then return 'PERF' end
   if self.probMode then return 'PROB' end
   if self.soundMode then return 'SND' end
   if self.actionMode then return string.upper(self.actionMode) end
@@ -893,8 +880,8 @@ function GridUI:_status()
     local page = (self.kbPage == 1) and 'pg1 note/div/reps' or 'pg2 level/harm/env'
     local layer = self.kbBLayer and 'B' or 'A'
     s = 'KB ch' .. (self.kbChannel + 1) .. ' ' .. page .. ' [' .. layer .. ']'
-  elseif self.resetMode then
-    s = 'RESET — col0 off, cols1-8 bars, cols11-15 rate'
+  elseif self.perfMode then
+    s = 'PERF — cols0-3 reset, cols5-9 oct, cols11-15 rate'
   elseif self.probMode then
     s = 'PROB — slider 0-14, col15 burst/hit'
   elseif self.soundMode then
