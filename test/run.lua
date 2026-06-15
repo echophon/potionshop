@@ -362,6 +362,23 @@ ctl:press(5, 0)  -- pick note value index 5 -> 5
 check('picker set note step to 5', seqx.values(geng.channels[1].note)[1] == 5)
 check('picker closed after pick', ctl.picker == nil)
 
+-- pressing the already-selected value in the picker removes the step (the only
+-- remove path reachable for ch0/ch1, whose rows sit behind the value grid)
+geng.channels[1].note = seqx.new{5, 7, 9}
+ctl:press(1, 0)  -- open picker on channel 0 step 1 (value 7)
+check('picker reopened on step 1', ctl.picker ~= nil and ctl.picker.col == 1)
+ctl:press(7, 0)  -- press the lit current value (note 7 -> index 7) again
+check('re-pressing current value removes the step',
+  seqx.len(geng.channels[1].note) == 2
+  and seqx.values(geng.channels[1].note)[1] == 5
+  and seqx.values(geng.channels[1].note)[2] == 9)
+check('picker closed after remove', ctl.picker == nil)
+-- a different value still sets (doesn't remove)
+geng.channels[1].note = seqx.new{5, 7, 9}
+ctl:press(1, 0); ctl:press(3, 0)  -- step 1, pick value 3
+check('picker still sets a different value',
+  seqx.len(geng.channels[1].note) == 3 and seqx.values(geng.channels[1].note)[2] == 3)
+
 -- launch toggle (row 6)
 ctl:press(0, 6)
 check('row6 col0 launches channel 1', geng:is_running(1) == true)

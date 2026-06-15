@@ -32,7 +32,8 @@
 --                 rows 1-4 cols 8-15 quantize (8x4 = 32 values, right side)
 --                 keyboards are a compact piano: white keys packed at cols 0-6,
 --                 black keys offset above the white key they follow
---   step picker:  rows 0-1 value grid
+--   step picker:  rows 0-1 value grid (press the lit/current value to remove
+--                 the step; press any other value to set it)
 --   KB mode: see handle_kb_press / render_kb_mode
 
 local seqx   = require 'seqx'
@@ -90,14 +91,14 @@ local PROB_HIT_COL  = 15
 local ENV_MODE_NAMES       = {'shape', 'burst', 'hit'}
 local GEODE_MODE_NAMES     = {'transient', 'sustain', 'cycle'}  -- amp geode, always on
 local HARM_ENV_MODE_NAMES  = {'off', 'hit', 'burst'}  -- harm sweep timing
-local HARM_GEODE_NAMES     = {'fast', 'med', 'slow'}  -- harm per-hit geode, always on
+local HARM_GEODE_NAMES     = {'transient', 'sustain', 'cycle'}  -- harm per-hit geode, always on
 -- alt(B)-layer trigger modes: how a B sequins feeds a burst. Shared by the note
 -- (altTrig) and harm (harmTrig) layers.
 --   hold = add&hold (B drawn once per burst, summed onto A for every hit)
 --   step = advance the B sequins per hit (arpeggiates the alt layer)
 local ALT_TRIG_MODE_NAMES  = {'hold', 'step'}
 
-local DEFAULT_VALUE   = {div = 4, reps = 1, note = 0, level = 0.5, harm = 2, env = 0}
+local DEFAULT_VALUE   = {div = 8, reps = 3, note = 0, level = 0.5, harm = 2, env = 2}
 local DEFAULT_VALUE_B = {div = 0, reps = 0, note = 0, level = 0, harm = 0, env = 0}
 
 -- 1-based value layouts for the step picker / KB bands. Index 1..32 maps to
@@ -346,7 +347,16 @@ end
 function GridUI:apply_picker_value(p, x, y)
   if p.kind == 'step' then
     local v = STEP_PICKER_VALUES[self.selectedParam][y * GRID_W + x + 1]
-    self:set_step(p.ch, p.col, v, p.layer)
+    if v == nil then return end
+    -- pressing the already-selected (full-bright) value toggles the step off.
+    -- This is the only remove path reachable for ch0/ch1, whose channel rows
+    -- sit behind the picker's value grid (rows 0-1).
+    local cur = seqx.values(self:seq_ref(p.ch, self.selectedParam, p.layer))[p.col + 1]
+    if cur ~= nil and eq(cur, v) then
+      self:remove_step(p.ch, p.col, p.layer)
+    else
+      self:set_step(p.ch, p.col, v, p.layer)
+    end
     self:close_picker()
   elseif p.kind == 'scale' then
     -- quantize block (right side): 8x4 grid, cols 8..15, rows 1..4

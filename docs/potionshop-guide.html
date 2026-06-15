@@ -1,0 +1,1125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>potionshop — user's guide</title>
+<style>
+  :root{
+    --bg:#0c0e13; --bg2:#11141c; --panel:#151926; --panel2:#1b2030;
+    --ink:#e7ecf5; --mut:#94a0b8; --dim:#6b7790; --line:#262d40;
+    --acc:#7be0c8; --acc2:#8aa0ff; --gold:#f0c85a; --orange:#ff9a55;
+    --purple:#b585fa; --green:#6fe07a; --violet:#c878f0; --red:#ff7a85;
+    --mono:'SF Mono',ui-monospace,'Cascadia Code',Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0;background:
+      radial-gradient(1200px 600px at 80% -10%,rgba(123,224,200,.08),transparent),
+      radial-gradient(900px 500px at -10% 10%,rgba(138,160,255,.07),transparent),
+      var(--bg);
+    color:var(--ink);font-family:var(--sans);line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1080px;margin:0 auto;padding:0 22px}
+  a{color:var(--acc)}
+  code,kbd{font-family:var(--mono);font-size:.86em}
+  code{background:var(--panel2);padding:.1em .4em;border-radius:5px;color:var(--acc)}
+  kbd{background:#0a0c12;border:1px solid var(--line);border-bottom-width:2px;
+    padding:.05em .45em;border-radius:5px;color:var(--ink)}
+
+  /* hero */
+  header.hero{padding:64px 0 34px;border-bottom:1px solid var(--line)}
+  .glyph{font-family:var(--mono);font-size:13px;line-height:1.15;color:var(--acc);
+    white-space:pre;text-shadow:0 0 16px rgba(123,224,200,.5);margin-bottom:18px}
+  h1{font-size:46px;margin:0 0 6px;letter-spacing:-.02em;font-weight:800}
+  .sub{font-size:19px;color:var(--mut);max-width:680px;margin:0}
+  .tags{margin-top:20px;display:flex;flex-wrap:wrap;gap:8px}
+  .tag{font-family:var(--mono);font-size:12px;color:var(--acc2);
+    border:1px solid var(--line);background:var(--panel);
+    padding:4px 11px;border-radius:999px}
+
+  /* nav */
+  nav.toc{position:sticky;top:0;z-index:20;background:rgba(12,14,19,.86);
+    backdrop-filter:blur(10px);border-bottom:1px solid var(--line);
+    padding:11px 0;margin-bottom:8px}
+  nav.toc .wrap{display:flex;gap:7px;flex-wrap:wrap;align-items:center}
+  nav.toc a{font-size:12.5px;color:var(--mut);text-decoration:none;
+    padding:5px 11px;border-radius:8px;font-family:var(--mono)}
+  nav.toc a:hover{color:var(--ink);background:var(--panel2)}
+
+  section{padding:42px 0;border-bottom:1px solid var(--line)}
+  h2{font-size:30px;margin:0 0 6px;letter-spacing:-.01em}
+  h2 .num{color:var(--acc);font-family:var(--mono);font-size:18px;margin-right:10px;
+    vertical-align:middle}
+  h3{font-size:20px;margin:30px 0 8px;color:var(--ink)}
+  .lead{color:var(--mut);font-size:17px;max-width:760px;margin:0 0 8px}
+  p{max-width:760px}
+  .muted{color:var(--mut)}
+
+  /* concept cards */
+  .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(238px,1fr));gap:14px;margin-top:18px}
+  .card{background:linear-gradient(180deg,var(--panel),var(--bg2));
+    border:1px solid var(--line);border-radius:14px;padding:17px 18px}
+  .card h4{margin:0 0 6px;font-size:15px;color:var(--acc);font-family:var(--mono);
+    letter-spacing:.02em}
+  .card p{font-size:14px;color:var(--mut);margin:0;max-width:none}
+
+  /* callouts */
+  .note{border-left:3px solid var(--acc2);background:var(--panel);
+    padding:12px 16px;border-radius:0 10px 10px 0;margin:18px 0;font-size:14.5px;color:var(--mut)}
+  .note b{color:var(--ink)}
+  .note.warn{border-color:var(--orange)}
+  .note.tip{border-color:var(--green)}
+
+  /* tables */
+  table{width:100%;border-collapse:collapse;margin:16px 0;font-size:14px}
+  th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--acc2);font-family:var(--mono);font-weight:600;font-size:12.5px;
+    text-transform:uppercase;letter-spacing:.04em}
+  td:first-child{font-family:var(--mono);color:var(--ink);white-space:nowrap}
+  tr:hover td{background:rgba(255,255,255,.015)}
+
+  /* ---- grid graphic ---- */
+  .pagefig{background:linear-gradient(180deg,#0e1118,#0a0c11);
+    border:1px solid var(--line);border-radius:16px;padding:20px 20px 16px;margin:18px 0}
+  .pagefig .figtitle{font-family:var(--mono);font-size:13px;color:var(--mut);
+    margin-bottom:14px;display:flex;align-items:center;gap:10px}
+  .pagefig .figtitle .pill{background:var(--panel2);color:var(--acc);
+    padding:3px 10px;border-radius:6px;font-weight:600}
+  .gridwrap{overflow-x:auto;padding-bottom:4px}
+  .grid{display:grid;grid-template-columns:30px repeat(16,1fr);gap:5px;min-width:560px}
+  .grid .ax{font-family:var(--mono);font-size:10px;color:var(--dim);
+    display:flex;align-items:center;justify-content:center}
+  .grid .axrow{justify-content:flex-end;padding-right:6px;font-size:10px}
+  .led{position:relative;aspect-ratio:1/1;border-radius:5px;
+    background:rgba(255,255,255,.03);display:flex;align-items:center;justify-content:center;
+    transition:background .2s}
+  .led span{font-family:var(--mono);font-size:8.5px;font-weight:700;
+    color:rgba(0,0,0,.72);letter-spacing:-.04em;text-align:center;line-height:1;
+    padding:0 1px;mix-blend-mode:overlay;filter:none}
+  .led.lit span{color:rgba(2,6,10,.85)}
+  .led.dimtext span{color:rgba(230,236,245,.6);mix-blend-mode:normal}
+  @keyframes pulseSlow{0%,100%{filter:brightness(1)}50%{filter:brightness(.32)}}
+  @keyframes pulseFast{0%,100%{filter:brightness(1)}50%{filter:brightness(.32)}}
+  .strobe-slow{animation:pulseSlow 1.6s ease-in-out infinite}
+  .strobe-fast{animation:pulseFast .7s ease-in-out infinite}
+
+  /* legend */
+  .legend{display:flex;flex-wrap:wrap;gap:7px 16px;margin-top:16px;font-size:12.5px}
+  .legend .li{display:flex;align-items:center;gap:7px;color:var(--mut)}
+  .swatch{width:13px;height:13px;border-radius:4px;flex:none;box-shadow:0 0 6px rgba(0,0,0,.4)}
+
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:26px}
+  @media(max-width:760px){.two{grid-template-columns:1fr}h1{font-size:34px}}
+
+  /* screen mock */
+  .screenmock{font-family:var(--mono);background:#05070a;border:1px solid var(--line);
+    border-radius:12px;padding:18px;color:var(--acc);position:relative;
+    box-shadow:inset 0 0 40px rgba(123,224,200,.06);max-width:520px}
+  .screenmock .crt{display:grid;grid-template-columns:auto 1fr;gap:4px 18px;font-size:12.5px}
+  .screenmock .hd{grid-column:1/3;color:var(--mut);display:flex;gap:6px;align-items:center;margin-bottom:6px}
+  .screenmock .sq{width:9px;height:9px;border-radius:2px;background:var(--acc);display:inline-block}
+  .screenmock .sq.off{background:#1c2230}
+  .screenmock .lbl{color:var(--dim)}
+  .screenmock .focus{color:#fff;text-shadow:0 0 8px rgba(255,255,255,.6)}
+  .screenmock .steps{grid-column:1/3;margin-top:8px;display:flex;gap:3px}
+  .screenmock .steps i{width:9px;height:9px;border-radius:2px;background:var(--acc);opacity:.5}
+
+  footer{padding:40px 0 70px;color:var(--dim);font-size:13px;text-align:center}
+  .kbdrow{display:flex;gap:18px;flex-wrap:wrap;margin:14px 0}
+  .kbdrow div{font-size:14px;color:var(--mut)}
+  ul.tight{margin:8px 0;padding-left:20px}
+  ul.tight li{margin:3px 0;color:var(--mut);font-size:14.5px}
+  ul.tight li b{color:var(--ink)}
+
+  /* getting started tutorial */
+  .startbanner{display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+    background:linear-gradient(180deg,rgba(123,224,200,.10),rgba(123,224,200,.02));
+    border:1px solid rgba(123,224,200,.28);border-radius:14px;padding:14px 18px;margin-top:20px}
+  .startbanner b{color:var(--ink)}
+  .startbanner a.go{margin-left:auto;font-family:var(--mono);font-size:13px;
+    text-decoration:none;color:#08110d;background:var(--acc);
+    padding:7px 15px;border-radius:9px;font-weight:700;white-space:nowrap}
+  .startbanner a.go:hover{filter:brightness(1.08)}
+
+  .tut{margin-top:8px;counter-reset:tstep}
+  .tstep{padding:24px 0 28px;border-bottom:1px dashed var(--line)}
+  .tstep:last-child{border-bottom:none}
+  .tstep .thead{display:flex;align-items:center;gap:14px;margin-bottom:8px}
+  .tbadge{counter-increment:tstep;flex:none;width:40px;height:40px;border-radius:50%;
+    display:flex;align-items:center;justify-content:center;font-family:var(--mono);
+    font-size:18px;font-weight:800;color:#08110d;
+    background:radial-gradient(circle at 35% 30%,#aef0dc,var(--acc));
+    box-shadow:0 0 18px rgba(123,224,200,.4)}
+  .tbadge::before{content:counter(tstep)}
+  .tbadge.zero{counter-increment:none;
+    background:radial-gradient(circle at 35% 30%,#c4cdf0,var(--acc2))}
+  .tbadge.zero::before{content:"0"}
+  .tstep.optional{background:linear-gradient(180deg,rgba(138,160,255,.05),transparent);
+    border-radius:14px;padding-left:16px;padding-right:16px}
+  .optflag{font-family:var(--mono);font-size:11px;color:var(--acc2);
+    border:1px solid rgba(138,160,255,.35);border-radius:6px;padding:2px 8px;margin-left:4px}
+  .tstep h3{margin:0;font-size:22px;color:var(--ink)}
+  .tstep .body{color:var(--mut);font-size:15.5px;max-width:790px}
+  .tstep .body b{color:var(--ink)}
+  .tstep .body code{font-size:.84em}
+  .do{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:12.5px;
+    color:var(--gold);background:rgba(240,200,90,.08);border:1px solid rgba(240,200,90,.32);
+    padding:4px 11px;border-radius:8px;margin:12px 8px 2px 0}
+  .do b{color:var(--gold);font-weight:700}
+  .tfig{margin-top:14px;max-width:720px}
+  .led.tap{outline:2px solid var(--gold);outline-offset:2px;z-index:3;
+    animation:tapPulse 1.1s ease-in-out infinite}
+  @keyframes tapPulse{0%,100%{outline-color:rgba(240,200,90,.25)}
+    50%{outline-color:rgba(240,200,90,1)}}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+<div class="glyph">        _/ .    _  /
+    /)()//()/)_) /)()/)
+  /                /</div>
+    <h1>potionshop</h1>
+    <p class="sub">A six-channel FM <em>burst</em> sequencer for monome norns — driven by a monome grid, with the screen and encoders as a complete second surface.</p>
+    <div class="tags">
+      <span class="tag">norns script</span>
+      <span class="tag">monome grid 16×8</span>
+      <span class="tag">6 FM voices</span>
+      <span class="tag">sequins · geode · A/B layers</span>
+      <span class="tag">audio · MIDI · crow · i2c</span>
+    </div>
+  </div>
+</header>
+
+<nav class="toc">
+  <div class="wrap">
+    <a href="#overview">overview</a>
+    <a href="#start">getting started</a>
+    <a href="#concepts">concepts</a>
+    <a href="#reading">reading the grid</a>
+    <a href="#main">main</a>
+    <a href="#step">step picker</a>
+    <a href="#scale">scale</a>
+    <a href="#prob">prob</a>
+    <a href="#perf">perf</a>
+    <a href="#snd">snd</a>
+    <a href="#kb">keyboard</a>
+    <a href="#actions">actions</a>
+    <a href="#screen">screen</a>
+    <a href="#outputs">outputs</a>
+    <a href="#ref">reference</a>
+  </div>
+</nav>
+
+<!-- ===================================================== -->
+<section id="overview">
+  <div class="wrap">
+    <h2><span class="num">00</span>What it is</h2>
+    <p class="lead">potionshop plays <b>bursts</b>: short flurries of notes based on clock divisions. These are quantized to a global clock. Each of its six channels repeatedly fires a small group of hits, then waits, then fires again — the rhythm, pitch, density and tone of every burst comes from a stack of looping value sequences you edit live.</p>
+    <p>The grid is the primary instrument; the norns screen + three encoders + two keys mirror everything and add fine control. Every channel is the same FM voice — there are no per-channel voice types.</p>
+    <div class="cards">
+      <div class="card"><h4>the grid</h4><p>16×8. Rows 0–5 are the six channels; the bottom two rows hold transport, page buttons, param select and channel actions.</p></div>
+      <div class="card"><h4>the screen</h4><p>E1 picks a channel, E2 walks a cursor, E3 edits, K2/K3 page.  Focus is the brightest</p></div>
+      <div class="card"><h4>the params</h4><p>The whole instrument is also norns params — visible in the PARAMETERS menu, MIDI-mappable, and saved in PSETs.</p></div>
+    </div>
+    <div class="startbanner">
+      <div>🌱 <b>New here?</b> Don't read the whole manual — follow the eight-step walkthrough and you'll have a channel playing in a minute.</div>
+      <a class="go" href="#start">start the walkthrough →</a>
+    </div>
+  </div>
+</section>
+
+<!-- ===================================================== -->
+<section id="start">
+  <div class="wrap">
+    <h2><span class="num">▶</span>Getting started</h2>
+    <p class="lead">A short walkthrough, starting from a blank slate: clear the channels, launch one, edit it with the picker, then layer in rhythm, density, tone and scale. Each picture shows the grid as you'd see it — the <b style="color:var(--gold)">pulsing gold ring</b> marks the key to press.</p>
+    <p class="muted" style="font-size:14px">Reading the lights: brightness shows a value (brighter = higher/louder), a full-bright light is the live <em>playhead</em> or your current selection, and a faint light is an empty slot. That's the whole language — details are in <a href="#reading">reading the grid</a>.</p>
+
+    <div class="tut">
+
+      <!-- 0 -->
+      <div class="tstep optional">
+        <div class="thead"><div class="tbadge zero"></div><h3>Start from a blank slate <span class="optflag">optional</span></h3></div>
+        <div class="body">
+          <p>When the script boots it <b>randomizes every channel</b>, so on a fresh start all six rows are already full of scattered values. That's fun to jam on, but for a clean first patch let's wipe every channel back to defaults.</p>
+          <p>The row-7 buttons on the right are <b>actions</b> — they're <em>armed</em>, not instant. Press <b>CLR</b> and it starts blinking to show it's waiting; then <b>tap each channel</b> on row 6 to clear them one by one. (Press CLR again to disarm without using it.)</p>
+          <span class="do">▸ press <b>row 7 · col 11</b> (CLR) — it blinks</span>
+          <span class="do">▸ then tap <b>row 6 · cols 0–5</b> to clear all six channels</span>
+        </div>
+        <div class="pagefig tfig">
+          <div class="figtitle"><span class="pill">MAIN</span> CLR armed (blinking) — tap each channel to reset its A sequences</div>
+          <div class="gridwrap"><div class="grid" id="g-t0"></div></div>
+        </div>
+      </div>
+
+      <!-- 1 -->
+      <div class="tstep">
+        <div class="thead"><div class="tbadge"></div><h3>Make a sound</h3></div>
+        <div class="body">
+          <p>Each of the six rows is a <b>channel</b> — an independent voice. Launch <b>channel&nbsp;1</b> to fire it.</p>
+          <p>Because we just cleared it, the channel sits at its defaults: a single <code>note</code> and <code>reps&nbsp;=&nbsp;1</code>. <b>A cleared channel fires just one note.</b> A <code>reps</code> sequence with a single step is <em>single-shot</em> — it plays one hit and stops, so the launch light flashes, sounds, then releases. Press it again to re-fire. This is the simplest possible <b>burst</b>: one hit. Looping only kicks in once <code>reps</code> has more than one step (step 6) — the next steps build the channel up to that.</p>
+          <span class="do">▸ press <b>row&nbsp;6 · col&nbsp;0</b> &nbsp;(launch ch1) — hear one note</span>
+        </div>
+        <div class="pagefig tfig">
+          <div class="figtitle"><span class="pill">MAIN</span> ch1 fires a single note, then stops (cleared default)</div>
+          <div class="gridwrap"><div class="grid" id="g-t1"></div></div>
+        </div>
+      </div>
+
+      <!-- 2 -->
+      <div class="tstep">
+        <div class="thead"><div class="tbadge"></div><h3>Edit a note</h3></div>
+        <div class="body">
+          <p>Rows 0–5 are currently showing the <b>note</b> parameter — you can tell because <code>note</code> is lit on <b>row 7</b> (the param-select row). Channel 1's lit cells are its note <b>steps</b>; their brightness encodes each value.</p>
+          <p>This list of values is a <b>sequins</b> — a loop the burst reads one value from at a time. <b>Press any step</b> to change it.</p>
+          <span class="do">▸ press a lit <b>step</b> on ch1</span>
+        </div>
+        <div class="pagefig tfig">
+          <div class="figtitle"><span class="pill">MAIN</span> press a note step on ch1 to edit it</div>
+          <div class="gridwrap"><div class="grid" id="g-t2"></div></div>
+        </div>
+      </div>
+
+      <!-- 3 -->
+      <div class="tstep">
+        <div class="thead"><div class="tbadge"></div><h3>Pick a value</h3></div>
+        <div class="body">
+          <p>The top two rows turn into the <b>step picker</b>: a palette of all 32 values for this param, low → high, left → right then down. The <b>full-bright</b> cell is the step's current value; <b>dim</b> cells are other values already used elsewhere in the sequence.</p>
+          <p>Press a cell to write it and close the picker. Pressing the <b>already-lit</b> value — the step's current one — removes the step instead.</p>
+          <span class="do">▸ press a <b>value</b> in rows 0–1</span>
+        </div>
+        <div class="pagefig tfig">
+          <div class="figtitle"><span class="pill">PICK</span> 32 candidate values — chosen one at full brightness</div>
+          <div class="gridwrap"><div class="grid" id="g-t3"></div></div>
+        </div>
+      </div>
+
+      <!-- 4 -->
+      <div class="tstep">
+        <div class="thead"><div class="tbadge"></div><h3>Add &amp; remove steps</h3></div>
+        <div class="body">
+          <p>Just past the last step sits a single <b>dim append slot</b>. Press it to add a step — the picker opens on the new one so you can set it straightaway. Longer sequences cycle over more bursts before repeating.</p>
+          <p>To shorten a sequence, open a step in the picker and press its <b>already-lit current value</b> — the full-bright cell — to delete that step.</p>  Add a few more notes to the sequence & then press the channel launch button to step through the bursts.
+          <span class="do">▸ press the <b>dim append slot</b> after the last step</span>
+        </div>
+        <div class="pagefig tfig">
+          <div class="figtitle"><span class="pill">MAIN</span> the dim cell after the last step appends a new one</div>
+          <div class="gridwrap"><div class="grid" id="g-t4"></div></div>
+        </div>
+      </div>
+
+      <!-- 5 -->
+      <div class="tstep">
+        <div class="thead"><div class="tbadge"></div><h3>Change the rhythm — <code>div</code></h3></div>
+        <div class="body">
+          <p>So far you've only edited pitch. <b>Select <code>div</code></b> on row 7 and rows 0–5 now show each channel's <b>division</b> sequence. Hits within a burst are spaced <code>4/div</code> beats apart — so a bigger <code>div</code> means a faster flurry.</p>
+          <p>Edit it exactly like notes: press a step, pick a value. Because <code>div</code> is in a sequence, the rhythm can change burst to burst.</p> Add a few steps with the picker, and launch the channel to see how it changes the feel. A single step of <code>div=4</code> spaces hits evenly on the beat, while a step of <code>div=3</code> gives a triplet feel.</p>
+          <span class="do">▸ press <b>row 7 · col 0</b> &nbsp;(<code>div</code>), then edit a step</span>
+        </div>
+        <div class="pagefig tfig">
+          <div class="figtitle"><span class="pill">MAIN</span> div selected — rows now show division values</div>
+          <div class="gridwrap"><div class="grid" id="g-t5"></div></div>
+        </div>
+      </div>
+
+      <!-- 6 -->
+      <div class="tstep">
+        <div class="thead"><div class="tbadge"></div><h3>Change density — <code>reps</code></h3></div>
+        <div class="body">
+          <p><b>Select <code>reps</code></b> (row 7, col 1): how many hits each burst fires before it waits and repeats. Combined with <code>div</code>, this is the heart of the "burst" feel — a few fast hits, then space.</p>
+          <p><b>This is what makes the channel loop.</b> While <code>reps</code> has a single step the channel is single-shot (step 1's one note). <b>Add a second <code>reps</code> step</b> — press the append slot and pick a value — and the channel now cycles continuously; the bright <b>playhead</b> starts walking the row as it repeats.</p>
+          <span class="do">▸ press <b>row 7 · col 1</b> &nbsp;(<code>reps</code>), then add a 2nd step to loop</span>
+        </div>
+        <div class="pagefig tfig">
+          <div class="figtitle"><span class="pill">MAIN</span> reps with two steps — channel loops, playhead walks</div>
+          <div class="gridwrap"><div class="grid" id="g-t6"></div></div>
+        </div>
+      </div>
+
+      <!-- 7 -->
+      <div class="tstep">
+        <div class="thead"><div class="tbadge"></div><h3>Shape the tone — <code>level · harm · env</code></h3></div>
+        <div class="body">
+          <p>The last three params on row 7 colour the sound, and each is its own sequence too:</p>
+          <ul class="tight">
+            <li><b>level</b> — loudness. It doubles as the "run CV" that drives the <a href="#snd">geode</a> shaping across a burst's hits.</li>
+            <li><b>harm</b> — FM harmonicity: low is mellow, high is bright and metallic.</li>
+            <li><b>env</b> — note length within the gap: staccato → slightly legato.</li>
+          </ul>
+          <span class="do">▸ try <b>row 7 · cols 3–5</b> &nbsp;(<code>level</code> / <code>harm</code> / <code>env</code>)</span>
+        </div>
+        <div class="pagefig tfig">
+          <div class="figtitle"><span class="pill">MAIN</span> level selected — harm &amp; env sit beside it</div>
+          <div class="gridwrap"><div class="grid" id="g-t7"></div></div>
+        </div>
+      </div>
+
+      <!-- 8 -->
+      <div class="tstep">
+        <div class="thead"><div class="tbadge"></div><h3>Choose a scale &amp; lock the timing</h3></div>
+        <div class="body">
+          <p>Press <b>QNT</b> (row 6, col 14) to open the scale picker. Pick a <b>scale</b> on the top row and a <b>root</b> on the lower piano — your <code>note</code> degrees are mapped through these, so everything stays in key.</p>
+          <p>On the right, the 8×4 block sets <b>quantize</b>: a shared grid that every channel's hits snap forward onto. It's what keeps channels with different <code>div</code>s locked together. Press <b>QNT</b> again to return to MAIN.</p>
+          <span class="do">▸ press <b>row 6 · col 14</b> &nbsp;(QNT) → pick scale + root</span>
+        </div>
+        <div class="pagefig tfig">
+          <div class="figtitle"><span class="pill">SCALE</span> scale presets · root piano · quantize block</div>
+          <div class="gridwrap"><div class="grid" id="g-t8"></div></div>
+        </div>
+      </div>
+
+    </div>
+
+    <h3>You've got the loop — where to next</h3>
+    <p>That's the whole core gesture: <b>launch → select a param → press a step → pick a value</b>. Everything below builds on it. Good next stops:</p>
+    <div class="cards">
+      <div class="card"><h4><a href="#main" style="text-decoration:none">A / B layers ↗</a></h4><p>Press a selected param again to flip to its <b>B</b> layer — an additive offset sequence that variates the A pattern.</p></div>
+      <div class="card"><h4><a href="#prob" style="text-decoration:none">PROB ↗</a></h4><p>Add chance: skip bursts or hits by probability, and arpeggiate the B layer with alt-trig "step".</p></div>
+      <div class="card"><h4><a href="#perf" style="text-decoration:none">PERF ↗</a></h4><p>Per-channel reset, octave shift and playback rate — performance moves that don't touch your sequences.</p></div>
+      <div class="card"><h4><a href="#snd" style="text-decoration:none">SND ↗</a></h4><p>Envelope timing and the always-on geode curves that shape amplitude and FM ratio across each burst.</p></div>
+      <div class="card"><h4><a href="#kb" style="text-decoration:none">Keyboard mode ↗</a></h4><p>Tap out whole sequences fast, three params at a time, instead of one step in the picker.</p></div>
+      <div class="card"><h4><a href="#screen" style="text-decoration:none">The screen ↗</a></h4><p>Drive the same edits from the encoders &amp; keys — a complete second surface that stays in sync with the grid.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================================================== -->
+<section id="concepts">
+  <div class="wrap">
+    <h2><span class="num">01</span>Core concepts</h2>
+    <p class="lead">A handful of ideas explain almost every button. Read these once and the pages below stop being arbitrary.</p>
+
+    <div class="cards">
+      <div class="card"><h4>channel</h4><p>One of six independent voices (rows 0–5 on the grid). Launch it and it loops bursts until stopped. Every channel is the same FM synth voice.</p></div>
+      <div class="card"><h4>burst</h4><p>One firing event: <code>reps</code> hits spaced <code>4/div</code> beats apart. After the burst the channel draws fresh values and fires the next one.</p></div>
+      <div class="card"><h4>sequins</h4><p>Every parameter is a looping list of values (a <em>sequins</em>). Each burst pulls the next value from each list, so patterns evolve as the lists cycle at different lengths.</p></div>
+      <div class="card"><h4>A / B layers</h4><p>Each parameter has an <b>A</b> sequence and a <b>B</b> sequence. B is an <em>additive offset</em> summed onto A every burst. B's value set adds a literal <code>0</code> meaning "no offset".</p></div>
+      <div class="card"><h4>geode</h4><p>Per-hit modulation shaping a burst's amplitude and FM ratio across its hits — transient/sustain/cycle curves derived from the <code>level</code> value. Always on.</p></div>
+      <div class="card"><h4>quantize</h4><p>A shared grid every channel's firing instant snaps <em>forward</em> onto, so channels with different divisions still lock together. Tempo is never changed — only <em>when</em> a hit lands.</p></div>
+      <div class="card"><h4>probability</h4><p>Per channel: a burst (or each hit) can be skipped by chance. 25/50/75/100% with a burst-vs-hit toggle.</p></div>
+      <div class="card"><h4>reset</h4><p>Optionally rewind a channel's sequences to step 1 every 1/2/4 bars, re-anchoring it to the bar grid so duplicates stay locked.</p></div>
+    </div>
+
+    <h3>The six per-step parameters</h3>
+    <p>These are the columns on <b>row 7</b> and the lines you edit on the screen. Each has its own A and B sequins per channel.</p>
+    <table>
+      <tr><th>param</th><th>meaning</th><th>value set (step picker)</th></tr>
+      <tr><td>div</td><td>division — hits are spaced <code>4/div</code> beats apart (higher = faster)</td><td>1 … 32</td></tr>
+      <tr><td>reps</td><td>number of hits in the burst (<code>-1</code> = infinite / hold)</td><td>1 … 31, then <code>-1</code></td></tr>
+      <tr><td>note</td><td>scale degree (mapped through the active scale + root)</td><td>0 … 31</td></tr>
+      <tr><td>level</td><td>amplitude — also the bipolar "run CV" that drives the geode shape</td><td>0 … 1 (32 steps)</td></tr>
+      <tr><td>harm</td><td>FM harmonicity ratio (brightness of the tone)</td><td>2 … ~25</td></tr>
+      <tr><td>env</td><td>envelope amount — staccato → slightly legato within the hit gap</td><td>0 … 1 (32 steps)</td></tr>
+    </table>
+  </div>
+</section>
+
+<!-- ===================================================== -->
+<section id="reading">
+  <div class="wrap">
+    <h2><span class="num">02</span>Reading the grid</h2>
+    <p class="lead">Hardware grids only show brightness, so potionshop speaks in three signals: <b>how bright</b> a key is, whether it <b>blinks</b>, and <b>which row</b> it's on.</p>
+
+    <div class="two">
+      <div>
+        <h3>Brightness</h3>
+        <ul class="tight">
+          <li><b>15 (full):</b> the selected / focused thing, or a live <em>playhead</em> moving through a running channel's steps.</li>
+          <li><b>mid (4–12):</b> an active value, present step, or available option. On step rows, brightness <em>encodes the value</em> — louder/higher reads brighter.</li>
+          <li><b>dim (1–3):</b> an empty "append" slot, an inactive option, or a key that exists but isn't selected.</li>
+          <li><b>off (0):</b> nothing there on this page.</li>
+        </ul>
+      </div>
+      <div>
+        <h3>Strobe (blink)</h3>
+        <ul class="tight">
+          <li><b>fast blink:</b> "you are here" — the page/mode button you're currently inside, or an armed action.</li>
+          <li><b>slow blink:</b> a latched secondary state — e.g. a row-7 param showing it's flipped to the <b>B</b> layer, or a per-hit-probability toggle that's on.</li>
+        </ul>
+        <h3>Coordinates</h3>
+        <p class="muted" style="font-size:14px">This guide labels columns <b>0–15</b> and rows <b>0–7</b>, matching the source. (The physical grid is 1-based; the script converts at the edge.) Channels are rows 0–5 = "ch1–ch6".</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================================================== -->
+<section id="main">
+  <div class="wrap">
+    <h2><span class="num">03</span>MAIN page — the home view</h2>
+    <p class="lead">The default. Rows 0–5 show the <em>selected parameter</em>'s steps for each channel (A or B layer). Row 6 is transport + page buttons; row 7 is param-select + channel actions.</p>
+
+    <div class="pagefig" data-fig="main">
+      <div class="figtitle"><span class="pill">MAIN</span> editing <b>note</b>, layer A — ch3 is running (its playhead lit at full)</div>
+      <div class="gridwrap"><div class="grid" id="g-main"></div></div>
+      <div class="legend" id="lg-main"></div>
+    </div>
+
+    <h3>Rows 0–5 — channel steps</h3>
+    <p>Each row is one channel's sequence of the selected param. Lit cells are steps; their brightness encodes the value. The one dim cell just past the last step is the <b>append slot</b> — press it to add a step. When a channel runs, its current step glows at full as the playhead.</p>
+    <ul class="tight">
+      <li><b>Press a step</b> → opens the <a href="#step">step picker</a> to set that step's value.</li>
+      <li><b>Press the append slot</b> → adds a step and opens the picker on it.</li>
+      <li><b>In the picker, press the already-lit current value</b> → removes the step.</li>
+    </ul>
+
+    <h3>Row 6 — transport &amp; pages</h3>
+    <table>
+      <tr><th>cols</th><th>button</th><th>action</th></tr>
+      <tr><td>0–5</td><td>launch ch1–ch6</td><td>toggle a channel running / stopped (bright = running)</td></tr>
+      <tr><td>11</td><td>KB</td><td>enter <a href="#kb">keyboard mode</a> (fast note entry)</td></tr>
+      <tr><td>12</td><td>PERF</td><td>toggle <a href="#perf">perf page</a> (reset / octave / rate)</td></tr>
+      <tr><td>13</td><td>PROB</td><td>toggle <a href="#prob">prob page</a> (probability / alt-trig)</td></tr>
+      <tr><td>14</td><td>QNT</td><td>open the <a href="#scale">scale &amp; quantize picker</a></td></tr>
+      <tr><td>15</td><td>SND</td><td>toggle <a href="#snd">sound page</a> (envelope / geode modes)</td></tr>
+    </table>
+
+    <h3>Row 7 — param select &amp; channel actions</h3>
+    <table>
+      <tr><th>cols</th><th>button</th><th>action</th></tr>
+      <tr><td>0–5</td><td>div · reps · note · level · harm · env</td><td>choose which param rows 0–5 show/edit. Press the <em>selected</em> one again to flip A↔B (slow-blink = B).</td></tr>
+      <tr><td>11</td><td>CLR</td><td>arm clear — then tap a channel to reset its A sequences to defaults</td></tr>
+      <tr><td>12</td><td>COPY</td><td>arm copy — tap a channel to snapshot its A layer</td></tr>
+      <tr><td>13</td><td>PASTE</td><td>arm paste — tap a channel to write the snapshot in</td></tr>
+      <tr><td>14</td><td>RND</td><td>arm randomize — tap a channel to scramble it (grid-reachable values)</td></tr>
+      <tr><td>15</td><td>MUT</td><td>arm mutate — tap a channel to nudge its values ±</td></tr>
+    </table>
+    <div class="note tip"><b>A/B flip:</b> the slow-blinking param button on row 7 tells you rows 0–5 are showing the additive <b>B</b> layer. Press the param once more to return to A.</div>
+  </div>
+</section>
+
+<!-- ===================================================== -->
+<section id="step">
+  <div class="wrap">
+    <h2><span class="num">04</span>Step picker — set one value</h2>
+    <p class="lead">Pressing any step (or append slot) on a channel row opens the picker over rows 0–1: a 32-cell palette of every reachable value for the selected param.</p>
+
+    <div class="pagefig">
+      <div class="figtitle"><span class="pill">PICK</span> setting one <b>note</b> step — chosen value at full, other values used in this sequence dimly lit</div>
+      <div class="gridwrap"><div class="grid" id="g-step"></div></div>
+      <div class="legend" id="lg-step"></div>
+    </div>
+
+    <ul class="tight">
+      <li><b>Rows 0–1</b> = the 32 candidate values, low→high, left→right then down. The cell matching the step's current value is full-bright; other values already present elsewhere in this sequence glow dim so you can see the palette in use.</li>
+      <li><b>Press a value</b> → writes it to the step and closes the picker.</li>
+      <li><b>Press the full-bright current value</b> → removes the step (a toggle — works for every channel, including ch1/ch2 whose rows sit behind the value grid).</li>
+      <li><b>Press elsewhere on a visible channel row</b> → jumps the picker to that step.</li>
+    </ul>
+    <div class="note"><b>Grid-reachable contract:</b> every value randomize/mutate can produce lands exactly on one of these 32 cells, so anything the machine generates you can still see highlighted and re-edit by hand.</div>
+  </div>
+</section>
+
+<!-- ===================================================== -->
+<section id="scale">
+  <div class="wrap">
+    <h2><span class="num">05</span>Scale &amp; quantize picker</h2>
+    <p class="lead">Opened by <b>QNT</b> (row 6, col 14). Left side: scale preset + a compact piano for the note-mask and the root. Right side: the global quantize grid.</p>
+
+    <div class="pagefig">
+      <div class="figtitle"><span class="pill">SCALE</span> major selected · degree keys (mask) · root keys · 8×4 quantize block</div>
+      <div class="gridwrap"><div class="grid" id="g-scale"></div></div>
+      <div class="legend" id="lg-scale"></div>
+    </div>
+
+    <table>
+      <tr><th>area</th><th>where</th><th>does</th></tr>
+      <tr><td>presets</td><td>row 0, cols 0–6</td><td>7 scales: major · minor · pentatonic · dorian · akebono · hijaz · rast</td></tr>
+      <tr><td>degree keys</td><td>rows 1–2, cols 0–6</td><td>compact piano (black row above white) — toggle individual scale degrees in/out of the custom note mask</td></tr>
+      <tr><td>root keys</td><td>rows 4–5, cols 0–6</td><td>same piano — pick the tonic (root note) the scale is built on</td></tr>
+      <tr><td>quantize</td><td>rows 1–4, cols 8–15</td><td>8×4 = 32 values for the shared snap grid (events per whole note); higher = finer</td></tr>
+    </table>
+    <p class="muted" style="font-size:14px">The piano packs white keys into cols 0–6, with black keys offset above the white key they follow — cols 2 and 6 have no black key, matching a real keyboard's E–F and B–C gaps. A scale always keeps at least one degree. Press <b>QNT</b> again (row 6) to exit.</p>
+  </div>
+</section>
+
+<!-- ===================================================== -->
+<section id="prob">
+  <div class="wrap">
+    <h2><span class="num">06</span>PROB page — chance &amp; alt-trig</h2>
+    <p class="lead">Toggled by <b>PROB</b> (row 6, col 13). Rows 0–5 stay per-channel, but now control probability and how the B (alt) layer triggers.</p>
+
+    <div class="pagefig">
+      <div class="figtitle"><span class="pill">PROB</span> per channel: note alt-trig · harm alt-trig · burst probability · burst/hit toggle</div>
+      <div class="gridwrap"><div class="grid" id="g-prob"></div></div>
+      <div class="legend" id="lg-prob"></div>
+    </div>
+
+    <table>
+      <tr><th>cols</th><th>control</th><th>options</th></tr>
+      <tr><td>0–1</td><td>note alt-trig</td><td><b>hold</b> = B note drawn once per burst &amp; summed onto every hit · <b>step</b> = advance B per hit (arpeggiates the alt pitch)</td></tr>
+      <tr><td>3–4</td><td>harm alt-trig</td><td>same hold/step behaviour for the B <em>harm</em> layer</td></tr>
+      <tr><td>11–14</td><td>burst probability</td><td>25% · 50% · 75% · 100% (nearest value lit)</td></tr>
+      <tr><td>15</td><td>burst / hit</td><td>off (slow-blink) = the probability gates <em>whole bursts</em>; on = it gates <em>each hit</em></td></tr>
+    </table>
+    <div class="note"><b>alt-trig "step"</b> is how you arpeggiate: put a run of degrees in the B note sequence, set note alt-trig to <em>step</em>, and each hit in the burst advances to the next B offset on top of the held A degree.</div>
+  </div>
+</section>
+
+<!-- ===================================================== -->
+<section id="perf">
+  <div class="wrap">
+    <h2><span class="num">07</span>PERF page — reset · octave · rate</h2>
+    <p class="lead">Toggled by <b>PERF</b> (row 6, col 12). Per-channel performance controls — none of these touch the value sequences themselves.</p>
+
+    <div class="pagefig">
+      <div class="figtitle"><span class="pill">PERF</span> per channel: reset interval · octave shift (centre = home) · playback rate</div>
+      <div class="gridwrap"><div class="grid" id="g-perf"></div></div>
+      <div class="legend" id="lg-perf"></div>
+    </div>
+
+    <table>
+      <tr><th>cols</th><th>control</th><th>options</th></tr>
+      <tr><td>0–3</td><td>reset interval</td><td>off · every 1 bar · 2 bars · 4 bars — rewinds the sequences (and re-anchors a running burst to the bar)</td></tr>
+      <tr><td>5–9</td><td>octave</td><td>−2 · −1 · <b>0</b> · +1 · +2 (the centre/home column sits a touch brighter)</td></tr>
+      <tr><td>11–15</td><td>rate</td><td>0.25× · 0.5× · 1× · 2× · 4× — scales the burst's internal timing without changing tempo</td></tr>
+    </table>
+    <div class="note tip"><b>Why reset matters:</b> copy a channel, give both <em>reset = 1 bar</em>, and they re-lock to the bar boundary each bar instead of slowly drifting apart.</div>
+  </div>
+</section>
+
+<!-- ===================================================== -->
+<section id="snd">
+  <div class="wrap">
+    <h2><span class="num">08</span>SND page — envelope &amp; geode shaping</h2>
+    <p class="lead">Toggled by <b>SND</b> (row 6, col 15). Four three-way mode banks per channel that shape how the FM voice behaves across a burst's hits.</p>
+
+    <div class="pagefig">
+      <div class="figtitle"><span class="pill">SND</span> per channel: amp env timing · amp geode · harm sweep timing · harm geode</div>
+      <div class="gridwrap"><div class="grid" id="g-snd"></div></div>
+      <div class="legend" id="lg-snd"></div>
+    </div>
+
+    <table>
+      <tr><th>cols</th><th>bank</th><th>options</th></tr>
+      <tr><td>0–2</td><td>env (amp decay timing)</td><td><b>shape</b> = length tracks the inter-hit gap · <b>burst</b> = decays over the whole burst · <b>hit</b> = per-hit length</td></tr>
+      <tr><td>4–6</td><td>geode (amp per-hit)</td><td><b>transient</b> (sawtooth accent) · <b>sustain</b> (triangle fold) · <b>cycle</b> (sinusoidal) — always on</td></tr>
+      <tr><td>8–10</td><td>h.env (harm sweep timing)</td><td><b>off</b> (static ratio) · <b>hit</b> (bright→clean per hit) · <b>burst</b> (slow sweep across the burst)</td></tr>
+      <tr><td>12–14</td><td>harm (harm per-hit geode)</td><td><b>fast</b> · <b>med</b> · <b>slow</b> — how the per-hit FM-ratio geode moves; always on</td></tr>
+    </table>
+    <p class="muted" style="font-size:14px">The two <em>geode</em> banks are always active — they're shaping curves, not on/off switches. The <em>level</em> value (0–1) acts as the bipolar "run CV" feeding both: 0.5 is neutral, the extremes push the curve hardest. randomize/mutate deliberately leave these mode selections alone.</p>
+  </div>
+</section>
+
+<!-- ===================================================== -->
+<section id="kb">
+  <div class="wrap">
+    <h2><span class="num">09</span>Keyboard mode — fast sequence entry</h2>
+    <p class="lead">Entered by <b>KB</b> (row 6, col 11). Instead of one step at a time, you tap out whole sequences in value bands — three params per page, two pages.</p>
+
+    <div class="two">
+      <div class="pagefig" style="margin-top:0">
+        <div class="figtitle"><span class="pill">KB · pg1</span> note / div / reps</div>
+        <div class="gridwrap"><div class="grid" id="g-kb1"></div></div>
+      </div>
+      <div class="pagefig" style="margin-top:0">
+        <div class="figtitle"><span class="pill">KB · pg2</span> level / harm / env</div>
+        <div class="gridwrap"><div class="grid" id="g-kb2"></div></div>
+      </div>
+    </div>
+    <div class="legend" id="lg-kb"></div>
+
+    <ul class="tight">
+      <li><b>Rows 0–5</b> are three two-row value bands. <b>Page 1:</b> note (0–1), div (2–3), reps (4–5). <b>Page 2:</b> level (0–1), harm (2–3), env (4–5).</li>
+      <li>Tapping cells <em>appends</em> them into that band's buffer in order (buffer cells full-bright, existing sequence dim). Buffers commit to the channel live as you tap.</li>
+      <li><b>Row 7, cols 0–5:</b> select the target channel. Press the selected channel again to flip the B layer (slow-blink).</li>
+      <li><b>Row 7, col 13:</b> page 1 ⇄ page 2. <b>col 14:</b> clear the current buffers.</li>
+      <li><b>Row 6, col 11:</b> exit back to MAIN (commits whatever's buffered).</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ===================================================== -->
+<section id="actions">
+  <div class="wrap">
+    <h2><span class="num">10</span>Channel actions — clear · copy · paste · randomize · mutate</h2>
+    <p class="lead">Row 7 cols 11–15 are <em>armed</em> modes, not instant buttons. Press one (it fast-blinks), then tap a channel on row 6 to apply it. Press the action again to disarm.</p>
+
+    <div class="pagefig">
+      <div class="figtitle"><span class="pill">RND armed</span> RANDOMIZE blinking on row 7 · row 6 channels lit, awaiting a tap</div>
+      <div class="gridwrap"><div class="grid" id="g-act"></div></div>
+      <div class="legend" id="lg-act"></div>
+    </div>
+
+    <table>
+      <tr><th>action</th><th>effect</th></tr>
+      <tr><td>CLR</td><td>reset the channel's A sequences to defaults (B left intact)</td></tr>
+      <tr><td>COPY</td><td>snapshot the channel's A layer to the clipboard</td></tr>
+      <tr><td>PASTE</td><td>write the clipboard into the channel's A layer</td></tr>
+      <tr><td>RND</td><td>scramble A values to fresh musical, grid-reachable values</td></tr>
+      <tr><td>MUT</td><td>perturb A values ± a small amount, keeping length and range</td></tr>
+    </table>
+    <p class="muted" style="font-size:14px">CLR / COPY / PASTE all act on the <b>A (main)</b> layer only — the B (alt) layer keeps variating whatever you cleared or copied. While randomize/mutate are armed, running channels slow-blink on row 6 so you can see what you're about to scramble.</p>
+  </div>
+</section>
+
+<!-- ===================================================== -->
+<section id="screen">
+  <div class="wrap">
+    <h2><span class="num">11</span>The screen &amp; encoders</h2>
+    <p class="lead">The norns screen is a complete second surface — it mirrors the grid's state and adds per-position editing. It follows whatever the grid is doing, and the grid follows it back.</p>
+
+    <div class="two">
+      <div>
+        <h3>Layout</h3>
+        <div class="screenmock">
+          <div class="crt">
+            <div class="hd">
+              <span class="sq"></span><span class="sq"></span><span class="sq off"></span>
+              <span class="sq"></span><span class="sq off"></span><span class="sq off"></span>
+              &nbsp;<span class="lbl">main // 55</span>
+            </div>
+            <div class="lbl">c3</div><div><span class="lbl">run:</span> off</div>
+            <div class="lbl">e2</div><div><span class="lbl">div:</span> 4 8</div>
+            <div class="lbl">g3</div><div class="focus">note: <span class="focus">0</span> 3 5</div>
+            <div class="lbl">a2</div><div><span class="lbl">level:</span> 0.60</div>
+            <div class="steps">
+              <i style="opacity:1"></i><i style="opacity:.6"></i><i style="opacity:.8"></i>
+              <i style="opacity:.4"></i><i style="opacity:.5"></i>
+            </div>
+          </div>
+        </div>
+        <p class="muted" style="font-size:13.5px;margin-top:10px">Left: six channel rows, each a note letter + a scrolling amplitude trail of recent hits (focused channel brightest). Top: page // bpm + channel squares (flash on fire). Right: the focused page's lines. Bottom: A/B step squares for the selected param, with a live playhead.</p>
+      </div>
+      <div>
+        <h3>Controls</h3>
+        <div class="kbdrow"><div><kbd>E1</kbd> select channel (1–6)</div></div>
+        <div class="kbdrow"><div><kbd>E2</kbd> walk the cursor — on a sequence page it flows through run → every step of every param line (each ending in an <code>_</code> add slot); on other pages it picks a line</div></div>
+        <div class="kbdrow"><div><kbd>E3</kbd> edit under the cursor — change the value, or on <code>run</code> turn right=launch / left=stop; turn a step below its lowest value to remove it; on <code>_</code> turn right to append</div></div>
+        <div class="kbdrow"><div><kbd>K2</kbd> / <kbd>K3</kbd> page back / forward through <b>main · alt · snd · prob · perf</b></div></div>
+        <div class="kbdrow"><div><kbd>K1</kbd> left to the norns system menu</div></div>
+        <div class="note" style="margin-top:18px"><b>main</b> = the A-layer sequences, <b>alt</b> = the B (offset) layer. The screen's page and the grid's mode buttons stay in sync — flipping a row-7 param to B on the grid swaps the screen to <em>alt</em>, and vice-versa.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================================================== -->
+<section id="outputs">
+  <div class="wrap">
+    <h2><span class="num">12</span>Output routing</h2>
+    <p class="lead">Every channel can drive the internal FM voice and/or external gear. This lives in the PARAMETERS menu (the OUTPUTS group) — there's no grid/screen page for it. External voices receive the final geode-bent freq / level / length.</p>
+    <table>
+      <tr><th>destination</th><th>what it sends</th></tr>
+      <tr><td>audio</td><td>the internal <code>Potionshop</code> FM engine (default)</td></tr>
+      <tr><td>midi</td><td>note on/off on an assignable device + channel; modwheel (CC1) carries harmonicity</td></tr>
+      <tr><td>audio + midi</td><td>both at once</td></tr>
+      <tr><td>crow 1+2</td><td>v/oct pitch on output 1, AR envelope on output 2</td></tr>
+      <tr><td>crow 3+4</td><td>v/oct pitch on output 3, AR envelope on output 4</td></tr>
+      <tr><td>crow ii jf</td><td>Just Friends via i2c — <code>play_voice</code> per hit, JF voice = channel number</td></tr>
+      <tr><td>crow ii er301</td><td>ER-301 via i2c — sc.cv pitch + sc.tr trigger, port = channel number; a second CV carries harmonicity</td></tr>
+    </table>
+    <div class="note"><b>Tempo</b> lives in the norns system CLOCK menu, not in the script. potionshop seeds 55 bpm on init (the web default). Everything else is a script param, saved in PSETs and MIDI-mappable.</div>
+  </div>
+</section>
+
+<!-- ===================================================== -->
+<section id="ref">
+  <div class="wrap">
+    <h2><span class="num">13</span>Quick reference</h2>
+
+    <h3>Row 6 (page / transport)</h3>
+    <table>
+      <tr><th>0–5</th><th>11</th><th>12</th><th>13</th><th>14</th><th>15</th></tr>
+      <tr><td>launch ch1–6</td><td>KB</td><td>PERF</td><td>PROB</td><td>QNT</td><td>SND</td></tr>
+    </table>
+
+    <h3>Row 7 (param / actions)</h3>
+    <table>
+      <tr><th>0–5</th><th>11</th><th>12</th><th>13</th><th>14</th><th>15</th></tr>
+      <tr><td>div reps note level harm env</td><td>CLR</td><td>COPY</td><td>PASTE</td><td>RND</td><td>MUT</td></tr>
+    </table>
+
+    <h3>Gestures</h3>
+    <table>
+      <tr><th>do this</th><th>get</th></tr>
+      <tr><td>press a channel step</td><td>step picker for that value</td></tr>
+      <tr><td>press the dim append slot</td><td>add a step + picker</td></tr>
+      <tr><td>in picker, press the lit current value</td><td>remove the step</td></tr>
+      <tr><td>press selected row-7 param again</td><td>flip A ⇄ B layer (slow-blink = B)</td></tr>
+      <tr><td>press a page button again</td><td>exit back to MAIN</td></tr>
+      <tr><td>arm an action, then tap a channel</td><td>apply clear/copy/paste/rnd/mut</td></tr>
+    </table>
+
+    <h3>On the script folder</h3>
+    <p class="muted" style="font-size:14px">The folder must be named <code>potionshop</code> (so <code>engine.name = 'Potionshop'</code> resolves the SuperCollider engine). Deploy to <code>~/dust/code/potionshop</code> on norns. Run the off-hardware tests with <code>lua test/run.lua</code>.</p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">potionshop · FM burst sequencer for monome norns + grid · user's guide</div>
+</footer>
+
+<script>
+/* ---- LED grid renderer ---------------------------------------------------
+   Each page is an array of cell specs {x,y,c,b,t,strobe}. Category -> base
+   RGB; brightness (1..15) -> alpha + glow, mirroring the grid's own LED model. */
+const COLORS = {
+  off:    [255,255,255],
+  step:   [104,224,196],
+  launch: [110,224,128],
+  mode:   [181,133,250],
+  param:  [122,160,255],
+  action: [255,154,85],
+  picker: [104,222,210],
+  scale:  [240,200,90],
+  keyw:   [228,232,242],
+  keyb:   [128,138,168],
+  keyon:  [120,240,150],
+  qnt:    [200,120,240],
+  play:   [255,255,255],
+  present:[120,150,180],
+};
+const CAT_LABEL = {
+  step:'param value (brightness = value)', launch:'launch / channel',
+  mode:'page / mode button', param:'param select', action:'channel action',
+  picker:'value candidate', scale:'scale preset', keyw:'piano key (white)',
+  keyb:'piano key (black)', keyon:'selected key', qnt:'quantize value',
+  play:'playhead / selected (15)', present:'value present in sequence',
+};
+
+function ledEl(cell){
+  const d=document.createElement('div'); d.className='led';
+  const rgb=COLORS[cell.c]||COLORS.off, b=cell.b||0;
+  if(b<=0||cell.c==='off'){ d.style.background='rgba(255,255,255,.035)'; }
+  else{
+    const a=0.14+(b/15)*0.86;
+    d.style.background=`rgba(${rgb[0]},${rgb[1]},${rgb[2]},${a})`;
+    d.style.boxShadow=`0 0 ${2+b*0.7}px rgba(${rgb[0]},${rgb[1]},${rgb[2]},${a*0.6})`;
+    if(b>=10) d.classList.add('lit');
+  }
+  if(cell.t){ const s=document.createElement('span'); s.textContent=cell.t;
+    if(b<6) d.classList.add('dimtext'); d.appendChild(s); }
+  if(cell.strobe) d.classList.add('strobe-'+cell.strobe);
+  d.style.gridColumn=(cell.x+2); d.style.gridRow=(cell.y+2);
+  return d;
+}
+
+const DEFAULT_ROWS=['ch1','ch2','ch3','ch4','ch5','ch6','r6','r7'];
+function renderGrid(id,cells,rowLabels){
+  const g=document.getElementById(id); if(!g) return;
+  rowLabels=rowLabels||DEFAULT_ROWS;
+  // top axis: column numbers 0..15
+  const corner=document.createElement('div'); corner.className='ax';
+  corner.style.gridColumn=1; corner.style.gridRow=1; g.appendChild(corner);
+  for(let x=0;x<16;x++){ const a=document.createElement('div'); a.className='ax';
+    a.textContent=x; a.style.gridColumn=x+2; a.style.gridRow=1; g.appendChild(a); }
+  // left axis: row labels
+  for(let y=0;y<8;y++){ const a=document.createElement('div'); a.className='ax axrow';
+    a.textContent=rowLabels[y]||''; a.style.gridColumn=1; a.style.gridRow=y+2; g.appendChild(a); }
+  // background empties so the full 16x8 frame is always visible
+  for(let y=0;y<8;y++) for(let x=0;x<16;x++){
+    const d=document.createElement('div'); d.className='led';
+    d.style.gridColumn=x+2; d.style.gridRow=y+2; g.appendChild(d);
+  }
+  cells.forEach(c=>g.appendChild(ledEl(c)));
+}
+function renderLegend(id,cats){
+  const el=document.getElementById(id); if(!el) return;
+  cats.forEach(c=>{
+    const rgb=COLORS[c]; const li=document.createElement('div'); li.className='li';
+    const sw=document.createElement('span'); sw.className='swatch';
+    sw.style.background=`rgba(${rgb[0]},${rgb[1]},${rgb[2]},.92)`;
+    li.appendChild(sw); li.appendChild(document.createTextNode(CAT_LABEL[c]||c));
+    el.appendChild(li);
+  });
+}
+
+/* helpers to build cell arrays */
+const C=[];
+function push(a,x,y,c,b,t,strobe){ a.push({x,y,c,b,t,strobe}); }
+
+/* ---- common bottom rows ---- */
+function rowsTransport(a,running){ // row 6
+  for(let x=0;x<6;x++) push(a,x,6,'launch',running.includes(x)?15:4,x+1);
+  push(a,11,6,'mode',8,'KB');
+  push(a,12,6,'mode',8,'PRF');
+  push(a,13,6,'mode',8,'PRB');
+  push(a,14,6,'mode',8,'QNT');
+  push(a,15,6,'mode',8,'SND');
+}
+function rowsParams(a,sel,bLayer){ // row 7
+  const names=['div','rep','not','lvl','hrm','env'];
+  for(let x=0;x<6;x++){ const s=x===sel;
+    push(a,x,7,'param',s?15:5,names[x],(s&&bLayer)?'slow':null); }
+  push(a,11,7,'action',4,'CLR');
+  push(a,12,7,'action',4,'CPY');
+  push(a,13,7,'action',4,'PST');
+  push(a,14,7,'action',4,'RND');
+  push(a,15,7,'action',4,'MUT');
+}
+
+/* ===================== MAIN ===================== */
+(function(){
+  const a=[];
+  // channel step rows (selected param = note). brightness ~ value.
+  const rows=[
+    [6,9],                 // ch1
+    [4,7,11,5],            // ch2
+    [8,12,6,10,7],         // ch3 (running -> playhead)
+    [5,9,6],               // ch4
+    [10,4],                // ch5
+    [7,11,8,5,9,6],        // ch6
+  ];
+  rows.forEach((steps,y)=>{
+    steps.forEach((b,i)=>push(a,i,y,'step',b));
+    push(a,steps.length,y,'step',1); // append slot (dim)
+  });
+  push(a,2,2,'play',15);           // ch3 playhead at full
+  rowsTransport(a,[2]);            // ch3 running
+  rowsParams(a,2,false);          // note selected, layer A
+  renderGrid('g-main',a);
+  renderLegend('lg-main',['step','play','launch','mode','param','action']);
+})();
+
+/* ===================== STEP PICKER ===================== */
+(function(){
+  const a=[];
+  // rows 0-1: 32 value candidates; one chosen (full), a few present (dim)
+  const chosen=10, present=[3,18,24];
+  for(let i=0;i<32;i++){ const x=i%16, y=Math.floor(i/16);
+    let b=2,c='picker';
+    if(i===chosen){b=15;c='play';}
+    else if(present.includes(i)){b=6;c='present';}
+    push(a,x,y,c,b); }
+  // rows 2-5 keep showing channel steps (render_all redraws ch2..5)
+  [[2,[8,12,6,10,7],2],[3,[5,9,6]],[4,[10,4]],[5,[7,11,8,5]]].forEach(r=>{
+    r[1].forEach((b,i)=>push(a,i,r[0],'step',b));
+    push(a,r[1].length,r[0],'step',1);
+  });
+  rowsTransport(a,[]);
+  rowsParams(a,2,false);
+  renderGrid('g-step',a);
+  renderLegend('lg-step',['play','present','picker','step']);
+})();
+
+/* ===================== SCALE PICKER ===================== */
+(function(){
+  const a=[];
+  const presets=['maj','min','pnt','dor','akb','hij','rst'];
+  presets.forEach((t,x)=>push(a,x,0,'scale',x===0?15:5,t));
+  // degree keyboard (major = 0,2,4,5,7,9,11 white ; mask shown)
+  const whiteCol={0:0,1:2,2:4,3:5,4:7,5:9,6:11};
+  const blackCol={0:1,1:3,3:6,4:8,5:10};
+  const mask=[0,2,4,5,7,9,11]; // major
+  for(const x in blackCol){const semi=blackCol[x];
+    push(a,+x,1,'keyb',mask.includes(semi)?12:3);}
+  for(const x in whiteCol){const semi=whiteCol[x];
+    push(a,+x,2,mask.includes(semi)?'keyon':'keyw',mask.includes(semi)?12:4);}
+  // root keyboard (root = 0 / C)
+  const root=0;
+  for(const x in blackCol){const semi=blackCol[x];
+    push(a,+x,4,'keyb',semi===root?15:3);}
+  for(const x in whiteCol){const semi=whiteCol[x];
+    push(a,+x,5,semi===root?'keyon':'keyw',semi===root?15:4);}
+  // quantize 8x4 (cols 8..15, rows 1..4), one selected
+  const qsel=10;
+  for(let r=0;r<4;r++)for(let c=0;c<8;c++){const idx=r*8+c;
+    push(a,8+c,1+r,'qnt',idx===qsel?15:3);}
+  push(a,14,6,'mode',15,'QNT','fast'); // exit
+  renderGrid('g-scale',a,['scale','deg','deg','','root','root','r6','']);
+  renderLegend('lg-scale',['scale','keyw','keyb','keyon','qnt','mode']);
+})();
+
+/* ===================== PROB ===================== */
+(function(){
+  const a=[];
+  const cfg=[ // per channel: [noteTrig,harmTrig,probSel(0-3),probHit]
+    [0,0,3,false],[1,0,1,false],[0,1,2,true],[1,1,3,false],[0,0,0,false],[1,0,3,true]];
+  cfg.forEach((c,y)=>{
+    push(a,0,y,'step',c[0]===0?15:4); push(a,1,y,'step',c[0]===1?15:4);   // note hold/step
+    push(a,3,y,'step',c[1]===0?15:4); push(a,4,y,'step',c[1]===1?15:4);   // harm hold/step
+    for(let i=0;i<4;i++) push(a,11+i,y,'picker',i===c[2]?15:4);           // prob 25..100
+    push(a,15,y,'action',c[3]?14:4,null,c[3]?'slow':null);               // burst/hit
+  });
+  rowsTransport(a,[2]); push(a,13,6,'mode',15,'PRB','fast');
+  rowsParams(a,2,false);
+  renderGrid('g-prob',a);
+  renderLegend('lg-prob',['play','step','picker','action']);
+})();
+
+/* ===================== PERF ===================== */
+(function(){
+  const a=[];
+  const cfg=[ // [resetIdx0-3, octIdx0-4(center2), rateIdx0-4]
+    [1,2,2],[0,1,3],[2,2,1],[0,3,2],[1,0,4],[3,4,0]];
+  cfg.forEach((c,y)=>{
+    for(let i=0;i<4;i++) push(a,i,y,'step',i===c[0]?15:3);          // reset
+    for(let i=0;i<5;i++){ const base=i===2?5:3;
+      push(a,5+i,y,'step',i===c[1]?15:base);}                       // octave
+    for(let i=0;i<5;i++) push(a,11+i,y,'step',i===c[2]?15:3);       // rate
+  });
+  rowsTransport(a,[]); push(a,12,6,'mode',15,'PRF','fast');
+  rowsParams(a,2,false);
+  renderGrid('g-perf',a);
+  renderLegend('lg-perf',['play','step','mode']);
+})();
+
+/* ===================== SND ===================== */
+(function(){
+  const a=[];
+  const cfg=[ // [env0-2, geode0-2, harmEnv0-2, harmGeode0-2]
+    [0,0,0,0],[1,2,1,2],[2,1,0,1],[0,2,2,0],[1,0,1,2],[2,2,2,1]];
+  cfg.forEach((c,y)=>{
+    for(let m=0;m<3;m++) push(a,m,y,'step',m===c[0]?15:4);
+    for(let m=0;m<3;m++) push(a,4+m,y,'step',m===c[1]?15:4);
+    for(let m=0;m<3;m++) push(a,8+m,y,'step',m===c[2]?15:4);
+    for(let m=0;m<3;m++) push(a,12+m,y,'step',m===c[3]?15:4);
+  });
+  rowsTransport(a,[]); push(a,15,6,'mode',15,'SND','fast');
+  rowsParams(a,2,false);
+  renderGrid('g-snd',a);
+  renderLegend('lg-snd',['play','step','mode']);
+})();
+
+/* ===================== KB pages ===================== */
+function kbPage(id,bands){
+  const a=[];
+  // bands: [{rowOff, buf:[idx], existing:[idx]}]
+  bands.forEach(band=>{
+    for(let i=0;i<32;i++){ const x=i%16,y=band.rowOff+Math.floor(i/16);
+      let b=2,c='picker';
+      if(band.buf.includes(i)){b=15;c='play';}
+      else if(band.existing.includes(i)){b=6;c='present';}
+      push(a,x,y,c,b); }
+  });
+  push(a,11,6,'mode',15,'EX','fast'); // exit
+  for(let x=0;x<6;x++) push(a,x,7,'launch',x===0?15:4,x+1); // channel select (ch1)
+  push(a,13,7,'mode',15,'PG');  // page
+  push(a,14,7,'action',4,'CL'); // clear
+  renderGrid(id,a);
+}
+kbPage('g-kb1',[
+  {rowOff:0,buf:[0,3,5],existing:[7,9]},     // note
+  {rowOff:2,buf:[3,7],existing:[15]},        // div
+  {rowOff:4,buf:[1,1+0],existing:[3]},       // reps
+]);
+kbPage('g-kb2',[
+  {rowOff:0,buf:[10,18],existing:[24]},      // level
+  {rowOff:2,buf:[4,12,20],existing:[]},      // harm
+  {rowOff:4,buf:[6],existing:[14,2]},        // env
+]);
+renderLegend('lg-kb',['play','present','picker','mode','launch','action']);
+
+/* ===================== ACTION MODE ===================== */
+(function(){
+  const a=[];
+  // mid-page channel rows just sit dim (showing current param)
+  [[8,9],[4,7,11],[8,12,6,10],[5,9],[10,4],[7,11,8]].forEach((s,y)=>{
+    s.forEach((b,i)=>push(a,i,y,'step',Math.max(2,Math.floor(b*0.5))));
+  });
+  // row 6: channels lit at 10 awaiting tap; running ones slow-blink
+  for(let x=0;x<6;x++) push(a,x,6,'launch',10,x+1,x===2?'slow':null);
+  push(a,11,6,'mode',8,'KB');push(a,12,6,'mode',8,'PRF');
+  push(a,13,6,'mode',8,'PRB');push(a,14,6,'mode',8,'QNT');push(a,15,6,'mode',8,'SND');
+  // row 7: RND armed (fast blink)
+  const names=['div','rep','not','lvl','hrm','env'];
+  for(let x=0;x<6;x++) push(a,x,7,'param',x===2?15:5,names[x]);
+  push(a,11,7,'action',4,'CLR');push(a,12,7,'action',4,'CPY');
+  push(a,13,7,'action',4,'PST');push(a,14,7,'action',15,'RND','fast');
+  push(a,15,7,'action',4,'MUT');
+  renderGrid('g-act',a);
+  renderLegend('lg-act',['launch','step','param','action','mode']);
+})();
+
+/* ===================== GETTING STARTED walkthrough ===================== */
+(function(){
+  // A consistent "session": ch1 is the channel we build up across steps. Other
+  // channels show a single dim step so focus stays on ch1 (the gold ring marks
+  // the key to press). Brightnesses come from grid_ui's value_brightness:
+  //   note 0->4, 4->8, 7->11 · div 4->6, 8->8 · reps 2->6 · level ~.5->9
+  function base(o){
+    o=o||{}; const a=[];
+    // after CLR-all every channel holds one default step (note 0 -> brightness 4)
+    const rows=o.rows||[[4],[4],[4],[4],[4],[4]];
+    rows.forEach((steps,y)=>{
+      steps.forEach((b,i)=>push(a,i,y,'step',b));
+      if(steps.length<16) push(a,steps.length,y,'step',1); // dim append slot
+    });
+    if(o.playhead) push(a,o.playhead[1],o.playhead[0],'play',15);
+    rowsTransport(a,o.running||[]);
+    rowsParams(a,o.sel==null?2:o.sel,false);
+    return a;
+  }
+  // flag an existing cell (or add one) as the "press here" target
+  function tap(a,x,y){
+    for(const c of a){ if(c.x===x&&c.y===y){ c.tap=true; return; } }
+    push(a,x,y,'mode',8); a[a.length-1].tap=true;
+  }
+
+  // 0 — clear a channel (CLR armed, tap ch1 to apply)
+  let a=[];
+  // messy randomized rows, as on a fresh boot
+  [[6,11,4,9,7],[8,5,12],[4,10,6,8,5],[7,9,11],[11,5,8,6],[6,7,4,9]].forEach((s,y)=>{
+    s.forEach((b,i)=>push(a,i,y,'step',b));
+    if(s.length<16) push(a,s.length,y,'step',1);
+  });
+  for(let x=0;x<6;x++) push(a,x,6,'launch',10,x+1);   // channels awaiting a tap
+  push(a,11,6,'mode',8,'KB'); push(a,12,6,'mode',8,'PRF');
+  push(a,13,6,'mode',8,'PRB'); push(a,14,6,'mode',8,'QNT'); push(a,15,6,'mode',8,'SND');
+  ['div','rep','not','lvl','hrm','env'].forEach((t,x)=>push(a,x,7,'param',x===2?15:5,t));
+  push(a,11,7,'action',15,'CLR','fast');              // armed
+  push(a,12,7,'action',4,'CPY'); push(a,13,7,'action',4,'PST');
+  push(a,14,7,'action',4,'RND'); push(a,15,7,'action',4,'MUT');
+  for(let x=0;x<6;x++) tap(a,x,6);                     // tap every channel to clear all
+  renderGrid('g-t0',a);
+
+  // 1 — launch ch1: single-shot (cleared reps={1}), fires one note
+  a=base({running:[0],playhead:[0,0]}); tap(a,0,6);
+  renderGrid('g-t1',a);
+
+  // 2 — press the single note step
+  a=base(); tap(a,0,0);
+  renderGrid('g-t2',a);
+
+  // 3 — the step picker
+  a=[]; const chosen=7, present=[0,4];
+  for(let i=0;i<32;i++){ const x=i%16,y=Math.floor(i/16);
+    let b=2,c='picker';
+    if(i===chosen){b=15;c='play';} else if(present.includes(i)){b=6;c='present';}
+    push(a,x,y,c,b); }
+  tap(a,chosen%16,Math.floor(chosen/16));
+  rowsTransport(a,[]); rowsParams(a,2,false);
+  renderGrid('g-t3',a);
+
+  // 4 — add / remove (tap the append slot after the single note step)
+  a=base(); tap(a,1,0);
+  renderGrid('g-t4',a);
+
+  // 5 — div selected (still single-shot, not yet looping)
+  a=base({sel:0,rows:[[6],[4],[4],[4],[4],[4]]}); tap(a,0,7);
+  renderGrid('g-t5',a);
+
+  // 6 — reps gets a 2nd step -> channel loops, playhead walks
+  a=base({sel:1,running:[0],rows:[[6,6],[4],[4],[4],[4],[4]],playhead:[0,0]}); tap(a,1,7);
+  renderGrid('g-t6',a);
+
+  // 7 — tone (level selected, harm/env beside it); now looping
+  a=base({sel:3,running:[0],rows:[[9],[4],[4],[4],[4],[4]],playhead:[0,0]});
+  tap(a,3,7); tap(a,4,7); tap(a,5,7);
+  renderGrid('g-t7',a);
+
+  // 8 — scale picker (preset + root + quantize), QNT to exit
+  a=[];
+  const presets=['maj','min','pnt','dor','akb','hij','rst'];
+  presets.forEach((t,x)=>push(a,x,0,'scale',x===0?15:5,t));
+  const whiteCol={0:0,1:2,2:4,3:5,4:7,5:9,6:11}, blackCol={0:1,1:3,3:6,4:8,5:10};
+  const mask=[0,2,4,5,7,9,11];
+  for(const x in blackCol){const s=blackCol[x];push(a,+x,1,'keyb',mask.includes(s)?12:3);}
+  for(const x in whiteCol){const s=whiteCol[x];push(a,+x,2,mask.includes(s)?'keyon':'keyw',mask.includes(s)?12:4);}
+  for(const x in blackCol){const s=blackCol[x];push(a,+x,4,'keyb',s===0?15:3);}
+  for(const x in whiteCol){const s=whiteCol[x];push(a,+x,5,s===0?'keyon':'keyw',s===0?15:4);}
+  for(let r=0;r<4;r++)for(let c=0;c<8;c++){const idx=r*8+c;push(a,8+c,1+r,'qnt',idx===10?15:3);}
+  push(a,14,6,'mode',15,'QNT','fast');
+  tap(a,0,0); tap(a,0,5); // scale preset + root key (C)
+  renderGrid('g-t8',a,['scale','deg','deg','','root','root','r6','']);
+})();
+</script>
+</body>
+</html>
