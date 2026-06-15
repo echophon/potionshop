@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>potionshop — cheatsheet</title>
+<style>
+  /* Print-first: light background, ink-friendly, fits ~2 pages letter/A4 */
+  :root{
+    --ink:#15181f; --mut:#525a68; --dim:#838c9b; --line:#d2d7e0;
+    --acc:#0a7d6b; --acc2:#3550c8; --gold:#9a7400; --orange:#b4530a;
+    --purple:#6b3fb0; --bg:#fff; --soft:#f4f6f9;
+    --mono:'SF Mono',ui-monospace,'Cascadia Code',Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:#e9ecf1;color:var(--ink);font-family:var(--sans)}
+  .sheet{background:var(--bg);max-width:1040px;margin:18px auto;padding:20px 24px 26px;
+    box-shadow:0 2px 18px rgba(0,0,0,.12)}
+  code{font-family:var(--mono);font-size:.85em;background:var(--soft);padding:.05em .35em;border-radius:4px}
+
+  header.head{display:flex;align-items:flex-end;justify-content:space-between;
+    border-bottom:2px solid var(--ink);padding-bottom:8px;margin-bottom:12px;gap:16px;flex-wrap:wrap}
+  h1{font-size:24px;margin:0;letter-spacing:-.01em}
+  h1 span{color:var(--acc)}
+  .tagline{font-size:12px;color:var(--mut);margin-top:2px}
+  .glyph{font-family:var(--mono);font-size:9px;line-height:1.1;color:var(--acc);white-space:pre;text-align:right}
+
+  .cols{column-count:3;column-gap:18px}
+  @media(max-width:880px){.cols{column-count:2}}
+  @media(max-width:620px){.cols{column-count:1}}
+  .block{break-inside:avoid;border:1px solid var(--line);border-radius:8px;
+    padding:9px 11px 10px;margin:0 0 12px;background:var(--bg)}
+  .block h2{font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin:0 0 7px;
+    color:#fff;background:var(--acc);display:inline-block;padding:2px 8px;border-radius:5px}
+  .block.alt h2{background:var(--acc2)}
+  .block.warm h2{background:var(--orange)}
+  .block.gold h2{background:var(--gold)}
+  .block.pur h2{background:var(--purple)}
+
+  table{width:100%;border-collapse:collapse;font-size:11px}
+  td,th{text-align:left;padding:2px 4px;vertical-align:top;border-bottom:1px solid #eceff3}
+  th{font-family:var(--mono);font-size:9px;color:var(--mut);text-transform:uppercase;letter-spacing:.03em}
+  tr:last-child td{border-bottom:none}
+  td.k{font-family:var(--mono);color:var(--ink);white-space:nowrap;font-weight:600}
+  .dim{color:var(--mut)}
+
+  ul{margin:2px 0;padding-left:15px;font-size:11px}
+  li{margin:2px 0;color:var(--ink)}
+  li b{color:var(--ink)}
+  p.note{font-size:10.5px;color:var(--mut);margin:6px 0 0}
+
+  /* 16-cell labeled grid strip */
+  .strip{display:grid;grid-template-columns:repeat(16,1fr);gap:2px;margin:4px 0 2px}
+  .strip .cell{aspect-ratio:1/1;border-radius:3px;background:var(--soft);
+    border:1px solid var(--line);display:flex;align-items:center;justify-content:center;
+    font-family:var(--mono);font-size:6.5px;font-weight:700;color:var(--ink);
+    line-height:1;text-align:center;overflow:hidden;padding:1px}
+  .strip .cell.launch{background:#d7f3dc;border-color:#9fd9aa}
+  .strip .cell.mode{background:#e7ddfb;border-color:#c4a8f0}
+  .strip .cell.param{background:#dde6ff;border-color:#a8bcf2}
+  .strip .cell.action{background:#ffe6d2;border-color:#f2b487}
+  .strip .cell.val{background:#d2f1ec;border-color:#92ccc1}
+  .strip .cell.key{background:#fff;border-color:#c8cedb}
+  .strip .cell.keyon{background:#cdf3d6;border-color:#8ed79c}
+  .strip .cell.qnt{background:#eed7fb;border-color:#cba6ec}
+  .strip .cell.scale{background:#fbeec2;border-color:#e3c869}
+  .strip .cell.off{background:#fafbfc;border-color:#eceef2;color:#c2c8d2}
+  .ruler{display:grid;grid-template-columns:repeat(16,1fr);gap:2px;margin-bottom:1px}
+  .ruler span{font-family:var(--mono);font-size:6px;color:var(--dim);text-align:center}
+  .legend{font-size:9.5px;color:var(--mut);margin-top:4px;display:flex;flex-wrap:wrap;gap:3px 9px}
+  .legend i{display:inline-flex;align-items:center;gap:3px;font-style:normal}
+  .legend i b{width:8px;height:8px;border-radius:2px;display:inline-block;border:1px solid var(--line)}
+
+  .printbar{max-width:1040px;margin:18px auto -6px;text-align:right}
+  .printbar button{font-family:var(--sans);font-size:12px;padding:6px 14px;border-radius:7px;
+    border:1px solid var(--acc);background:var(--acc);color:#fff;cursor:pointer}
+  .printbar button:hover{filter:brightness(1.08)}
+
+  @media print{
+    html,body{background:#fff}
+    .sheet{box-shadow:none;margin:0;max-width:none;padding:0}
+    .printbar{display:none}
+    @page{size:auto;margin:12mm}
+    .block{border-color:#cfd4dd}
+  }
+</style>
+</head>
+<body>
+<div class="printbar"><button onclick="window.print()">⎙ print / save PDF</button></div>
+<div class="sheet">
+
+  <header class="head">
+    <div>
+      <h1><span>potion</span>shop · cheatsheet</h1>
+      <div class="tagline">six-channel FM burst sequencer · monome norns + grid 16×8 · cols 0–15 / rows 0–7</div>
+    </div>
+<div class="glyph">    _/ .    _  /
+ /)()//()/)_) /)()/)
+/            /</div>
+  </header>
+
+  <!-- ===== grid frame strips ===== -->
+  <div class="block alt" style="break-inside:avoid">
+    <h2>Grid at a glance</h2>
+    <table style="margin-bottom:6px"><tr>
+      <td class="k">rows 0–5</td><td>the six channels — show/edit the <b>selected param</b> (row 7) of the current A/B layer</td>
+    </tr></table>
+
+    <div class="dim" style="font-family:var(--mono);font-size:9px;margin:6px 0 1px">ROW 6 — transport / pages</div>
+    <div class="ruler" id="r6ruler"></div>
+    <div class="strip" id="r6"></div>
+
+    <div class="dim" style="font-family:var(--mono);font-size:9px;margin:8px 0 1px">ROW 7 — param select / channel actions</div>
+    <div class="strip" id="r7"></div>
+
+    <div class="legend">
+      <i><b style="background:#d7f3dc"></b>launch / channel</i>
+      <i><b style="background:#e7ddfb"></b>page button</i>
+      <i><b style="background:#dde6ff"></b>param select</i>
+      <i><b style="background:#ffe6d2"></b>action</i>
+      <i><b style="background:#fafbfc"></b>unused</i>
+    </div>
+  </div>
+
+  <div class="cols">
+
+    <!-- params -->
+    <div class="block">
+      <h2>The six params (row 7 · cols 0–5)</h2>
+      <table>
+        <tr><th>param</th><th>does</th><th>range</th></tr>
+        <tr><td class="k">div</td><td>hit spacing = <code>4/div</code> beats</td><td>1–32</td></tr>
+        <tr><td class="k">reps</td><td>hits per burst (<code>-1</code>=∞)</td><td>1–31,−1</td></tr>
+        <tr><td class="k">note</td><td>scale degree</td><td>0–31</td></tr>
+        <tr><td class="k">level</td><td>amp + geode "run CV"</td><td>0–1</td></tr>
+        <tr><td class="k">harm</td><td>FM ratio / brightness</td><td>2–25</td></tr>
+        <tr><td class="k">env</td><td>staccato → legato</td><td>0–1</td></tr>
+      </table>
+      <p class="note">Each param has its own <b>A</b> + <b>B</b> sequence per channel. B is an additive offset (adds value <code>0</code> = none).</p>
+    </div>
+
+    <!-- gestures -->
+    <div class="block warm">
+      <h2>Gestures</h2>
+      <table>
+        <tr><td>press a step</td><td class="dim">→ step picker</td></tr>
+        <tr><td>press dim append slot</td><td class="dim">→ add step + picker</td></tr>
+        <tr><td>in picker, press lit value</td><td class="dim">→ remove step</td></tr>
+        <tr><td>press selected param again</td><td class="dim">→ flip A⇄B</td></tr>
+        <tr><td>press a page button again</td><td class="dim">→ back to MAIN</td></tr>
+        <tr><td>arm action, tap a channel</td><td class="dim">→ apply it</td></tr>
+      </table>
+      <p class="note"><b>Blink:</b> fast = "you are here" (active page / armed action) · slow = latched (B layer, or a toggle that's on).</p>
+    </div>
+
+    <!-- actions -->
+    <div class="block">
+      <h2>Actions (row 7 · cols 11–15)</h2>
+      <table>
+        <tr><td class="k">CLR</td><td>reset A seqs to default</td></tr>
+        <tr><td class="k">COPY</td><td>snapshot A layer</td></tr>
+        <tr><td class="k">PASTE</td><td>write snapshot to A</td></tr>
+        <tr><td class="k">RND</td><td>scramble (grid-reachable)</td></tr>
+        <tr><td class="k">MUT</td><td>nudge values ±</td></tr>
+      </table>
+      <p class="note">Armed, not instant: press to arm (blinks), tap a channel to apply. CLR/COPY/PASTE touch the <b>A</b> layer only.</p>
+    </div>
+
+    <!-- PROB -->
+    <div class="block pur">
+      <h2>PROB page (row 6 · col 13)</h2>
+      <table>
+        <tr><th>cols</th><th>control</th></tr>
+        <tr><td class="k">0–1</td><td>note alt-trig: hold / step</td></tr>
+        <tr><td class="k">3–4</td><td>harm alt-trig: hold / step</td></tr>
+        <tr><td class="k">11–14</td><td>prob 25 / 50 / 75 / 100%</td></tr>
+        <tr><td class="k">15</td><td>gate burst (off) / each hit (on)</td></tr>
+      </table>
+      <p class="note"><b>step</b> = arpeggiate: B sequence advances per hit over the held A value.</p>
+    </div>
+
+    <!-- PERF -->
+    <div class="block pur">
+      <h2>PERF page (row 6 · col 12)</h2>
+      <table>
+        <tr><th>cols</th><th>control</th></tr>
+        <tr><td class="k">0–3</td><td>reset: off / 1 / 2 / 4 bars</td></tr>
+        <tr><td class="k">5–9</td><td>octave: −2 −1 <b>0</b> +1 +2</td></tr>
+        <tr><td class="k">11–15</td><td>rate: .25 .5 1 2 4×</td></tr>
+      </table>
+      <p class="note">reset rewinds seqs + re-anchors a running burst to the bar (keeps duplicates locked).</p>
+    </div>
+
+    <!-- SND -->
+    <div class="block pur">
+      <h2>SND page (row 6 · col 15)</h2>
+      <table>
+        <tr><th>cols</th><th>bank · options</th></tr>
+        <tr><td class="k">0–2</td><td>env: shape / burst / hit</td></tr>
+        <tr><td class="k">4–6</td><td>geode: transient / sustain / cycle</td></tr>
+        <tr><td class="k">8–10</td><td>h.env: off / hit / burst</td></tr>
+        <tr><td class="k">12–14</td><td>harm geode: transient / sustain / cycle</td></tr>
+      </table>
+      <p class="note">Both geodes always on (shaping curves). <code>level</code> drives them: 0.5 neutral.</p>
+    </div>
+
+    <!-- scale -->
+    <div class="block gold">
+      <h2>Scale picker (QNT · row 6 col 14)</h2>
+      <table>
+        <tr><td class="k">row 0 / 0–6</td><td>7 scale presets</td></tr>
+        <tr><td class="k">rows 1–2</td><td>degree keys (mask) — piano</td></tr>
+        <tr><td class="k">rows 4–5</td><td>root keys — pick tonic</td></tr>
+        <tr><td class="k">r1–4 / 8–15</td><td>quantize 8×4 (snap grid)</td></tr>
+      </table>
+      <p class="note">Black row above white; cols 2 &amp; 6 have no black key. Press QNT again to exit.</p>
+    </div>
+
+    <!-- KB -->
+    <div class="block">
+      <h2>Keyboard mode (KB · row 6 col 11)</h2>
+      <table>
+        <tr><td class="k">pg1 rows</td><td>note (0–1) div (2–3) reps (4–5)</td></tr>
+        <tr><td class="k">pg2 rows</td><td>level (0–1) harm (2–3) env (4–5)</td></tr>
+        <tr><td class="k">r7 0–5</td><td>pick channel (again = B layer)</td></tr>
+        <tr><td class="k">r7 13/14</td><td>page / clear buffers</td></tr>
+        <tr><td class="k">r6 11</td><td>exit (commits buffers)</td></tr>
+      </table>
+      <p class="note">Tap cells to append into the band; commits live as you go.</p>
+    </div>
+
+    <!-- screen -->
+    <div class="block alt">
+      <h2>Screen · encoders &amp; keys</h2>
+      <table>
+        <tr><td class="k">E1</td><td>select channel 1–6</td></tr>
+        <tr><td class="k">E2</td><td>walk cursor (run → steps → <code>_</code>)</td></tr>
+        <tr><td class="k">E3</td><td>edit value · run: R=launch L=stop</td></tr>
+        <tr><td class="k">K2/K3</td><td>page: main·alt·snd·prob·perf</td></tr>
+        <tr><td class="k">K1</td><td>norns system menu</td></tr>
+      </table>
+      <p class="note">E3 below lowest = remove step · on <code>_</code> turn R = append. main=A, alt=B (synced to grid).</p>
+    </div>
+
+    <!-- outputs -->
+    <div class="block">
+      <h2>Outputs (PARAMETERS ▸ OUTPUTS)</h2>
+      <table>
+        <tr><td class="k">audio</td><td>internal FM (default)</td></tr>
+        <tr><td class="k">midi</td><td>note + CC1 = harmonicity</td></tr>
+        <tr><td class="k">crow 1+2</td><td>v/oct + AR env</td></tr>
+        <tr><td class="k">crow 3+4</td><td>v/oct + AR env</td></tr>
+        <tr><td class="k">crow ii jf</td><td>Just Friends, voice = ch</td></tr>
+        <tr><td class="k">crow ii er301</td><td>ER-301, port = ch</td></tr>
+      </table>
+      <p class="note">Tempo lives in the norns CLOCK menu (boots at 55 bpm). All state saved in PSETs.</p>
+    </div>
+
+    <!-- concepts -->
+    <div class="block">
+      <h2>Concepts in one line</h2>
+      <ul>
+        <li><b>burst</b> = <code>reps</code> hits, <code>4/div</code> apart, then repeat</li>
+        <li><b>sequins</b> = looping value list, advances per burst</li>
+        <li><b>A/B</b> = base seq + additive offset seq</li>
+        <li><b>geode</b> = per-hit amp/ratio shaping curve</li>
+        <li><b>quantize</b> = shared forward-snap grid</li>
+        <li><b>reset</b> = rewind seqs every 1/2/4 bars</li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+<script>
+/* row 6 / row 7 labeled strips */
+function strip(id, cells, ruler){
+  const el=document.getElementById(id);
+  for(let x=0;x<16;x++){
+    const c=cells[x]||{cls:'off',t:''};
+    const d=document.createElement('div');
+    d.className='cell '+c.cls; d.textContent=c.t||''; el.appendChild(d);
+  }
+  if(ruler){const r=document.getElementById(ruler);
+    for(let x=0;x<16;x++){const s=document.createElement('span');s.textContent=x;r.appendChild(s);}}
+}
+const r6=[];
+for(let x=0;x<6;x++) r6[x]={cls:'launch',t:'L'+(x+1)};
+[6,7,8,9,10].forEach(x=>r6[x]={cls:'off'});
+r6[11]={cls:'mode',t:'KB'}; r6[12]={cls:'mode',t:'PERF'};
+r6[13]={cls:'mode',t:'PROB'}; r6[14]={cls:'mode',t:'QNT'}; r6[15]={cls:'mode',t:'SND'};
+strip('r6',r6,'r6ruler');
+
+const r7=[];
+['div','rep','note','lvl','harm','env'].forEach((t,x)=>r7[x]={cls:'param',t});
+[6,7,8,9,10].forEach(x=>r7[x]={cls:'off'});
+r7[11]={cls:'action',t:'CLR'}; r7[12]={cls:'action',t:'COPY'};
+r7[13]={cls:'action',t:'PASTE'}; r7[14]={cls:'action',t:'RND'}; r7[15]={cls:'action',t:'MUT'};
+strip('r7',r7);
+</script>
+</body>
+</html>

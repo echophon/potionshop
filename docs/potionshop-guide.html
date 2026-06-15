@@ -263,11 +263,11 @@
         <div class="thead"><div class="tbadge"></div><h3>Make a sound</h3></div>
         <div class="body">
           <p>Each of the six rows is a <b>channel</b> — an independent voice. Launch <b>channel&nbsp;1</b> to fire it.</p>
-          <p>Because we just cleared it, the channel sits at its defaults: a single <code>note</code> and <code>reps&nbsp;=&nbsp;1</code>. <b>A cleared channel fires just one note.</b> A <code>reps</code> sequence with a single step is <em>single-shot</em> — it plays one hit and stops, so the launch light flashes, sounds, then releases. Press it again to re-fire. This is the simplest possible <b>burst</b>: one hit. Looping only kicks in once <code>reps</code> has more than one step (step 6) — the next steps build the channel up to that.</p>
-          <span class="do">▸ press <b>row&nbsp;6 · col&nbsp;0</b> &nbsp;(launch ch1) — hear one note</span>
+          <p>Because we just cleared it, the channel sits at its defaults: a single <code>note</code> and <code>reps&nbsp;=&nbsp;3</code>. <b>A cleared channel fires one burst — three quick hits — then stops.</b> What makes it stop is the <em>length</em> of the <code>reps</code> sequence, not the number: a <code>reps</code> sequence with a single step is <em>single-shot</em>, so it plays its one burst and the launch light flashes, sounds, then releases. Press it again to re-fire. Looping only kicks in once <code>reps</code> has more than one step (step 6) — the next steps build the channel up to that.</p>
+          <span class="do">▸ press <b>row&nbsp;6 · col&nbsp;0</b> &nbsp;(launch ch1) — hear a 3-hit burst</span>
         </div>
         <div class="pagefig tfig">
-          <div class="figtitle"><span class="pill">MAIN</span> ch1 fires a single note, then stops (cleared default)</div>
+          <div class="figtitle"><span class="pill">MAIN</span> ch1 fires one 3-hit burst, then stops (cleared default)</div>
           <div class="gridwrap"><div class="grid" id="g-t1"></div></div>
         </div>
       </div>
@@ -333,7 +333,7 @@
         <div class="thead"><div class="tbadge"></div><h3>Change density — <code>reps</code></h3></div>
         <div class="body">
           <p><b>Select <code>reps</code></b> (row 7, col 1): how many hits each burst fires before it waits and repeats. Combined with <code>div</code>, this is the heart of the "burst" feel — a few fast hits, then space.</p>
-          <p><b>This is what makes the channel loop.</b> While <code>reps</code> has a single step the channel is single-shot (step 1's one note). <b>Add a second <code>reps</code> step</b> — press the append slot and pick a value — and the channel now cycles continuously; the bright <b>playhead</b> starts walking the row as it repeats.</p>
+          <p><b>This is what makes the channel loop.</b> While <code>reps</code> has a single step the channel is single-shot (step 1's lone burst). <b>Add a second <code>reps</code> step</b> — press the append slot and pick a value — and the channel now cycles continuously; the bright <b>playhead</b> starts walking the row as it repeats.</p>
           <span class="do">▸ press <b>row 7 · col 1</b> &nbsp;(<code>reps</code>), then add a 2nd step to loop</span>
         </div>
         <div class="pagefig tfig">
@@ -601,7 +601,7 @@
       <tr><td>0–2</td><td>env (amp decay timing)</td><td><b>shape</b> = length tracks the inter-hit gap · <b>burst</b> = decays over the whole burst · <b>hit</b> = per-hit length</td></tr>
       <tr><td>4–6</td><td>geode (amp per-hit)</td><td><b>transient</b> (sawtooth accent) · <b>sustain</b> (triangle fold) · <b>cycle</b> (sinusoidal) — always on</td></tr>
       <tr><td>8–10</td><td>h.env (harm sweep timing)</td><td><b>off</b> (static ratio) · <b>hit</b> (bright→clean per hit) · <b>burst</b> (slow sweep across the burst)</td></tr>
-      <tr><td>12–14</td><td>harm (harm per-hit geode)</td><td><b>fast</b> · <b>med</b> · <b>slow</b> — how the per-hit FM-ratio geode moves; always on</td></tr>
+      <tr><td>12–14</td><td>harm (harm per-hit geode)</td><td><b>transient</b> (sawtooth accent) · <b>sustain</b> (triangle fold) · <b>cycle</b> (sinusoidal) — the per-hit FM-ratio geode curve; always on</td></tr>
     </table>
     <p class="muted" style="font-size:14px">The two <em>geode</em> banks are always active — they're shaping curves, not on/off switches. The <em>level</em> value (0–1) acts as the bipolar "run CV" feeding both: 0.5 is neutral, the extremes push the curve hardest. randomize/mutate deliberately leave these mode selections alone.</p>
   </div>
@@ -1070,11 +1070,11 @@ renderLegend('lg-kb',['play','present','picker','mode','launch','action']);
   for(let x=0;x<6;x++) tap(a,x,6);                     // tap every channel to clear all
   renderGrid('g-t0',a);
 
-  // 1 — launch ch1: single-shot (cleared reps={1}), fires one note
+  // 1 — launch ch1: single-shot (cleared reps={3}, length 1), fires one 3-hit burst
   a=base({running:[0],playhead:[0,0]}); tap(a,0,6);
   renderGrid('g-t1',a);
 
-  // 2 — press the single note step
+  // 2 — press the note step
   a=base(); tap(a,0,0);
   renderGrid('g-t2',a);
 
@@ -1092,12 +1092,12 @@ renderLegend('lg-kb',['play','present','picker','mode','launch','action']);
   a=base(); tap(a,1,0);
   renderGrid('g-t4',a);
 
-  // 5 — div selected (still single-shot, not yet looping)
-  a=base({sel:0,rows:[[6],[4],[4],[4],[4],[4]]}); tap(a,0,7);
+  // 5 — div selected (still single-shot, not yet looping); div default 8 -> brightness 8
+  a=base({sel:0,rows:[[8],[4],[4],[4],[4],[4]]}); tap(a,0,7);
   renderGrid('g-t5',a);
 
-  // 6 — reps gets a 2nd step -> channel loops, playhead walks
-  a=base({sel:1,running:[0],rows:[[6,6],[4],[4],[4],[4],[4]],playhead:[0,0]}); tap(a,1,7);
+  // 6 — reps gets a 2nd step -> channel loops, playhead walks; reps 3 -> brightness 7
+  a=base({sel:1,running:[0],rows:[[7,7],[4],[4],[4],[4],[4]],playhead:[0,0]}); tap(a,1,7);
   renderGrid('g-t6',a);
 
   // 7 — tone (level selected, harm/env beside it); now looping
