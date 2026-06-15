@@ -25,25 +25,18 @@ whose rhythm, pitch, density and tone come from a stack of looping value sequenc
 
 ## install
 
-copy the script folder to norns so it lands at `~/dust/code/potionshop`:
+in the maiden REPL type:
 
-the folder name **must** be `potionshop` so `engine.name = "Potionshop"` resolves
-`lib/Engine_Potionshop.sc`.
+```
+;install https://github.com/echophon/potionshop/archive/refs/tags/v0.1.zip
+```
+
+on initial install, Norns will need to be restarted to load the new engine.
 
 ## start
 
-recommended: launch the script from the norns
-[SELECT](https://monome.org/docs/norns/play/#select) menu.
-
-or load it from the maiden
-[REPL](https://monome.org/docs/norns/maiden/#repl):
-
-```
-norns.script.load('/home/we/dust/code/potionshop/potionshop.lua')
-```
-
-a grid auto-connects via `grid.connect()`. the script seeds 55 bpm on init (the
-web default); tempo & clock source live in the norns system **CLOCK** menu.
+on initial load, each channel sequence is randomized.  launch one or more channels from row 6 on the lower left corner.
+these will likely loop at different intervals creating evolving sequences.  refer to the guide for a step-by-step tutorial on the components of a sequence.
 
 ## grid UI
 
@@ -313,7 +306,9 @@ ER-301) destinations the web app never had.
 
 ## credits
 
-- native norns port of the browser app **potionshop**, descended from the
-  **`er301_geode`** patch.
-- built on monome's stock `sequins` and `musicutil` libraries.
-- screen surface in the spirit of `less concepts` (vicimity / dndrks).
+- built on monome's stock `sequins` by @trentgill @tyleretters and `musicutil` by @markeats.
+- bursts are heavily influenced by Just Type 'geode' mode by @trentgill
+
+## LLM disclosure
+
+potionshop code & docs have been built with the assistance from Claude Code.  
