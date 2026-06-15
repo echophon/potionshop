@@ -306,8 +306,9 @@ ER-301) destinations the web app never had.
 
 ## credits
 
-- built on monome's stock `sequins` by @trentgill @tyleretters and `musicutil` by @markeats.
+- built on monome's stock `sequins` by @trentgill & @tyleretters and `musicutil` by @markeats.
 - bursts are heavily influenced by Just Type 'geode' mode by @trentgill
+- A/B sequences influence from kria by @tehn & @zebra
 
 ## LLM disclosure
 
