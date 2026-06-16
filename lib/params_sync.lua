@@ -51,6 +51,10 @@ local PROB_PCT_NAMES = {}
 for i, v in ipairs(GridUI.PROB_VALUES) do PROB_PCT_NAMES[i] = (v * 100) .. '%' end
 local ALT_TRIG_NAMES = GridUI.ALT_TRIG_MODE_NAMES
 local NOTE_NAMES = {'C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'}
+-- pitch-class name -> semitone, accepting sharps, flats, case-insensitively.
+local NAME_TO_PC = {}
+for i, nm in ipairs(NOTE_NAMES) do NAME_TO_PC[string.lower(nm)] = i - 1 end
+for nm, pc in pairs({db = 1, eb = 3, gb = 6, ab = 8, bb = 10}) do NAME_TO_PC[nm] = pc end
 
 local function round(x) return math.floor(x + 0.5) end
 local function clamp(v, lo, hi) return math.max(lo, math.min(hi, v)) end
@@ -94,6 +98,30 @@ function M.parse_token(p, layer, tok)
     return clamp(round(n), 0, 31) / 31
   end
   return SPV[p][GridUI.nearest_index(SPV[p], n)]
+end
+
+-- keymask <-> text. The note mask is viewed/edited/stored like a sequence
+-- string: a space-separated list of pitch-class names (c, c#, ...). Tokens
+-- accept note names (sharp or flat) or bare semitone numbers; everything maps
+-- to a pitch class 0..11, the same discrete set the grid's note-mask keyboard
+-- reaches. mask_from_text dedups but preserves order; the controller's set_mask
+-- sorts on commit (so the reflected text comes back canonical).
+function M.mask_to_text(mask)
+  local toks = {}
+  for _, s in ipairs(mask) do toks[#toks + 1] = NOTE_NAMES[(s % 12) + 1] end
+  return table.concat(toks, ' ')
+end
+
+function M.mask_from_text(str)
+  local out, seen = {}, {}
+  for tok in tostring(str or ''):gmatch('%S+') do
+    local pc
+    local n = tonumber(tok)
+    if n ~= nil then pc = math.floor(n) % 12
+    else pc = NAME_TO_PC[string.lower(tok)] end
+    if pc ~= nil and not seen[pc] then seen[pc] = true; out[#out + 1] = pc end
+  end
+  return out
 end
 
 function M.to_text(p, layer, vals)
@@ -174,11 +202,24 @@ function M:add_globals()
     for _, v in ipairs(self.scales.by_name[name]) do
       controller.customMask[#controller.customMask + 1] = v
     end
+    self:reflect_globals()  -- keep the keymask text in step with the chosen scale
     self:request_render()
   end)
 
   params:add_option('root', 'root', NOTE_NAMES, (eng.root or 0) + 1)
   params:set_action('root', function(i) eng.root = i - 1; self:request_render() end)
+
+  -- the note mask, edited/stored as a sequence-like string of pitch-class names.
+  -- Commits through the controller's set_mask (the one set-the-whole-mask path),
+  -- so it behaves exactly like a grid note-mask edit; an empty/invalid string is
+  -- refused (a scale needs a degree) and the display restored.
+  params:add_text('keymask', 'key mask', M.mask_to_text(eng.scale))
+  params:set_action('keymask', function(str)
+    local mask = M.mask_from_text(str)
+    if #mask > 0 then self.controller:set_mask(mask)
+    else self:reflect_globals() end
+    self:request_render()
+  end)
 
   params:add_number('quantize', 'quantize (per whole note)', 1, 32, clamp(eng.quantize, 1, 32))
   params:set_action('quantize', function(v) eng.quantize = v; self:request_render() end)
@@ -458,6 +499,9 @@ function M:reflect_globals()
   local params = self.params
   params:set('quantize', clamp(self.engine.quantize, 1, 32), true)
   params:set('root', clamp((self.engine.root or 0) + 1, 1, 12), true)
+  if params:lookup_param('keymask') then
+    params:set('keymask', M.mask_to_text(self.engine.scale), true)
+  end
   -- a custom note mask has no preset index; leave the option untouched then
   local si = self:_scale_index(self.engine.scale)
   if si then params:set('scale', si, true) end

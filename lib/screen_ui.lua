@@ -17,17 +17,22 @@
 --   E3 = edit under the cursor. run: right = launch, left = stop. steps:
 --        change the value (grid-reachable snapped); decrement below the
 --        lowest value to remove the step; on `_`, increment to append one.
---   K2 / K3 = page back / forward (main · alt · snd · prob · perf, clamped)
+--   K2 / K3 = page back / forward (main · alt · perf · prob · scale · snd,
+--        clamped; order mirrors the grid's row-6 button layout)
 --   K1 = untouched — left to the norns system menus
 --
 -- Pages: `main` edits launch + the six A-layer param sequences (via the same
 -- commit_step path the grid uses); `alt` is its clone for the B (additive
 -- offset) layer, snapping to the same extended value set params_sync uses
--- (literal 0 = no offset, plus the picker grid); `snd` / `prob` / `perf` edit
--- the selected channel's mode fields — the same fields the grid's soundMode/
--- probMode/perfMode presses set, picking only from GridUI's shared value
--- tables. The grid's PERF/PROB/SND buttons still switch the matching pages;
--- the screen tab follows, and main/alt drive the grid's paramLayer.
+-- (literal 0 = no offset, plus the picker grid); `perf` / `prob` / `snd` edit
+-- the selected channel's mode fields — the same fields the grid's perfMode/
+-- probMode/soundMode presses set, picking only from GridUI's shared value
+-- tables; `scale` edits the global musical state (root, key mask, quantize)
+-- the grid's scale picker drives — its E2 cursor walks root, the twelve
+-- chromatic keys, then quantize, and E3 sets/toggles via the controller's
+-- set_root / set_mask / set_quantize. The grid's PERF/PROB/QNT/SND buttons
+-- still switch the matching pages (QNT opens the shared scale picker); the
+-- screen tab follows, and main/alt drive the grid's paramLayer.
 --
 -- Redraw model: state changes set `dirty`; the host calls tick() at ~15 Hz
 -- (piggybacking on the strobe metro) and we repaint only when dirty — the
@@ -37,8 +42,13 @@ local seqx   = require 'seqx'
 local GridUI = require 'grid_ui'
 
 local PARAMS = {'div', 'reps', 'note', 'level', 'harm', 'env'}
-local PAGES  = {'main', 'alt', 'snd', 'prob', 'perf'}
-local LINES_PER_PAGE = {1 + #PARAMS, 1 + #PARAMS, 4, 4, 3}  -- main/alt line 1 = run
+-- Page order mirrors the grid's row-6 button layout (perf · prob · scale · snd),
+-- after the two sequence pages. K2/K3 walk this list; the grid mode buttons map
+-- onto the same pages (see _sync_page_from_grid).
+local PAGES  = {'main', 'alt', 'perf', 'prob', 'scale', 'snd'}
+-- main/alt line 1 = run. scale = root + 12 chromatic keys + quantize = 14 stops.
+local LINES_PER_PAGE = {1 + #PARAMS, 1 + #PARAMS, 3, 4, 14, 4}
+local PAGE_PERF, PAGE_PROB, PAGE_SCALE, PAGE_SND = 3, 4, 5, 6
 
 local NOTE_NAMES = {'c','c#','d','d#','e','f','f#','g','g#','a','a#','b'}
 
@@ -89,7 +99,7 @@ function Screen.new(engine, controller)
   self.SPV = controller.STEP_PICKER_VALUES
   self.sel_ch = 0
   self._focus_seen = 0  -- last grid focusSeq adopted (edge-trigger; see _sync_focus_from_grid)
-  self.sel_line = {4, 4, 1, 1, 1}  -- per-page focused line (main/alt default to note)
+  self.sel_line = {4, 4, 1, 1, 1, 1}  -- per-page focused line (main/alt default to note)
   self.sel_step = 0
   self.page = 1
   self.dirty = true
@@ -214,10 +224,17 @@ end
 function Screen:set_page(p)
   self.page = ((p - 1) % #PAGES) + 1
   local c = self.ctl
-  c.picker = nil; c.kbMode = false; c.actionMode = nil
-  c.soundMode = (self.page == 3)
-  c.probMode  = (self.page == 4)
-  c.perfMode = (self.page == 5)
+  c.kbMode = false; c.actionMode = nil
+  c.perfMode  = (self.page == PAGE_PERF)
+  c.probMode  = (self.page == PAGE_PROB)
+  c.soundMode = (self.page == PAGE_SND)
+  -- the scale page shares the grid's scale picker, so the grid follows the
+  -- screen onto it (and the keymask/root/quantize stay one source of truth)
+  if self.page == PAGE_SCALE then
+    if not (c.picker and c.picker.kind == 'scale') then c:open_scale_picker() end
+  else
+    c.picker = nil
+  end
   if self:_seq_page() then
     c.paramLayer = self:layer()
     self:_clamp_step()
@@ -232,7 +249,8 @@ end
 -- row-7 param (the double-press that flips A↔B) swaps the screen to main/alt.
 function Screen:_sync_page_from_grid()
   local c = self.ctl
-  self.page = c.soundMode and 3 or c.probMode and 4 or c.perfMode and 5
+  self.page = (c.picker and c.picker.kind == 'scale') and PAGE_SCALE
+    or c.perfMode and PAGE_PERF or c.probMode and PAGE_PROB or c.soundMode and PAGE_SND
     or ((c.paramLayer == 'B') and 2 or 1)
 end
 
@@ -277,10 +295,41 @@ end
 
 function Screen:_edit_value(d)
   if self:_seq_page() then self:_edit_main(d)
-  elseif self.page == 3 then self:_edit_snd(d)
-  elseif self.page == 4 then self:_edit_prob(d)
-  elseif self.page == 5 then self:_edit_perf(d) end
+  elseif self.page == PAGE_PERF then self:_edit_perf(d)
+  elseif self.page == PAGE_PROB then self:_edit_prob(d)
+  elseif self.page == PAGE_SCALE then self:_edit_scale(d)
+  elseif self.page == PAGE_SND then self:_edit_snd(d) end
   self.ctl:render_all()
+end
+
+-- Scale page cursor: line 1 = root, lines 2..13 = the twelve chromatic keys
+-- (pitch class = line - 2), line 14 = quantize. E3 turns right/left to raise or
+-- lower root/quantize; on a key, right adds it to the mask, left removes it
+-- (mirroring the run line's right=on / left=off feel). All edits route through
+-- the controller's global setters so on_edit reflects them into the params.
+function Screen:_edit_scale(d)
+  local c = self.ctl
+  local line = self.sel_line[PAGE_SCALE]
+  if line == 1 then
+    c:set_root(((self.engine.root or 0) + d) % 12)
+  elseif line == LINES_PER_PAGE[PAGE_SCALE] then
+    c:set_quantize(self.engine.quantize + d)
+  else
+    local pc = line - 2
+    local cur, has = {}, false
+    for _, s in ipairs(self.engine.scale) do
+      cur[#cur + 1] = s % 12
+      if s % 12 == pc then has = true end
+    end
+    if d > 0 and not has then
+      cur[#cur + 1] = pc
+      c:set_mask(cur)
+    elseif d < 0 and has then
+      local nxt = {}
+      for _, s in ipairs(cur) do if s ~= pc then nxt[#nxt + 1] = s end end
+      c:set_mask(nxt)  -- set_mask refuses to empty the scale (keeps the last degree)
+    end
+  end
 end
 
 function Screen:_edit_main(d)
@@ -336,7 +385,7 @@ end
 function Screen:_edit_snd(d)
   local ch = self.sel_ch
   local c = self.engine.channels[ch + 1]
-  local line = self.sel_line[3]
+  local line = self.sel_line[PAGE_SND]
   if line == 1 then self.ctl:set_scalar(ch, 'envMode', clamp(c.envMode + d, 0, #GridUI.ENV_MODE_NAMES - 1))
   elseif line == 2 then self.ctl:set_scalar(ch, 'geodeMode', clamp(c.geodeMode + d, 0, #GridUI.GEODE_MODE_NAMES - 1))
   elseif line == 3 then self.ctl:set_scalar(ch, 'harmEnvMode', clamp(c.harmEnvMode + d, 0, #GridUI.HARM_ENV_MODE_NAMES - 1))
@@ -347,7 +396,7 @@ end
 function Screen:_edit_prob(d)
   local ch = self.sel_ch
   local c = self.engine.channels[ch + 1]
-  local line = self.sel_line[4]
+  local line = self.sel_line[PAGE_PROB]
   if line == 1 then
     -- step the discrete 25/50/75/100% set shared with the grid prob page
     self.ctl:set_scalar(ch, 'burstProb', step_table(c.burstProb, GridUI.PROB_VALUES, d))
@@ -363,7 +412,7 @@ end
 function Screen:_edit_perf(d)
   local ch = self.sel_ch
   local c = self.engine.channels[ch + 1]
-  local line = self.sel_line[5]
+  local line = self.sel_line[PAGE_PERF]
   if line == 1 then
     self.ctl:set_scalar(ch, 'resetInterval', step_table(c.resetInterval, GridUI.RESET_INTERVALS, d))
   elseif line == 2 then
@@ -519,21 +568,21 @@ function Screen:page_lines()
     return lines
   end
   local lines
-  if self.page == 3 then
+  if self.page == PAGE_SND then
     lines = {
       {'env',   GridUI.ENV_MODE_NAMES[c.envMode + 1]},
       {'geode', GridUI.GEODE_MODE_NAMES[c.geodeMode + 1]},
       {'h.env', GridUI.HARM_ENV_MODE_NAMES[c.harmEnvMode + 1]},
       {'harm',  GridUI.HARM_GEODE_NAMES[c.harmEnv + 1]},
     }
-  elseif self.page == 4 then
+  elseif self.page == PAGE_PROB then
     lines = {
       {'prob', round(c.burstProb * 100) .. '%'},
       {'mode', c.probHit and 'hit' or 'burst'},
       {'note', GridUI.ALT_TRIG_MODE_NAMES[c.altTrig + 1]},
       {'harm', GridUI.ALT_TRIG_MODE_NAMES[c.harmTrig + 1]},
     }
-  else
+  else  -- PAGE_PERF
     local iv = c.resetInterval
     lines = {
       {'reset', iv == 0 and 'off' or (iv .. (iv == 1 and ' bar' or ' bars'))},
@@ -594,6 +643,76 @@ function Screen:draw_steps()
   end
 end
 
+-- One-octave piano geometry for the scale page's key mask. White keys tile the
+-- row; black keys are half-width / shorter and straddle the gap *above and
+-- between* two white keys — with no black key between E-F or B-C, exactly like a
+-- real keyboard.
+local KB_X0, KB_Y = 3, 26
+local KB_WW, KB_WH = 11, 24      -- white key pitch / height
+local KB_BW, KB_BH = 7, 14       -- black key width / height
+local WHITE_PCS = {0, 2, 4, 5, 7, 9, 11}
+local BLACK_AFTER = {[1] = 0, [3] = 1, [6] = 3, [8] = 4, [10] = 5}  -- pc -> white index it follows
+
+local function white_index(pc)
+  for i, w in ipairs(WHITE_PCS) do if w == pc then return i - 1 end end
+  return nil
+end
+
+-- screen rect + black/white flag for a pitch class's key
+local function key_rect(pc)
+  local wi = white_index(pc)
+  if wi then
+    return { x = KB_X0 + wi * KB_WW, y = KB_Y, w = KB_WW - 1, h = KB_WH, black = false }
+  end
+  local cx = KB_X0 + (BLACK_AFTER[pc] + 1) * KB_WW
+  return { x = cx - math.floor(KB_BW / 2), y = KB_Y, w = KB_BW, h = KB_BH, black = true }
+end
+
+-- Scale page: shown while the grid's scale picker is open. Displays — and, via
+-- E2/E3, edits — the three global musical params the picker drives: root, key
+-- mask (a real piano keyboard; in-mask keys lit, root footed), and quantize.
+-- The E2 cursor underlines root/quantize or caps the focused key.
+function Screen:draw_scale_lines()
+  local root = (self.engine.root or 0) % 12
+  local cursor = self.sel_line[PAGE_SCALE]
+  local on = {}
+  for _, s in ipairs(self.engine.scale) do on[s % 12] = true end
+
+  -- root + quantize text (cursor lines 1 and 14), underlined when focused
+  local function label(x, focus, str)
+    screen.level(focus and 15 or 4)
+    screen.move(x, 14)
+    screen.text(str)
+    if focus then
+      screen.rect(x, 16, screen.text_extents(str), 1); screen.fill()
+    end
+  end
+  label(3, cursor == 1, 'root ' .. NOTE_NAMES[root + 1])
+  local qnt = 'qnt ' .. tostring(self.engine.quantize)
+  label(126 - screen.text_extents(qnt), cursor == LINES_PER_PAGE[PAGE_SCALE], qnt)
+
+  -- white keys, then black keys on top (so they overlap the white edges)
+  for _, pc in ipairs(WHITE_PCS) do
+    local r = key_rect(pc)
+    screen.level(on[pc] and 13 or 4)
+    screen.rect(r.x, r.y, r.w, r.h); screen.fill()
+    if pc == root then screen.level(15); screen.rect(r.x, r.y + r.h - 3, r.w, 2); screen.fill() end
+  end
+  for pc in pairs(BLACK_AFTER) do
+    local r = key_rect(pc)
+    screen.level(0); screen.rect(r.x - 1, r.y - 1, r.w + 2, r.h + 1); screen.fill()  -- gap so it reads as a key
+    screen.level(on[pc] and 9 or 2)
+    screen.rect(r.x, r.y, r.w, r.h); screen.fill()
+    if pc == root then screen.level(15); screen.rect(r.x, r.y + r.h - 3, r.w, 2); screen.fill() end
+  end
+
+  -- cursor cap above the focused key (lines 2..13)
+  if cursor >= 2 and cursor <= 13 then
+    local r = key_rect(cursor - 2)
+    screen.level(15); screen.rect(r.x, KB_Y - 4, r.w, 2); screen.fill()
+  end
+end
+
 function Screen:draw_status()
   screen.level(2)
   screen.move(2, 60)
@@ -610,15 +729,22 @@ function Screen:redraw()
   screen.font_face(1)
   screen.font_size(8)
   self:draw_header()
-  self:draw_channel_column()
-  self:draw_lines()
-  -- when the grid is mid-gesture (picker / kb / action), it owns interaction:
-  -- swap the step rows for the dim status line
   local c = self.ctl
-  if c.kbMode or c.picker or c.actionMode then
+  if c.picker and c.picker.kind == 'scale' then
+    -- scale picker open: the grid owns a global-musical gesture, so the screen
+    -- shows the scale page (root/keymask/quantize) instead of the stale seq page
+    self:draw_scale_lines()
     self:draw_status()
   else
-    self:draw_steps()
+    self:draw_channel_column()
+    self:draw_lines()
+    -- when the grid is mid-gesture (picker / kb / action), it owns interaction:
+    -- swap the step rows for the dim status line
+    if c.kbMode or c.picker or c.actionMode then
+      self:draw_status()
+    else
+      self:draw_steps()
+    end
   end
   screen.update()
 end

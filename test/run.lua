@@ -398,6 +398,12 @@ check('root keyboard sets engine.root to D', geng.root == 2)
 ctl:press(14, 6)  -- close scale picker
 check('scale picker closed via QNT', ctl.picker == nil)
 
+-- set_mask: replace the whole mask at once (the keymask param edit path)
+ctl:set_mask({7, 0, 4, 7, 13})  -- dup 7 + out-of-range 13 dropped, then sorted
+check('set_mask dedups, drops out-of-range, sorts', vals_eq(geng.scale, {0, 4, 7}))
+ctl:set_mask({})
+check('set_mask refuses to empty the scale', vals_eq(geng.scale, {0, 4, 7}))
+
 -- prob mode (row6 col 13)
 ctl:press(13, 6)
 check('PROB mode entered', ctl.probMode == true)
@@ -454,13 +460,16 @@ local sui = ScreenUI.new(seng, sctl)
 
 -- smoke: redraw runs clean on every page
 local pages_ok = true
-for p = 1, 5 do
+for p = 1, 6 do
   sui:set_page(p)
   local ok, err = pcall(function() sui:redraw() end)
   if not ok then pages_ok = false; print('      redraw error page ' .. p .. ': ' .. tostring(err)) end
 end
-check('redraw runs clean on all 5 pages', pages_ok)
+check('redraw runs clean on all 6 pages', pages_ok)
+sui:set_page(3)
 check('set_page syncs grid modes (perf -> perfMode)', sctl.perfMode == true)
+sui:set_page(5)
+check('scale page opens the grid scale picker', sctl.picker and sctl.picker.kind == 'scale')
 
 -- main page: E3 edits land exactly on the step picker grid
 sui:set_page(1)
@@ -474,13 +483,14 @@ check('main E3 edit lands on note picker grid',
 check('main E2 sync keeps grid selectedParam agreeing', sctl.selectedParam == 'note')
 
 -- snd page: edits cycle the shared mode tables
-sui:set_page(3)
-sui.sel_line[3] = 2
+sui:set_page(6)
+sui.sel_line[6] = 2
 local g0 = seng.channels[1].geodeMode
 sui:enc(3, 1)
 check('snd E3 steps geodeMode within table', seng.channels[1].geodeMode == g0 + 1)
 sui:enc(3, 99)
 check('snd E3 clamps at table end', seng.channels[1].geodeMode == #GridUI.GEODE_MODE_NAMES - 1)
+check('snd page_lines labels map to env/geode (not perf/prob)', sui:page_lines()[1][1] == 'env')
 
 -- prob page: prob steps the discrete 25/50/75/100% set
 sui:set_page(4)
@@ -499,18 +509,42 @@ sui:enc(3, 1)
 check('harm-trig line steps harmTrig to step', seng.channels[1].harmTrig == 1)
 
 -- perf page: values come from the shared interval/octave/rate tables
-sui:set_page(5)
-sui.sel_line[5] = 1
+sui:set_page(3)
+sui.sel_line[3] = 1
 sui:enc(3, 3)
 check('perf E3 lands in RESET_INTERVALS', in_set(seng.channels[1].resetInterval, GridUI.RESET_INTERVALS))
-sui.sel_line[5] = 2
+check('perf page_lines labels map to reset/oct/rate', sui:page_lines()[1][1] == 'reset')
+sui.sel_line[3] = 2
 sui:enc(3, 1)
 check('oct E3 lands in OCTAVE_VALUES', in_set(seng.channels[1].octave, GridUI.OCTAVE_VALUES))
 check('oct E3 stepped up one octave', seng.channels[1].octave == 1)
 sui:enc(3, -1)  -- restore octave 0: the fire tests below expect an unshifted c1
-sui.sel_line[5] = 3
+sui.sel_line[3] = 3
 sui:enc(3, 1)
 check('rate E3 lands in RATE_VALUES', in_set(seng.channels[1].rate, GridUI.RATE_VALUES))
+
+-- scale page: E2 walks root -> 12 keys -> quantize; E3 edits each
+sui:set_page(5)
+seng.root = 0
+sui.sel_line[5] = 1            -- root
+sui:enc(3, 2)
+check('scale E3 raises root by semitones', seng.root == 2)
+sui:enc(3, -3)                 -- wraps below 0
+check('scale root wraps mod 12', seng.root == 11)
+seng.scale = {0, 4, 7}
+sui.sel_line[5] = 2 + 2        -- key for pitch class 2 (D)
+sui:enc(3, 1)
+check('scale E3 right adds a key to the mask', in_set(2, seng.scale) and #seng.scale == 4)
+sui:enc(3, -1)
+check('scale E3 left removes the key', not in_set(2, seng.scale) and #seng.scale == 3)
+sui.sel_line[5] = 14  -- quantize stop (last line: root + 12 keys + quantize)
+seng.quantize = 8
+sui:enc(3, 4)
+check('scale E3 steps quantize, clamped 1..32', seng.quantize == 12)
+-- restore musical state the fire tests below assume (unshifted c1, major)
+seng.root = 0
+seng.scale = scales.by_name.major
+seng.quantize = 32
 
 -- fire reactivity: ghost note recorded, dirty set, tick repaints + clears
 sui:set_page(1)
@@ -535,7 +569,7 @@ check('channel column draws note letter after fire', letter_drawn)
 sui:set_page(1)
 sctl:press(15, 6)  -- SND on the grid
 sui:redraw()
-check('grid SND press switches screen to snd page', sui.page == 3)
+check('grid SND press switches screen to snd page', sui.page == 6)
 sctl:press(13, 6)  -- PROB on the grid
 sui:redraw()
 check('grid PROB press switches screen to prob page', sui.page == 4)
@@ -621,11 +655,11 @@ sui:key(3, 1)
 check('K3 pages forward to alt (grid layer follows)',
   sui.page == 2 and sctl.paramLayer == 'B')
 sui:key(3, 1)
-check('K3 pages to snd (grid soundMode follows)',
-  sui.page == 3 and sctl.soundMode == true)
+check('K3 pages to perf (grid perfMode follows)',
+  sui.page == 3 and sctl.perfMode == true)
 sui:key(2, 1)
-check('K2 pages back to alt (soundMode off)',
-  sui.page == 2 and sctl.soundMode == false)
+check('K2 pages back to alt (perfMode off)',
+  sui.page == 2 and sctl.perfMode == false)
 sui:key(2, 1)
 check('K2 back to main restores layer A', sui.page == 1 and sctl.paramLayer == 'A')
 sui:key(2, 1)
@@ -781,9 +815,9 @@ pctl:press(13, 6)  -- exit PROB
 check('grid edits fired zero param actions', fake.fires == f0)
 
 -- screen edit reflects too (same set_scalar path)
-pui:set_page(2)
+pui:set_page(6)  -- snd page
 pui.sel_ch = 0
-pui.sel_line[2] = 2
+pui.sel_line[6] = 2  -- geode line
 pui:enc(3, peng.channels[1].geodeMode < 3 and 1 or -1)
 check('screen snd edit reflects geode option',
   fake:get('ch1_geode') == peng.channels[1].geodeMode + 1)
@@ -844,6 +878,22 @@ pctl:press(14, 6)  -- scale picker
 pctl:press(15, 1)  -- quantize block row 0, col 7 -> QUANTIZE_VALUES[8] = 8
 check('grid quantize edit reflects to param', fake:get('quantize') == 8)
 pctl:press(14, 6)  -- close picker
+
+-- keymask: the note mask is viewed/edited/stored like a sequence string
+check('mask_to_text renders pitch-class names',
+  ParamsSync.mask_to_text({0, 2, 4, 5, 7, 9, 11}) == 'C D E F G A B')
+check('mask_from_text parses names + numbers, dedups, keeps order',
+  vals_eq(ParamsSync.mask_from_text('c e g 7 bb'), {0, 4, 7, 10}))
+fake:set('keymask', 'g c e')  -- commits through controller:set_mask (sorts)
+check('keymask param installs sorted mask on engine', vals_eq(peng.scale, {0, 4, 7}))
+check('keymask text reflected back canonical (sorted names)', fake:get('keymask') == 'C E G')
+fake:set('keymask', '')       -- refuse to empty the scale; restore the display
+check('empty keymask refused, display restored',
+  vals_eq(peng.scale, {0, 4, 7}) and fake:get('keymask') == 'C E G')
+-- picking a scale preset keeps the keymask text in step
+fake:set('scale', 2)  -- scales.names[2] = 'major'
+check('scale preset updates keymask text',
+  fake:get('keymask') == ParamsSync.mask_to_text(scales.by_name.major))
 
 -- render coalescing: actions raise the flag, flush repaints once
 psync.render_pending = false

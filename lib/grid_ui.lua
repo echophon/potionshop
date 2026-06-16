@@ -402,6 +402,55 @@ function GridUI:toggle_mask_note(semitone)
   self.engine.scale = copy
 end
 
+-- preset scale name whose intervals match `mask` exactly, or nil (custom mask).
+-- Lets a whole-mask edit re-light the matching preset on the scale picker.
+function GridUI:_mask_preset_name(mask)
+  for _, name in ipairs(scales.names) do
+    local ref = scales.by_name[name]
+    if #ref == #mask then
+      local same = true
+      for k = 1, #ref do if ref[k] ~= mask[k] then same = false break end end
+      if same then return name end
+    end
+  end
+  return nil
+end
+
+-- Replace the whole custom note mask at once (the params keymask edit path).
+-- Shares toggle_mask_note's invariants: dedup + sort, refuse to empty the scale,
+-- re-point engine.scale, and emit on_edit{global} so params/screen reflect.
+-- Semitones outside 0..11 are dropped; this is the only set-the-mask path so
+-- the keymask param stays grid-reachable just like the sequence text params.
+function GridUI:set_mask(semitones)
+  local seen, mask = {}, {}
+  for _, s in ipairs(semitones) do
+    s = math.floor(s)
+    if s >= 0 and s <= 11 and not seen[s] then seen[s] = true; mask[#mask + 1] = s end
+  end
+  if #mask == 0 then return end
+  table.sort(mask)
+  self.customMask = mask
+  local copy = {}
+  for _, s in ipairs(mask) do copy[#copy + 1] = s end
+  self.engine.scale = copy
+  local name = self:_mask_preset_name(mask)
+  if name then self.selectedScaleName = name end
+  self.on_edit{ type = 'global' }
+end
+
+-- Global musical scalars (root tonic / quantize grid). Like set_mask these are
+-- the single mutation path so on_edit{global} fires and the params/screen
+-- reflect; the screen scale page edits through them.
+function GridUI:set_root(semitone)
+  self.engine.root = semitone % 12
+  self.on_edit{ type = 'global' }
+end
+
+function GridUI:set_quantize(q)
+  self.engine.quantize = clamp(round(q), 1, 32)
+  self.on_edit{ type = 'global' }
+end
+
 -- ---- picker enter/exit -------------------------------------------------
 
 function GridUI:open_step_picker(ch, col)
@@ -772,7 +821,9 @@ function GridUI:render_row6()
   self.g:set_led(ROW6_KB_COL, 6, 8)
   self.g:set_led(ROW6_PROB_COL, 6, self.probMode and 15 or 8)
   self.g:set_strobe(ROW6_PROB_COL, 6, self.probMode and 'fast' or 'off')
-  self.g:set_led(ROW6_QNT_COL, 6, 8)
+  local scale_open = self.picker and self.picker.kind == 'scale'
+  self.g:set_led(ROW6_QNT_COL, 6, scale_open and 15 or 8)
+  self.g:set_strobe(ROW6_QNT_COL, 6, scale_open and 'fast' or 'off')
   self.g:set_led(ROW6_SND_COL, 6, self.soundMode and 15 or 8)
   self.g:set_strobe(ROW6_SND_COL, 6, self.soundMode and 'fast' or 'off')
 end
