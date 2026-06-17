@@ -643,74 +643,70 @@ function Screen:draw_steps()
   end
 end
 
--- One-octave piano geometry for the scale page's key mask. White keys tile the
--- row; black keys are half-width / shorter and straddle the gap *above and
--- between* two white keys — with no black key between E-F or B-C, exactly like a
--- real keyboard.
-local KB_X0, KB_Y = 3, 26
-local KB_WW, KB_WH = 11, 24      -- white key pitch / height
-local KB_BW, KB_BH = 7, 14       -- black key width / height
+-- Minimal one-octave keyboard for the scale page: each pitch class is a single
+-- dot. White keys pack on a baseline row with a 1px buffer; black keys sit one
+-- row above, directly over the white key they follow — so they fall into the
+-- natural two groups (C#-D# / F#-G#-A#) with the E-F and B-C gaps. This mirrors
+-- the grid's compact note keyboard (KB_BLACK_COL / KB_WHITE_COL).
+local KB_X0     = 8
+local KB_DOT    = 4
+local KB_PITCH  = KB_DOT + 1   -- 1px buffer between white keys
+local KB_BLACK_DX = 2          -- nudge blacks right so they straddle the white gap (real-kb look)
 local WHITE_PCS = {0, 2, 4, 5, 7, 9, 11}
-local BLACK_AFTER = {[1] = 0, [3] = 1, [6] = 3, [8] = 4, [10] = 5}  -- pc -> white index it follows
+local BLACK_AFTER = {[1] = 0, [3] = 1, [6] = 3, [8] = 4, [10] = 5}  -- pc -> white index it sits above
 
 local function white_index(pc)
   for i, w in ipairs(WHITE_PCS) do if w == pc then return i - 1 end end
   return nil
 end
 
--- screen rect + black/white flag for a pitch class's key
-local function key_rect(pc)
+-- dot top-left for a pitch class on a keyboard whose white row top is `yb`.
+local function key_pos(pc, yb)
   local wi = white_index(pc)
-  if wi then
-    return { x = KB_X0 + wi * KB_WW, y = KB_Y, w = KB_WW - 1, h = KB_WH, black = false }
+  if wi then return KB_X0 + wi * KB_PITCH, yb end
+  return KB_X0 + BLACK_AFTER[pc] * KB_PITCH + KB_BLACK_DX, yb - 5  -- black: one row up, nudged right
+end
+
+-- one keyboard: 12 dots, lit(pc) bright, cursor_pc (or nil) ticked above.
+function Screen:_draw_mini_kb(yb, lit, cursor_pc)
+  for pc = 0, 11 do
+    local x, y = key_pos(pc, yb)
+    screen.level(lit(pc) and 15 or 3)
+    screen.rect(x, y, KB_DOT, KB_DOT); screen.fill()
+    if pc == cursor_pc then
+      screen.level(15); screen.rect(x, yb - 7, KB_DOT, 1); screen.fill()
+    end
   end
-  local cx = KB_X0 + (BLACK_AFTER[pc] + 1) * KB_WW
-  return { x = cx - math.floor(KB_BW / 2), y = KB_Y, w = KB_BW, h = KB_BH, black = true }
 end
 
 -- Scale page: shown while the grid's scale picker is open. Displays — and, via
--- E2/E3, edits — the three global musical params the picker drives: root, key
--- mask (a real piano keyboard; in-mask keys lit, root footed), and quantize.
--- The E2 cursor underlines root/quantize or caps the focused key.
+-- E2/E3, edits — the three global musical params the picker drives: root (its
+-- own single-select keyboard, mirroring the grid), key mask (a membership
+-- keyboard), and quantize. The E2 cursor ticks above the focused key dot, or
+-- underlines the root/quantize labels.
 function Screen:draw_scale_lines()
   local root = (self.engine.root or 0) % 12
   local cursor = self.sel_line[PAGE_SCALE]
   local on = {}
   for _, s in ipairs(self.engine.scale) do on[s % 12] = true end
 
-  -- root + quantize text (cursor lines 1 and 14), underlined when focused
-  local function label(x, focus, str)
+  local LABEL_X = KB_X0 + 7 * KB_PITCH + 6   -- to the right of the keyboards
+  local function label(y, focus, str)
     screen.level(focus and 15 or 4)
-    screen.move(x, 14)
+    screen.move(LABEL_X, y)
     screen.text(str)
-    if focus then
-      screen.rect(x, 16, screen.text_extents(str), 1); screen.fill()
-    end
-  end
-  label(3, cursor == 1, 'root ' .. NOTE_NAMES[root + 1])
-  local qnt = 'qnt ' .. tostring(self.engine.quantize)
-  label(126 - screen.text_extents(qnt), cursor == LINES_PER_PAGE[PAGE_SCALE], qnt)
-
-  -- white keys, then black keys on top (so they overlap the white edges)
-  for _, pc in ipairs(WHITE_PCS) do
-    local r = key_rect(pc)
-    screen.level(on[pc] and 13 or 4)
-    screen.rect(r.x, r.y, r.w, r.h); screen.fill()
-    if pc == root then screen.level(15); screen.rect(r.x, r.y + r.h - 3, r.w, 2); screen.fill() end
-  end
-  for pc in pairs(BLACK_AFTER) do
-    local r = key_rect(pc)
-    screen.level(0); screen.rect(r.x - 1, r.y - 1, r.w + 2, r.h + 1); screen.fill()  -- gap so it reads as a key
-    screen.level(on[pc] and 9 or 2)
-    screen.rect(r.x, r.y, r.w, r.h); screen.fill()
-    if pc == root then screen.level(15); screen.rect(r.x, r.y + r.h - 3, r.w, 2); screen.fill() end
+    if focus then screen.rect(LABEL_X, y + 2, screen.text_extents(str), 1); screen.fill() end
   end
 
-  -- cursor cap above the focused key (lines 2..13)
-  if cursor >= 2 and cursor <= 13 then
-    local r = key_rect(cursor - 2)
-    screen.level(15); screen.rect(r.x, KB_Y - 4, r.w, 2); screen.fill()
-  end
+  -- root keyboard (single selection) + key-mask keyboard (membership)
+  self:_draw_mini_kb(15, function(pc) return pc == root end, (cursor == 1) and root or nil)
+  label(19, cursor == 1, 'root ' .. NOTE_NAMES[root + 1])
+
+  self:_draw_mini_kb(31, function(pc) return on[pc] end,
+    (cursor >= 2 and cursor <= 13) and (cursor - 2) or nil)
+  label(35, false, 'keys')
+
+  label(47, cursor == LINES_PER_PAGE[PAGE_SCALE], 'qnt ' .. tostring(self.engine.quantize))
 end
 
 function Screen:draw_status()
