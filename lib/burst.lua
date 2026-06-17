@@ -132,7 +132,14 @@ function Burst.new()
     self.tokens[i] = 0
   end
   self.listeners = {}
-  self.modIndex = 8     -- FM modulation index (FMVoice default)
+  -- engine-wide voice timbre macros (lib/params_sync.lua 'VOICE' group). Global,
+  -- not per-channel: the non-audio output types can't render them. Read straight
+  -- at fire time; these ARE the values handed to the SC voice.
+  self.modIndex = 8     -- FM modulation index (FMVoice default; peak depth driver)
+  self.fmDecay = 0.4    -- mod-depth decay as a fraction of amp decay (FM body length)
+  self.ampPunch = 4     -- perc-curve magnitude (-> Env.perc curve = -ampPunch); 0 = linear
+  self.fmFeedback = 0   -- SinOscFB feedback (radians): 0 = pure sine modulator
+  self.drive = 1        -- tanh soft-clip drive: 1 = clean, higher = saturated
   self.outputs = nil    -- optional lib/outputs.lua router (set by the host)
   return self
 end
@@ -386,23 +393,26 @@ function Burst:fire(ch, beat, freq, level, harm, env, div, total, hit_idx)
   -- shorter hits and a 6-voice mix doesn't pile up; env `e` scales staccato ->
   -- slightly-legato within that gap. Diverges from the web FMVoice (fixed
   -- 0.4..1.2s) to keep a dense norns mix legible. burst/hit keep decay_sec.
+  -- FM body length: mod-depth decay as a fraction of the amp decay (global
+  -- `fmDecay` voice macro, default 0.4) -- how long the FM brightness sings.
+  local fm_decay_ratio = self.fmDecay
   local attack, amp_dec, mod_dec
   if decay_sec ~= nil then
     attack = 0.001
     amp_dec = math.max(0.01, decay_sec)
-    mod_dec = amp_dec * 0.4
+    mod_dec = amp_dec * fm_decay_ratio
   else
     local e = clamp(env, 0, 1)
     local gap_sec = interval_sec / math.max(0.01, c.rate)
     attack  = 0.001 + e * 0.018
     amp_dec = clamp(gap_sec * (0.3 + e * 0.95), 0.04, 2.2)
-    mod_dec = amp_dec * 0.4
+    mod_dec = amp_dec * fm_decay_ratio
   end
 
   -- Harm envelope: sweep harm bright -> clean (geo_harm -> unison 2). In hit mode
   -- the sweep spans the modulator's own life (mod_dec), NOT the amp decay: the FM
-  -- sidebands fade out over mod_dec (= 0.4 * amp_dec), so a sweep tied to amp_dec
-  -- finished its audible bright->clean glide while inaudible. Matching mod_dec lets
+  -- sidebands fade out over mod_dec (the fm-decay macro * amp_dec), so a sweep tied
+  -- to amp_dec finished its bright->clean glide while inaudible. Matching mod_dec lets
   -- the ratio actually reach 2 before the modulator goes silent, so the whole glide
   -- is heard while the amp tail still rings clean underneath.
   -- burst mode sweeps slowly across the whole burst, so per hit it stays bright.
@@ -421,10 +431,16 @@ function Burst:fire(ch, beat, freq, level, harm, env, div, total, hit_idx)
   -- internal voice; midi/crow get the same final freq/level/length it would
   -- have played. Hook lives here (not on emit) because the per-hit prob skip
   -- emits a 'fire' event for the playhead without sounding anything.
+  -- global voice timbre macros (lib/params_sync.lua 'VOICE' group).
+  local mod_index = self.modIndex
+  local amp_curve = -self.ampPunch
+  local feedback  = self.fmFeedback
+  local drive     = self.drive
   local out = self.outputs
   if engine and engine.trig and ((not out) or out:wants_audio(ch)) then
     engine.trig(geo_freq, actual_level, harm_start, harm_end, harm_decay,
-                self.modIndex, attack, amp_dec, mod_dec)
+                mod_index, attack, amp_dec, mod_dec,
+                amp_curve, feedback, drive)
   end
   if out then
     -- external voices can't sweep the FM ratio; hand them the starting (peak)

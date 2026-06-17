@@ -29,8 +29,9 @@ Engine_Potionshop : CroneEngine {
 		// --- FM voice (mirrors FMVoice.triggerAt) ---
 		SynthDef("PotionFM", { arg out = 0, freq = 220, amp = 0.5,
 			harmStart = 2, harmEnd = 2, harmDecay = 0.001,
-			modIndex = 8, attack = 0.001, ampDecay = 0.4, modDecay = 0.05;
-			var modEnv, modDepth, mod, ampEnv, car, sig, harmEnv;
+			modIndex = 8, attack = 0.001, ampDecay = 0.4, modDecay = 0.05,
+			ampCurve = -4, feedback = 0, drive = 1;
+			var modEnv, modDepth, mod, ampEnv, car, sig, harmEnv, driveMix;
 
 			// modulator depth: rise to peak in 1ms, then exponential decay.
 			// peak depth (Hz) = freq * modIndex * amp, matching the web app.
@@ -45,17 +46,26 @@ Engine_Potionshop : CroneEngine {
 			// note (harmStart -> harmEnd). When the two are equal it's a static
 			// ratio (harm env "off"). Both endpoints are >= 2 so \exp is safe.
 			harmEnv = EnvGen.kr(Env.new([harmStart, harmEnd], [max(0.001, harmDecay)], \exp));
-			mod = SinOsc.ar(freq * harmEnv, 0, modDepth);
+			// `feedback` (radians) folds the modulator from sine toward saw/noise;
+			// at 0, SinOscFB is identical to the plain SinOsc it replaces.
+			mod = SinOscFB.ar(freq * harmEnv, feedback, modDepth);
 
-			// percussive amp envelope; doneAction frees the synth on completion.
+			// percussive amp envelope; `ampCurve` is the perc shape (-4 = the old
+			// default; 0 = linear/softer). doneAction frees the synth on completion.
 			ampEnv = EnvGen.kr(
-				Env.perc(attack, max(0.01, ampDecay), 1.0, -4.0),
+				Env.perc(attack, max(0.01, ampDecay), 1.0, ampCurve),
 				doneAction: Done.freeSelf
 			);
 
 			// linear FM: carrier frequency offset by the modulator (in Hz).
 			car = SinOsc.ar(freq + mod);
 			sig = car * ampEnv * amp;
+
+			// soft-clip drive: drive=1 is bit-clean (mix=0 -> dry passes through),
+			// higher values blend in tanh saturation AND raise pre-gain together,
+			// so one knob sweeps clean -> dirty. Master Limiter catches the peaks.
+			driveMix = (drive - 1).linlin(0, 7, 0, 1);
+			sig = (sig * (1 - driveMix)) + ((sig * drive).tanh * driveMix);
 			Out.ar(out, sig ! 2);
 		}).add;
 
@@ -75,13 +85,15 @@ Engine_Potionshop : CroneEngine {
 			\in, masterBus.index, \out, context.out_b.index
 		]);
 
-		// trig(freq, amp, harmStart, harmEnd, harmDecay, modIndex, attack, ampDecay, modDecay)
-		this.addCommand("trig", "fffffffff", { arg msg;
+		// trig(freq, amp, harmStart, harmEnd, harmDecay, modIndex, attack, ampDecay,
+		//      modDecay, ampCurve, feedback, drive)
+		this.addCommand("trig", "ffffffffffff", { arg msg;
 			Synth("PotionFM", [
 				\out, masterBus.index,
 				\freq, msg[1], \amp, msg[2],
 				\harmStart, msg[3], \harmEnd, msg[4], \harmDecay, msg[5],
-				\modIndex, msg[6], \attack, msg[7], \ampDecay, msg[8], \modDecay, msg[9]
+				\modIndex, msg[6], \attack, msg[7], \ampDecay, msg[8], \modDecay, msg[9],
+				\ampCurve, msg[10], \feedback, msg[11], \drive, msg[12]
 			], fmGroup);
 		});
 

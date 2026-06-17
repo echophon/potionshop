@@ -3,7 +3,9 @@
 -- PSETs, MIDI mapping) and keeps them bidirectionally in sync with the grid
 -- and screen surfaces.
 --
--- Layout: a global block (scale / root / quantize / mod_index) plus one group per
+-- Layout: a global block (scale / root / quantize), a VOICE group of engine-wide
+-- FM timbre macros (mod index / fm decay / amp punch / fm feedback / fm drive),
+-- the OUTPUTS group (lib/outputs.lua), plus one group per
 -- channel ("CHANNEL 1".."CHANNEL 6"). Each group holds the channel scalars
 -- (run, rate, prob, modes, reset, clear/copy/paste + action triggers) and, per
 -- sequence parameter x layer (div/reps/note/level/harm/env x A/B), a
@@ -224,8 +226,21 @@ function M:add_globals()
   params:add_number('quantize', 'quantize (per whole note)', 1, 32, clamp(eng.quantize, 1, 32))
   params:set_action('quantize', function(v) eng.quantize = v; self:request_render() end)
 
-  params:add_number('mod_index', 'FM mod index', 1, 24, eng.modIndex)
+  -- VOICE: engine-wide FM timbre macros. Global (not per-channel) since the
+  -- non-audio output types can't render them; these are the actual values the SC
+  -- voice receives at fire time. Percent where the underlying value is fractional.
+  local function pct() return function(p) return p:get() .. '%' end end
+  params:add_group('voice', 'VOICE', 5)
+  params:add_number('mod_index', 'FM mod index', 1, 24, round(eng.modIndex))
   params:set_action('mod_index', function(v) eng.modIndex = v end)
+  params:add_number('fm_decay', 'FM decay', 10, 150, round(eng.fmDecay * 100), pct())
+  params:set_action('fm_decay', function(v) eng.fmDecay = v / 100 end)
+  params:add_number('amp_punch', 'amp punch', 0, 12, round(eng.ampPunch))
+  params:set_action('amp_punch', function(v) eng.ampPunch = v end)
+  params:add_number('fm_feedback', 'FM feedback', 0, 200, round(eng.fmFeedback * 100), pct())
+  params:set_action('fm_feedback', function(v) eng.fmFeedback = v / 100 end)
+  params:add_number('fm_drive', 'FM drive', 100, 800, round(eng.drive * 100), pct())
+  params:set_action('fm_drive', function(v) eng.drive = v / 100 end)
 end
 
 function M:add_channels()

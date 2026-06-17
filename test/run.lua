@@ -252,6 +252,38 @@ local slow, fast = amp_decay_for_div(2), amp_decay_for_div(8)
 check('amp decay scales with division (4x faster ~= 1/4 the hit)',
   slow and fast and approx(fast, slow / 4))
 
+-- VOICE macros: engine-wide globals read straight at fire time. trig args
+-- 10/11/12 = ampCurve, feedback, drive; arg 6 = modIndex; arg 9 = mod decay.
+-- `setup(e)` mutates the engine before launch; returns the first trig.
+local function macro_trig(setup)
+  clock._reset()
+  local saved = engine
+  local cap
+  engine = { trig = function(...) cap = cap or {...} end }
+  local e = Burst.new()
+  e.quantize = 0
+  e.channels[1].div = seqx.new{4}
+  e.channels[1].reps = seqx.new{1}
+  if setup then setup(e) end
+  e:launch(1)
+  clock._run_until(2)
+  engine = saved
+  return cap
+end
+local d = macro_trig()
+check('voice macro defaults: modIndex=8, ampCurve=-4, feedback=0, drive=1',
+  d and approx(d[6], 8) and approx(d[10], -4) and approx(d[11], 0) and approx(d[12], 1))
+check('voice macro defaults: mod decay is 0.4 of amp decay (fmDecay)',
+  d and approx(d[9], d[8] * 0.4))
+-- the global voice macros feed the trig args directly.
+local gv = macro_trig(function(e)
+  e.modIndex, e.ampPunch, e.fmFeedback, e.drive, e.fmDecay = 12, 8, 1.5, 4, 0.8
+end)
+check('voice macros feed trig: modIndex, ampPunch->curve, feedback, drive',
+  gv and approx(gv[6], 12) and approx(gv[10], -8) and approx(gv[11], 1.5) and approx(gv[12], 4))
+check('voice fmDecay sets mod decay (0.8 of amp decay)',
+  gv and approx(gv[9], gv[8] * 0.8))
+
 -- quantization: an off-grid division (triplet, 4/3 beats) must snap every
 -- event FORWARD to the quarter-note grid (quantize=4 -> step 1 beat). We read
 -- clock.get_beats() inside the listener = the actual (snapped) firing instant.
