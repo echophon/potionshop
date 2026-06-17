@@ -399,9 +399,12 @@ function Burst:fire(ch, beat, freq, level, harm, env, div, total, hit_idx)
     mod_dec = amp_dec * 0.4
   end
 
-  -- Harm envelope: sweep harm bright -> clean (geo_harm -> unison 2). The sweep
-  -- spans the note's own amp decay (hit mode), so the present 2:1 tone lands just
-  -- as the amp fades to silence -> minimal sustained-tail buildup across voices.
+  -- Harm envelope: sweep harm bright -> clean (geo_harm -> unison 2). In hit mode
+  -- the sweep spans the modulator's own life (mod_dec), NOT the amp decay: the FM
+  -- sidebands fade out over mod_dec (= 0.4 * amp_dec), so a sweep tied to amp_dec
+  -- finished its audible bright->clean glide while inaudible. Matching mod_dec lets
+  -- the ratio actually reach 2 before the modulator goes silent, so the whole glide
+  -- is heard while the amp tail still rings clean underneath.
   -- burst mode sweeps slowly across the whole burst, so per hit it stays bright.
   -- harmEnvMode 0=off (static ratio, start==end).
   local harm_start, harm_end, harm_decay = geo_harm, geo_harm, 0.001
@@ -410,7 +413,7 @@ function Burst:fire(ch, beat, freq, level, harm, env, div, total, hit_idx)
     if c.harmEnvMode == 2 and total ~= INF then
       harm_decay = total * interval_sec
     else
-      harm_decay = amp_dec
+      harm_decay = mod_dec
     end
   end
 

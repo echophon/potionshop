@@ -474,6 +474,10 @@ function GridUI:open_step_picker(ch, col)
 end
 
 function GridUI:open_scale_picker()
+  -- entering the scale page is exclusive with the other row-6 latch modes, so
+  -- only one row-6 button stays lit (see handle_row6's PERF/PROB/SND handlers)
+  self.probMode = false; self.perfMode = false; self.soundMode = false
+  self.actionMode = nil
   self.customMask = {}
   for _, v in ipairs(self.engine.scale) do self.customMask[#self.customMask + 1] = v end
   self.picker = {kind = 'scale'}

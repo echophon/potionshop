@@ -225,9 +225,12 @@ check('harm env off: ratio is static (start==end, ~no decay)',
 local on = first_trig(1)  -- hit: sweep over one interval
 check('harm env on: ratio sweeps target->unison over a real decay',
   on and approx(on[3], 8) and approx(on[4], 2) and on[5] > 0.01)
--- hit-mode harm sweep spans the note's own amp decay (msg[8]) so the clean
--- tone lands at silence, not before it.
-check('harm env hit: sweep decay == amp decay', on and approx(on[5], on[8]))
+-- hit-mode harm sweep spans the modulator's own life (msg[9] = mod decay), not
+-- the amp decay (msg[8]): the FM sidebands fade over mod_dec, so a sweep tied to
+-- amp_dec finishes its bright->clean glide after the modulator is already silent.
+-- Matching mod_dec (= 0.4 * amp_dec) lets the whole glide be heard.
+check('harm env hit: sweep decay == mod decay', on and approx(on[5], on[9]))
+check('harm env hit: sweep decay is 0.4 of amp decay', on and approx(on[5], on[8] * 0.4))
 
 -- shape-mode amp decay tracks the inter-hit gap: 4x faster division -> ~1/4
 -- the decay, so dense/fast channels self-shorten instead of piling up.
@@ -397,6 +400,20 @@ ctl:press(1, 5)  -- col 1 white = semitone 2 (D)
 check('root keyboard sets engine.root to D', geng.root == 2)
 ctl:press(14, 6)  -- close scale picker
 check('scale picker closed via QNT', ctl.picker == nil)
+
+-- entering the scale page is exclusive with the other row-6 latch modes, so
+-- only the active page's button stays lit (regression: a prior PERF/PROB/SND
+-- page used to remain latched behind the open scale picker)
+ctl:press(12, 6)  -- PERF mode on
+check('PERF mode entered before scale', ctl.perfMode == true)
+ctl:press(14, 6)  -- open scale picker
+check('scale picker open over PERF', ctl.picker ~= nil and ctl.picker.kind == 'scale')
+check('opening scale page clears PERF mode', ctl.perfMode == false)
+ctl:press(13, 6)  -- PROB toggles off scale picker via mode switch path? -> close+enter PROB
+check('switching to PROB clears scale picker', ctl.picker == nil)
+check('PROB mode active after leaving scale', ctl.probMode == true)
+ctl:press(13, 6)  -- PROB off, back to channels
+check('PROB mode off', ctl.probMode == false)
 
 -- set_mask: replace the whole mask at once (the keymask param edit path)
 ctl:set_mask({7, 0, 4, 7, 13})  -- dup 7 + out-of-range 13 dropped, then sorted
@@ -854,11 +871,11 @@ check('paste reflected into dest text param',
 fake:set('ch6_div_a', '4 8 16')
 fake:set('ch6_note_b', '1 2 3')  -- B-layer offset must survive clear
 fake:set('ch6_clear', 1)
-local CLEAR_DEFAULTS = {div = 4, reps = 1, note = 0, level = 0.5, harm = 2, env = 0}
+-- assert against the module's own defaults so this follows DEFAULT_VALUE edits
 local cl_ok = true
 for _, p in ipairs(GridUI.PARAMS) do
   local v = seqx.values(peng.channels[6][p])
-  if #v ~= 1 or not approx(v[1], CLEAR_DEFAULTS[p]) then cl_ok = false end
+  if #v ~= 1 or not approx(v[1], GridUI.DEFAULT_VALUE[p]) then cl_ok = false end
 end
 check('clear resets all MAIN sequins to defaults', cl_ok)
 check('clear leaves ALT (B) layer intact',
