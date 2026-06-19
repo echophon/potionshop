@@ -108,6 +108,7 @@ local function default_channel()
     geodeMode = 0,    -- amp per-hit geode: 0=transient 1=sustain 2=cycle (always on)
     harmEnvMode = 0,  -- harm sweep timing: 0=off 1=hit 2=burst (bright->clean)
     harmEnv = 0,      -- harm per-hit geode: 0=fast 1=med 2=slow (always on)
+    algo = 1,         -- FM algorithm (1..8): DX-style operator routing for this channel
     resetInterval = 0,
     rate = 1,
     octave = 0,     -- -2..2, whole-octave pitch shift (perf page)
@@ -135,7 +136,7 @@ function Burst.new()
   -- engine-wide voice timbre macros (lib/params_sync.lua 'VOICE' group). Global,
   -- not per-channel: the non-audio output types can't render them. Read straight
   -- at fire time; these ARE the values handed to the SC voice.
-  self.modIndex = 8     -- FM modulation index (FMVoice default; peak depth driver)
+  self.modIndex = 3     -- FM modulation index (low default = clean, ~2-op tone; up to 24 = bright)
   self.fmDecay = 0.4    -- mod-depth decay as a fraction of amp decay (FM body length)
   self.ampPunch = 4     -- perc-curve magnitude (-> Env.perc curve = -ampPunch); 0 = linear
   self.fmFeedback = 0   -- SinOscFB feedback (radians): 0 = pure sine modulator
@@ -438,9 +439,12 @@ function Burst:fire(ch, beat, freq, level, harm, env, div, total, hit_idx)
   local drive     = self.drive
   local out = self.outputs
   if engine and engine.trig and ((not out) or out:wants_audio(ch)) then
-    engine.trig(geo_freq, actual_level, harm_start, harm_end, harm_decay,
-                mod_index, attack, amp_dec, mod_dec,
-                amp_curve, feedback, drive)
+    -- 4-op FM (lib/Engine_Potionshop.sc): per-channel algorithm selects the
+    -- operator routing; harm_start/harm_end/harm_decay drive the modulator-ratio
+    -- sweep (the old bright->clean glide), the rest are the final hit envelope.
+    engine.trig(geo_freq, actual_level, c.algo,
+                harm_start, harm_end, harm_decay, mod_index,
+                attack, amp_dec, amp_curve, mod_dec, feedback, drive, ch)
   end
   if out then
     -- external voices can't sweep the FM ratio; hand them the starting (peak)

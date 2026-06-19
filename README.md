@@ -100,8 +100,9 @@ button slow-blinks on B). B is an **additive offset** summed onto A each burst
 
 ### page buttons
 
-`[x: 11-15, y: 6]`
+`[x: 10-15, y: 6]`
 
+- `10` **ALG** — FM algorithm page (per-channel operator routing)
 - `11` **KB** — keyboard mode (fast sequence entry)
 - `12` **PERF** — perf page (reset / octave / rate)
 - `13` **PROB** — prob page (probability / alt-trig)
@@ -156,6 +157,20 @@ rows 0–5, per channel — four three-way mode banks:
 
 the two geodes are always-on shaping curves; the `level` value (0–1) is the
 bipolar "run CV" that drives them (0.5 = neutral).
+
+### ALG page
+
+rows 0–5, per channel — the FM **algorithm** (operator routing), `[x: 0-7]` =
+algorithms 1–8, the channel's current selection lit bright:
+
+1. `4>3>2>1` single stack · 2. `(4,3)>2>1` · 3. `4>3>1 2>1` · 4. `4>2>1 3>1`
+· 5. `2>1 4>3` twin stacks · 6. `4>1,2,3` one mod / three carriers · 7. `4>3 +1,2`
+· 8. `additive` (all four carriers)
+
+these are the classic DX/TX81Z 4-operator algorithms: 4 sine operators wired into
+modulator→carrier chains. higher-numbered operators modulate lower ones; carriers
+reach the output. the `harm` value sets the modulator ratio spread (brightness),
+and the h.env sweep (SND page) glides it bright→clean over the note.
 
 ### scale & quantize picker
 
@@ -264,7 +279,7 @@ lives in the system **CLOCK** menu; the script starts at 55 bpm.
 | `lib/scales.lua` | scales (via `musicutil`) + degree→frequency |
 | `lib/quantize.lua` | division/beat snapping |
 | `lib/seqx.lua` | glue over the stock `sequins` library |
-| `lib/Engine_Potionshop.sc` | SuperCollider FM engine + master limiter |
+| `lib/Engine_Potionshop.sc` | SuperCollider four-operator FM engine (8 algorithms) + master limiter |
 
 **stock libraries used:** `sequins` (pattern cycling), `musicutil` (pitch/scales).
 
@@ -289,7 +304,7 @@ lua test/run.lua          # ~165 checks: quantize/snap-forward, scales, sequins 
 the SynthDef graphs can be build-checked with stock SuperCollider:
 
 ```
-sclang /tmp/potion_synthdef_check.scd   # -> "SYNTHDEFS_OK"
+sclang test/potionshop_synthdef_check.scd   # -> "SYNTHDEFS_OK"
 ```
 
 full audio + grid behavior must be verified on norns hardware.

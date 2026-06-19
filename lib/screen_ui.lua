@@ -47,7 +47,7 @@ local PARAMS = {'div', 'reps', 'note', 'level', 'harm', 'env'}
 -- onto the same pages (see _sync_page_from_grid).
 local PAGES  = {'main', 'alt', 'perf', 'prob', 'scale', 'snd'}
 -- main/alt line 1 = run. scale = root + 12 chromatic keys + quantize = 14 stops.
-local LINES_PER_PAGE = {1 + #PARAMS, 1 + #PARAMS, 3, 4, 14, 4}
+local LINES_PER_PAGE = {1 + #PARAMS, 1 + #PARAMS, 3, 4, 14, 5}
 local PAGE_PERF, PAGE_PROB, PAGE_SCALE, PAGE_SND = 3, 4, 5, 6
 
 local NOTE_NAMES = {'c','c#','d','d#','e','f','f#','g','g#','a','a#','b'}
@@ -390,6 +390,7 @@ function Screen:_edit_snd(d)
   elseif line == 2 then self.ctl:set_scalar(ch, 'geodeMode', clamp(c.geodeMode + d, 0, #GridUI.GEODE_MODE_NAMES - 1))
   elseif line == 3 then self.ctl:set_scalar(ch, 'harmEnvMode', clamp(c.harmEnvMode + d, 0, #GridUI.HARM_ENV_MODE_NAMES - 1))
   elseif line == 4 then self.ctl:set_scalar(ch, 'harmEnv', clamp(c.harmEnv + d, 0, #GridUI.HARM_GEODE_NAMES - 1))
+  elseif line == 5 then self.ctl:set_scalar(ch, 'algo', clamp(c.algo + d, 1, #GridUI.ALGO_NAMES))
   end
 end
 
@@ -574,6 +575,7 @@ function Screen:page_lines()
       {'geode', GridUI.GEODE_MODE_NAMES[c.geodeMode + 1]},
       {'h.env', GridUI.HARM_ENV_MODE_NAMES[c.harmEnvMode + 1]},
       {'harm',  GridUI.HARM_GEODE_NAMES[c.harmEnv + 1]},
+      {'algo',  GridUI.ALGO_NAMES[c.algo]},
     }
   elseif self.page == PAGE_PROB then
     lines = {

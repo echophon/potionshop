@@ -326,6 +326,14 @@ function M:_add_channel_params(n)
       end)
     end)
   end
+  -- FM algorithm (1..8, 1-based unlike the 0-based modes above).
+  def(1, function()
+    params:add_option(id('algorithm'), 'algorithm', GridUI.ALGO_NAMES, c.algo)
+    params:set_action(id('algorithm'), function(i)
+      c.algo = i
+      self:request_render()
+    end)
+  end)
   def(1, function()
     params:add_option(id('reset'), 'reset', RESET_NAMES,
       GridUI.nearest_index(GridUI.RESET_INTERVALS, c.resetInterval))
@@ -498,6 +506,7 @@ function M:reflect_scalars(n)
   params:set(id('geode'), c.geodeMode + 1, true)
   params:set(id('harm_env_mode'), c.harmEnvMode + 1, true)
   params:set(id('harm_geode'), c.harmEnv + 1, true)
+  params:set(id('algorithm'), c.algo, true)
   params:set(id('reset'), GridUI.nearest_index(GridUI.RESET_INTERVALS, c.resetInterval), true)
   params:set(id('octave'), c.octave, true)
 end

@@ -202,7 +202,8 @@ check('harm-trig step arpeggiates the B harm per hit',
   #h_step == 3 and approx(h_step[1], 2) and approx(h_step[2], 5) and approx(h_step[3], 8))
 
 -- harm envelope: harmEnvMode sweeps the FM ratio bright->clean over the note.
--- engine.trig(freq, amp, harmStart, harmEnd, harmDecay, modIndex, atk, aDec, mDec).
+-- engine.trig(freq, amp, algo, harmStart, harmEnd, harmDecay, modIndex,
+--             atk, aDec, ampCurve, mDec, feedback, drive, ch).
 local function first_trig(harmEnvMode)
   clock._reset()
   local saved = engine
@@ -220,17 +221,18 @@ local function first_trig(harmEnvMode)
   return cap
 end
 local off = first_trig(0)
+check('algo passes at trig arg 3 (default channel = 1)', off and off[3] == 1)
 check('harm env off: ratio is static (start==end, ~no decay)',
-  off and approx(off[3], 8) and approx(off[4], 8) and off[5] < 0.01)
+  off and approx(off[4], 8) and approx(off[5], 8) and off[6] < 0.01)
 local on = first_trig(1)  -- hit: sweep over one interval
 check('harm env on: ratio sweeps target->unison over a real decay',
-  on and approx(on[3], 8) and approx(on[4], 2) and on[5] > 0.01)
--- hit-mode harm sweep spans the modulator's own life (msg[9] = mod decay), not
--- the amp decay (msg[8]): the FM sidebands fade over mod_dec, so a sweep tied to
+  on and approx(on[4], 8) and approx(on[5], 2) and on[6] > 0.01)
+-- hit-mode harm sweep spans the modulator's own life (msg[11] = mod decay), not
+-- the amp decay (msg[9]): the FM sidebands fade over mod_dec, so a sweep tied to
 -- amp_dec finishes its bright->clean glide after the modulator is already silent.
 -- Matching mod_dec (= 0.4 * amp_dec) lets the whole glide be heard.
-check('harm env hit: sweep decay == mod decay', on and approx(on[5], on[9]))
-check('harm env hit: sweep decay is 0.4 of amp decay', on and approx(on[5], on[8] * 0.4))
+check('harm env hit: sweep decay == mod decay', on and approx(on[6], on[11]))
+check('harm env hit: sweep decay is 0.4 of amp decay', on and approx(on[6], on[9] * 0.4))
 
 -- shape-mode amp decay tracks the inter-hit gap: 4x faster division -> ~1/4
 -- the decay, so dense/fast channels self-shorten instead of piling up.
@@ -246,14 +248,50 @@ local function amp_decay_for_div(divv)
   e:launch(1)
   clock._run_until(2)
   engine = saved
-  return cap and cap[8]
+  return cap and cap[9]
 end
 local slow, fast = amp_decay_for_div(2), amp_decay_for_div(8)
 check('amp decay scales with division (4x faster ~= 1/4 the hit)',
   slow and fast and approx(fast, slow / 4))
 
+-- per-channel FM algorithm reaches trig arg 3 (4-op engine routing selector).
+local function algo_trig(algo)
+  clock._reset()
+  local saved = engine
+  local cap
+  engine = { trig = function(...) cap = cap or {...} end }
+  local e = Burst.new()
+  e.quantize = 0
+  e.channels[1].div = seqx.new{4}
+  e.channels[1].reps = seqx.new{1}
+  e.channels[1].algo = algo
+  e:launch(1)
+  clock._run_until(2)
+  engine = saved
+  return cap and cap[3]
+end
+check('per-channel algo feeds trig arg 3', algo_trig(5) == 5)
+
+-- the channel index rides along as trig arg 14 so the SC engine can keep each
+-- channel monophonic (a new hit releases the previous voice, no droning overlap).
+local function chan_arg(ch)
+  clock._reset()
+  local saved = engine
+  local cap
+  engine = { trig = function(...) cap = cap or {...} end }
+  local e = Burst.new()
+  e.quantize = 0
+  e.channels[ch].div = seqx.new{4}
+  e.channels[ch].reps = seqx.new{1}
+  e:launch(ch)
+  clock._run_until(2)
+  engine = saved
+  return cap and cap[14]
+end
+check('channel index feeds trig arg 14', chan_arg(3) == 3)
+
 -- VOICE macros: engine-wide globals read straight at fire time. trig args
--- 10/11/12 = ampCurve, feedback, drive; arg 6 = modIndex; arg 9 = mod decay.
+-- 10/12/13 = ampCurve, feedback, drive; arg 7 = modIndex; arg 11 = mod decay.
 -- `setup(e)` mutates the engine before launch; returns the first trig.
 local function macro_trig(setup)
   clock._reset()
@@ -271,18 +309,18 @@ local function macro_trig(setup)
   return cap
 end
 local d = macro_trig()
-check('voice macro defaults: modIndex=8, ampCurve=-4, feedback=0, drive=1',
-  d and approx(d[6], 8) and approx(d[10], -4) and approx(d[11], 0) and approx(d[12], 1))
+check('voice macro defaults: modIndex=3, ampCurve=-4, feedback=0, drive=1',
+  d and approx(d[7], 3) and approx(d[10], -4) and approx(d[12], 0) and approx(d[13], 1))
 check('voice macro defaults: mod decay is 0.4 of amp decay (fmDecay)',
-  d and approx(d[9], d[8] * 0.4))
+  d and approx(d[11], d[9] * 0.4))
 -- the global voice macros feed the trig args directly.
 local gv = macro_trig(function(e)
   e.modIndex, e.ampPunch, e.fmFeedback, e.drive, e.fmDecay = 12, 8, 1.5, 4, 0.8
 end)
 check('voice macros feed trig: modIndex, ampPunch->curve, feedback, drive',
-  gv and approx(gv[6], 12) and approx(gv[10], -8) and approx(gv[11], 1.5) and approx(gv[12], 4))
+  gv and approx(gv[7], 12) and approx(gv[10], -8) and approx(gv[12], 1.5) and approx(gv[13], 4))
 check('voice fmDecay sets mod decay (0.8 of amp decay)',
-  gv and approx(gv[9], gv[8] * 0.8))
+  gv and approx(gv[11], gv[9] * 0.8))
 
 -- quantization: an off-grid division (triplet, 4/3 beats) must snap every
 -- event FORWARD to the quarter-note grid (quantize=4 -> step 1 beat). We read

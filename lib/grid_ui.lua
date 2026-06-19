@@ -15,7 +15,7 @@
 -- Layout reference (rows/cols, 0-based):
 --   rows 0..5 = per-channel step view: up to 16 steps of the active layer
 --               (paramLayer A/B; flipped by re-pressing the row-7 param button)
---   row 6     = 0..5 launch · 6..10 dark · 11 KB · 12 PERF · 13 PROB · 14 QNT · 15 SND
+--   row 6     = 0..5 launch · 6..9 dark · 10 ALG · 11 KB · 12 PERF · 13 PROB · 14 QNT · 15 SND
 --   row 7     = 0..5 param (div/reps/note/level/harm/env) · 11 CLR
 --             · 12 COPY · 13 PASTE · 14 RANDOMIZE · 15 MUTATE
 --   CLR/COPY/PASTE act on the MAIN (A-layer) sequins of the tapped channel only;
@@ -26,6 +26,7 @@
 --   PERF:  rows 0-5 = reset off/1/2/4 bars (cols 0..3) · octave -2..+2 (cols 5..9)
 --          · rate (cols 11..15)
 --   SND:   rows 0-5 = env(0-2) · geode(4-6) · harm env(8-10) · harm geode(12-14)
+--   ALG:   rows 0-5 = FM algorithm 1-8 (cols 0-7), the channel's selection bright
 --   scale picker: row 0 cols 0-6 scale presets (7)
 --                 rows 1-2 cols 0-6 degree (note-mask) keyboard: black row 1 / white row 2
 --                 rows 4-5 cols 0-6 root keyboard: black row 4 / white row 5
@@ -50,6 +51,7 @@ local PASTE_BUTTON_COL = 13
 local RANDOMIZE_BUTTON_COL = 14
 local MUTATE_BUTTON_COL = 15
 -- row 6 right side
+local ROW6_ALG_COL = 10   -- FM algorithm page (in the otherwise-dark cols 6..10)
 local ROW6_KB_COL = 11
 local ROW6_PERF_COL = 12
 local ROW6_PROB_COL = 13
@@ -92,6 +94,9 @@ local ENV_MODE_NAMES       = {'shape', 'burst', 'hit'}
 local GEODE_MODE_NAMES     = {'transient', 'sustain', 'cycle'}  -- amp geode, always on
 local HARM_ENV_MODE_NAMES  = {'off', 'hit', 'burst'}  -- harm sweep timing
 local HARM_GEODE_NAMES     = {'transient', 'sustain', 'cycle'}  -- harm per-hit geode, always on
+-- FM algorithm (1..8): DX-style operator routings, labelled by their shape.
+local ALGO_NAMES = {'4>3>2>1', '(4,3)>2>1', '4>3>1 2>1', '4>2>1 3>1',
+                    '2>1 4>3', '4>1,2,3', '4>3 +1,2', 'additive'}
 -- alt(B)-layer trigger modes: how a B sequins feeds a burst. Shared by the note
 -- (altTrig) and harm (harmTrig) layers.
 --   hold = add&hold (B drawn once per burst, summed onto A for every hit)
@@ -169,6 +174,7 @@ GridUI.ENV_MODE_NAMES = ENV_MODE_NAMES
 GridUI.GEODE_MODE_NAMES = GEODE_MODE_NAMES
 GridUI.HARM_ENV_MODE_NAMES = HARM_ENV_MODE_NAMES
 GridUI.HARM_GEODE_NAMES = HARM_GEODE_NAMES
+GridUI.ALGO_NAMES = ALGO_NAMES
 GridUI.RESET_INTERVALS = RESET_INTERVALS
 GridUI.OCTAVE_VALUES = OCTAVE_VALUES
 GridUI.RATE_VALUES = RATE_VALUES
@@ -202,6 +208,7 @@ function GridUI.new(engine, grid, opts)
   self.probMode = false
   self.perfMode = false
   self.soundMode = false
+  self.algoMode = false        -- FM algorithm page (per-channel routing selector)
   self.actionMode = nil        -- 'randomize'|'mutate'|'clear'|'copy'|'paste'|nil
   self.clipboard = nil         -- {param = {vals...}} snapshot of a channel's A layer
   self.status = ''
@@ -219,7 +226,7 @@ function GridUI.new(engine, grid, opts)
 
   engine:on(function(ev)
     if ev.type == 'fire' then
-      if self.kbMode or self.picker or self.probMode or self.perfMode or self.soundMode then return end
+      if self.kbMode or self.picker or self.probMode or self.perfMode or self.soundMode or self.algoMode then return end
       self:render_channel_row(ev.ch - 1)
       self.g:refresh()
     elseif ev.type == 'launch' or ev.type == 'stop' then
@@ -306,6 +313,11 @@ function GridUI:handle_normal_press(x, y)
       elseif x >= 4 and x <= 6 then self:set_scalar(y, 'geodeMode', x - 4)
       elseif x >= 8 and x <= 10 then self:set_scalar(y, 'harmEnvMode', x - 8)
       elseif x >= 12 and x <= 14 then self:set_scalar(y, 'harmEnv', x - 12) end
+      self:render_channel_row(y); self.g:refresh()
+      return
+    end
+    if self.algoMode then
+      if x <= 7 then self:set_scalar(y, 'algo', x + 1) end  -- cols 0..7 -> algo 1..8
       self:render_channel_row(y); self.g:refresh()
       return
     end
@@ -476,7 +488,7 @@ end
 function GridUI:open_scale_picker()
   -- entering the scale page is exclusive with the other row-6 latch modes, so
   -- only one row-6 button stays lit (see handle_row6's PERF/PROB/SND handlers)
-  self.probMode = false; self.perfMode = false; self.soundMode = false
+  self.probMode = false; self.perfMode = false; self.soundMode = false; self.algoMode = false
   self.actionMode = nil
   self.customMask = {}
   for _, v in ipairs(self.engine.scale) do self.customMask[#self.customMask + 1] = v end
@@ -568,7 +580,7 @@ end
 
 function GridUI:_exclusive_mode(field)
   -- set self[field]=true and clear the other latch modes + action mode
-  self.probMode = false; self.perfMode = false; self.soundMode = false
+  self.probMode = false; self.perfMode = false; self.soundMode = false; self.algoMode = false
   self.actionMode = nil
   self[field] = true
 end
@@ -577,21 +589,27 @@ function GridUI:handle_row6(x)
   if x == ROW6_KB_COL then self:enter_kb_mode(); return end
   if x == ROW6_PERF_COL then
     local was = self.perfMode
-    self.probMode = false; self.soundMode = false; self.actionMode = nil
+    self.probMode = false; self.soundMode = false; self.algoMode = false; self.actionMode = nil
     self.perfMode = not was
     self:render_all(); return
   end
   if x == ROW6_PROB_COL then
     local was = self.probMode
-    self.soundMode = false; self.perfMode = false; self.actionMode = nil
+    self.soundMode = false; self.perfMode = false; self.algoMode = false; self.actionMode = nil
     self.probMode = not was
     self:render_all(); return
   end
   if x == ROW6_QNT_COL then self:open_scale_picker(); return end
   if x == ROW6_SND_COL then
     local was = self.soundMode
-    self.probMode = false; self.perfMode = false; self.actionMode = nil
+    self.probMode = false; self.perfMode = false; self.algoMode = false; self.actionMode = nil
     self.soundMode = not was
+    self:render_all(); return
+  end
+  if x == ROW6_ALG_COL then
+    local was = self.algoMode
+    self.probMode = false; self.perfMode = false; self.soundMode = false; self.actionMode = nil
+    self.algoMode = not was
     self:render_all(); return
   end
 
@@ -638,7 +656,7 @@ function GridUI:_toggle_action(name)
   if self.actionMode == name then self.actionMode = nil
   else
     self.actionMode = name
-    self.probMode = false; self.perfMode = false; self.soundMode = false
+    self.probMode = false; self.perfMode = false; self.soundMode = false; self.algoMode = false
   end
   self:render_all()
 end
@@ -730,6 +748,7 @@ function GridUI:render_channel_row(ch)
   if self.probMode then self:render_prob_row(ch); return end
   if self.perfMode then self:render_perf_row(ch); return end
   if self.soundMode then self:render_sound_row(ch); return end
+  if self.algoMode then self:render_algo_row(ch); return end
   local param = self.selectedParam
   local layer = self.paramLayer
   local seq = self:seq_ref(ch, param, layer)
@@ -796,6 +815,13 @@ function GridUI:render_sound_row(ch)
   for m = 0, 2 do self.g:set_led(m + 12, ch, c.harmEnv == m and 15 or 4) end
 end
 
+-- FM algorithm page: cols 0..7 = algorithm 1..8, the channel's selection bright.
+function GridUI:render_algo_row(ch)
+  local c = self:chan(ch)
+  for x = 0, GRID_W - 1 do self.g:set_led(x, ch, 0); self.g:set_strobe(x, ch, 'off') end
+  for a = 1, #ALGO_NAMES do self.g:set_led(a - 1, ch, c.algo == a and 15 or 4) end
+end
+
 function GridUI:render_action_mode()
   local mark_running = self.actionMode == 'randomize' or self.actionMode == 'mutate'
   for x = 0, 5 do
@@ -803,6 +829,7 @@ function GridUI:render_action_mode()
     self.g:set_strobe(x, 6, (mark_running and self.engine:is_running(x + 1)) and 'slow' or 'off')
   end
   for x = 6, 11 do self.g:set_led(x, 6, 0) end
+  self.g:set_led(ROW6_ALG_COL, 6, 8)
   self.g:set_led(ROW6_PERF_COL, 6, 8)
   self.g:set_led(ROW6_KB_COL, 6, 8)
   self.g:set_led(ROW6_PROB_COL, 6, 8)
@@ -830,6 +857,8 @@ function GridUI:render_row6()
   self.g:set_strobe(ROW6_QNT_COL, 6, scale_open and 'fast' or 'off')
   self.g:set_led(ROW6_SND_COL, 6, self.soundMode and 15 or 8)
   self.g:set_strobe(ROW6_SND_COL, 6, self.soundMode and 'fast' or 'off')
+  self.g:set_led(ROW6_ALG_COL, 6, self.algoMode and 15 or 8)
+  self.g:set_strobe(ROW6_ALG_COL, 6, self.algoMode and 'fast' or 'off')
 end
 
 function GridUI:render_row7()
@@ -1014,6 +1043,7 @@ function GridUI:current_page()
   if self.perfMode then return 'PERF' end
   if self.probMode then return 'PROB' end
   if self.soundMode then return 'SND' end
+  if self.algoMode then return 'ALG' end
   if self.actionMode then return string.upper(self.actionMode) end
   return 'MAIN'
 end
@@ -1030,6 +1060,8 @@ function GridUI:_status()
     s = 'PROB — cols0-1 alt trig, cols11-14 prob%, col15 burst/hit'
   elseif self.soundMode then
     s = 'SOUND — env/geode/harmenv/harmgeode'
+  elseif self.algoMode then
+    s = 'ALG — cols0-7 FM algorithm (1-8)'
   elseif self.actionMode then
     s = string.upper(self.actionMode) .. ' — tap a channel'
   elseif self.picker and self.picker.kind == 'step' then
