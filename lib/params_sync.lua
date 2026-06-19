@@ -8,7 +8,7 @@
 -- the OUTPUTS group (lib/outputs.lua), plus one group per
 -- channel ("CHANNEL 1".."CHANNEL 6"). Each group holds the channel scalars
 -- (run, rate, prob, modes, reset, clear/copy/paste + action triggers) and, per
--- sequence parameter x layer (div/reps/note/level/harm/env x A/B), a
+-- sequence parameter x layer (div/reps/note/level/harm/env/op1/op2/op3/op4 x A/B), a
 -- separator-headed block of three params:
 --   chN_<p>_<a|b>        text — the whole sequence as a space-separated string
 --   chN_<p>_<a|b>_step   number — cursor into the sequence (1-based)
@@ -61,6 +61,12 @@ for nm, pc in pairs({db = 1, eb = 3, gb = 6, ab = 8, bb = 10}) do NAME_TO_PC[nm]
 local function round(x) return math.floor(x + 0.5) end
 local function clamp(v, lo, hi) return math.max(lo, math.min(hi, v)) end
 
+-- params shown/parsed on the 0..31 grid scale (value = n/31): the amp `level`,
+-- the `env` shape, and the four per-operator levels op1..op4.
+local function is_level_like(p)
+  return p == 'level' or p == 'env' or p:match('^op%d') ~= nil
+end
+
 local M = {}
 M.__index = M
 M.MAX_STEPS = MAX_STEPS
@@ -81,7 +87,7 @@ end
 -- engine value -> display token (the units the grid/screen show).
 function M.fmt_value(p, v)
   if p == 'reps' and v == -1 then return 'inf' end
-  if p == 'level' or p == 'env' then return tostring(round(v * 31)) end
+  if is_level_like(p) then return tostring(round(v * 31)) end
   if p == 'harm' then
     local s = string.format('%.2f', v)
     s = s:gsub('0+$', ''):gsub('%.$', '')  -- 2.00 -> 2, 3.50 -> 3.5
@@ -96,7 +102,7 @@ function M.parse_token(p, layer, tok)
   local n = tonumber(tok)
   if n == nil then return nil end
   if layer == 'B' and n == 0 then return 0 end
-  if p == 'level' or p == 'env' then
+  if is_level_like(p) then
     return clamp(round(n), 0, 31) / 31
   end
   return SPV[p][GridUI.nearest_index(SPV[p], n)]
@@ -241,6 +247,8 @@ function M:add_globals()
   params:set_action('fm_feedback', function(v) eng.fmFeedback = v / 100 end)
   params:add_number('fm_drive', 'FM drive', 100, 800, round(eng.drive * 100), pct())
   params:set_action('fm_drive', function(v) eng.drive = v / 100 end)
+  -- per-operator output levels are no longer global: they live as per-channel
+  -- op1..op4 sequence blocks (added in _add_channel_params via SEQ_PARAMS).
 end
 
 function M:add_channels()
@@ -310,11 +318,18 @@ function M:_add_channel_params(n)
       self:request_render()
     end)
   end)
+  def(1, function()
+    params:add_option(id('op_trig'), 'op trig', ALT_TRIG_NAMES, c.opTrig + 1)
+    params:set_action(id('op_trig'), function(i)
+      c.opTrig = i - 1
+      self:request_render()
+    end)
+  end)
   local mode_fields = {
     {'env_mode', 'env mode', 'envMode', GridUI.ENV_MODE_NAMES},
     {'geode', 'geode', 'geodeMode', GridUI.GEODE_MODE_NAMES},
-    {'harm_env_mode', 'harm env', 'harmEnvMode', GridUI.HARM_ENV_MODE_NAMES},
-    {'harm_geode', 'harm geode', 'harmEnv', GridUI.HARM_GEODE_NAMES},
+    {'op_env_mode', 'op env', 'opEnvMode', GridUI.OP_ENV_MODE_NAMES},
+    {'op_geode', 'op geode', 'opGeode', GridUI.OP_GEODE_NAMES},
   }
   for _, m in ipairs(mode_fields) do
     local pid, name, field, names = m[1], m[2], m[3], m[4]
@@ -502,10 +517,11 @@ function M:reflect_scalars(n)
   params:set(id('prob_mode'), c.probHit and 2 or 1, true)
   params:set(id('alt_trig'), c.altTrig + 1, true)
   params:set(id('harm_trig'), c.harmTrig + 1, true)
+  params:set(id('op_trig'), c.opTrig + 1, true)
   params:set(id('env_mode'), c.envMode + 1, true)
   params:set(id('geode'), c.geodeMode + 1, true)
-  params:set(id('harm_env_mode'), c.harmEnvMode + 1, true)
-  params:set(id('harm_geode'), c.harmEnv + 1, true)
+  params:set(id('op_env_mode'), c.opEnvMode + 1, true)
+  params:set(id('op_geode'), c.opGeode + 1, true)
   params:set(id('algorithm'), c.algo, true)
   params:set(id('reset'), GridUI.nearest_index(GridUI.RESET_INTERVALS, c.resetInterval), true)
   params:set(id('octave'), c.octave, true)

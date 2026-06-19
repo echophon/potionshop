@@ -16,16 +16,18 @@
 --   rows 0..5 = per-channel step view: up to 16 steps of the active layer
 --               (paramLayer A/B; flipped by re-pressing the row-7 param button)
 --   row 6     = 0..5 launch · 6..9 dark · 10 ALG · 11 KB · 12 PERF · 13 PROB · 14 QNT · 15 SND
---   row 7     = 0..5 param (div/reps/note/level/harm/env) · 11 CLR
+--   row 7     = 0..5 param (div/reps/note/level/harm/env) · 6..9 op1..op4
+--               (per-operator FM level sequences) · 11 CLR
 --             · 12 COPY · 13 PASTE · 14 RANDOMIZE · 15 MUTATE
 --   CLR/COPY/PASTE act on the MAIN (A-layer) sequins of the tapped channel only;
 --   the B (alt) layer is left intact so it can keep variating the copied sequins.
 --   PROB:  rows 0-5 = note alt-trig hold/step (cols 0-1) · harm alt-trig
---          hold/step (cols 3-4) · prob 25/50/75/100% (cols 11-14,
---          right-justified) · col 15 burst/hit toggle
+--          hold/step (cols 3-4) · op-level alt-trig hold/step (cols 6-7)
+--          · prob 25/50/75/100% (cols 11-14, right-justified)
+--          · col 15 burst/hit toggle
 --   PERF:  rows 0-5 = reset off/1/2/4 bars (cols 0..3) · octave -2..+2 (cols 5..9)
 --          · rate (cols 11..15)
---   SND:   rows 0-5 = env(0-2) · geode(4-6) · harm env(8-10) · harm geode(12-14)
+--   SND:   rows 0-5 = env(0-2) · geode(4-6) · op env(8-10) · op geode(12-14)
 --   ALG:   rows 0-5 = FM algorithm 1-8 (cols 0-7), the channel's selection bright
 --   scale picker: row 0 cols 0-6 scale presets (7)
 --                 rows 1-2 cols 0-6 degree (note-mask) keyboard: black row 1 / white row 2
@@ -42,7 +44,9 @@ local scales = require 'scales'
 
 local GRID_W = 16
 local NUM_CHANNELS = 6
-local PARAMS = {'div', 'reps', 'note', 'level', 'harm', 'env'}
+-- div/reps/note/level/harm/env occupy row-7 cols 0-5; op1..op4 (per-operator FM
+-- output levels, sequenced like `level`) occupy the previously-dark cols 6-9.
+local PARAMS = {'div', 'reps', 'note', 'level', 'harm', 'env', 'op1', 'op2', 'op3', 'op4'}
 
 -- row 7
 local CLR_BUTTON_COL = 11
@@ -86,14 +90,15 @@ local RATE_COLS   = {11, 12, 13, 14, 15}
 -- at the far right (col 15, unchanged). burstProb is now a discrete 4-value set.
 local ALT_TRIG_COLS  = {0, 1}                -- note alt(B) layer: hold / step
 local HARM_TRIG_COLS = {3, 4}                -- harm alt(B) layer: hold / step
+local OP_TRIG_COLS   = {6, 7}                -- op-level alt(B) layer: hold / step
 local PROB_VALUES   = {0.25, 0.5, 0.75, 1.0}
 local PROB_COLS     = {11, 12, 13, 14}
 local PROB_HIT_COL  = 15
 
 local ENV_MODE_NAMES       = {'shape', 'burst', 'hit'}
 local GEODE_MODE_NAMES     = {'transient', 'sustain', 'cycle'}  -- amp geode, always on
-local HARM_ENV_MODE_NAMES  = {'off', 'hit', 'burst'}  -- harm sweep timing
-local HARM_GEODE_NAMES     = {'transient', 'sustain', 'cycle'}  -- harm per-hit geode, always on
+local OP_ENV_MODE_NAMES    = {'off', 'hit', 'burst'}  -- op-level geode timing
+local OP_GEODE_NAMES       = {'transient', 'sustain', 'cycle'}  -- op-level per-hit geode shape
 -- FM algorithm (1..8): DX-style operator routings, labelled by their shape.
 local ALGO_NAMES = {'4>3>2>1', '(4,3)>2>1', '4>3>1 2>1', '4>2>1 3>1',
                     '2>1 4>3', '4>1,2,3', '4>3 +1,2', 'additive'}
@@ -105,6 +110,10 @@ local ALT_TRIG_MODE_NAMES  = {'hold', 'step'}
 
 local DEFAULT_VALUE   = {div = 8, reps = 3, note = 0, level = 0.5, harm = 2, env = 2}
 local DEFAULT_VALUE_B = {div = 0, reps = 0, note = 0, level = 0, harm = 0, env = 0}
+-- op levels default to full (A) / no-offset (B), like a fresh carrier at unity.
+for _, p in ipairs({'op1', 'op2', 'op3', 'op4'}) do
+  DEFAULT_VALUE[p] = 1; DEFAULT_VALUE_B[p] = 0
+end
 
 -- 1-based value layouts for the step picker / KB bands. Index 1..32 maps to
 -- grid cell (y*16 + x + 1). These are the grid-reachability contract.
@@ -117,6 +126,11 @@ local STEP_PICKER_VALUES = {
   harm  = range(32, function(i) return 2 + i * 0.75 end),
   env   = range(32, function(i) return i / 31 end),
 }
+-- op1..op4 share the level layout (0..1 in 1/31 steps), keeping every operator
+-- level grid-reachable in the step picker.
+for _, p in ipairs({'op1', 'op2', 'op3', 'op4'}) do
+  STEP_PICKER_VALUES[p] = range(32, function(i) return i / 31 end)
+end
 local QUANTIZE_VALUES = range(32, function(i) return i + 1 end)
 
 local function round(x) return math.floor(x + 0.5) end
@@ -150,7 +164,7 @@ local function value_brightness(param, value)
     return value == -1 and 15 or math.min(4 + value, 14)
   elseif param == 'note' then
     return math.min(4 + math.abs(value), 15)
-  elseif param == 'level' then
+  elseif param == 'level' or param:match('^op%d') then
     return math.max(2, round(2 + value * 13))
   elseif param == 'harm' then
     local norm = (value - 2) / 23.25
@@ -172,8 +186,8 @@ GridUI.nearest_index = nearest_index
 GridUI.DEFAULT_VALUE = DEFAULT_VALUE
 GridUI.ENV_MODE_NAMES = ENV_MODE_NAMES
 GridUI.GEODE_MODE_NAMES = GEODE_MODE_NAMES
-GridUI.HARM_ENV_MODE_NAMES = HARM_ENV_MODE_NAMES
-GridUI.HARM_GEODE_NAMES = HARM_GEODE_NAMES
+GridUI.OP_ENV_MODE_NAMES = OP_ENV_MODE_NAMES
+GridUI.OP_GEODE_NAMES = OP_GEODE_NAMES
 GridUI.ALGO_NAMES = ALGO_NAMES
 GridUI.RESET_INTERVALS = RESET_INTERVALS
 GridUI.OCTAVE_VALUES = OCTAVE_VALUES
@@ -295,6 +309,7 @@ function GridUI:handle_normal_press(x, y)
     if self.probMode then
       local trig_idx = index_of(ALT_TRIG_COLS, x)
       local harm_idx = index_of(HARM_TRIG_COLS, x)
+      local op_idx = index_of(OP_TRIG_COLS, x)
       local prob_idx = index_of(PROB_COLS, x)
       if x == PROB_HIT_COL then
         self:set_scalar(y, 'probHit', not self:chan(y).probHit)
@@ -302,6 +317,8 @@ function GridUI:handle_normal_press(x, y)
         self:set_scalar(y, 'altTrig', trig_idx)
       elseif harm_idx ~= -1 then
         self:set_scalar(y, 'harmTrig', harm_idx)
+      elseif op_idx ~= -1 then
+        self:set_scalar(y, 'opTrig', op_idx)
       elseif prob_idx ~= -1 then
         self:set_scalar(y, 'burstProb', PROB_VALUES[prob_idx + 1])
       end
@@ -311,8 +328,8 @@ function GridUI:handle_normal_press(x, y)
     if self.soundMode then
       if x <= 2 then self:set_scalar(y, 'envMode', x)
       elseif x >= 4 and x <= 6 then self:set_scalar(y, 'geodeMode', x - 4)
-      elseif x >= 8 and x <= 10 then self:set_scalar(y, 'harmEnvMode', x - 8)
-      elseif x >= 12 and x <= 14 then self:set_scalar(y, 'harmEnv', x - 12) end
+      elseif x >= 8 and x <= 10 then self:set_scalar(y, 'opEnvMode', x - 8)
+      elseif x >= 12 and x <= 14 then self:set_scalar(y, 'opGeode', x - 12) end
       self:render_channel_row(y); self.g:refresh()
       return
     end
@@ -775,10 +792,11 @@ end
 function GridUI:render_prob_row(ch)
   local c = self:chan(ch)
   for x = 0, GRID_W - 1 do self.g:set_led(x, ch, 0); self.g:set_strobe(x, ch, 'off') end
-  -- alt-trig modes (left): note layer cols 0-1, harm layer cols 3-4
+  -- alt-trig modes (left): note layer cols 0-1, harm layer cols 3-4, op cols 6-7
   for i = 1, #ALT_TRIG_MODE_NAMES do
     self.g:set_led(ALT_TRIG_COLS[i], ch, c.altTrig == (i - 1) and 15 or 4)
     self.g:set_led(HARM_TRIG_COLS[i], ch, c.harmTrig == (i - 1) and 15 or 4)
+    self.g:set_led(OP_TRIG_COLS[i], ch, c.opTrig == (i - 1) and 15 or 4)
   end
   -- prob options (right-justified): nearest discrete value highlighted
   local sel = nearest_index(PROB_VALUES, c.burstProb)
@@ -811,8 +829,8 @@ function GridUI:render_sound_row(ch)
   for x = 0, GRID_W - 1 do self.g:set_led(x, ch, 0); self.g:set_strobe(x, ch, 'off') end
   for m = 0, 2 do self.g:set_led(m, ch, c.envMode == m and 15 or 4) end
   for m = 0, 2 do self.g:set_led(m + 4, ch, c.geodeMode == m and 15 or 4) end
-  for m = 0, 2 do self.g:set_led(m + 8, ch, c.harmEnvMode == m and 15 or 4) end
-  for m = 0, 2 do self.g:set_led(m + 12, ch, c.harmEnv == m and 15 or 4) end
+  for m = 0, 2 do self.g:set_led(m + 8, ch, c.opEnvMode == m and 15 or 4) end
+  for m = 0, 2 do self.g:set_led(m + 12, ch, c.opGeode == m and 15 or 4) end
 end
 
 -- FM algorithm page: cols 0..7 = algorithm 1..8, the channel's selection bright.
@@ -867,7 +885,7 @@ function GridUI:render_row7()
     self.g:set_led(x, 7, sel and 15 or 5)
     self.g:set_strobe(x, 7, (sel and self.paramLayer == 'B') and 'slow' or 'off')
   end
-  for x = 6, 10 do self.g:set_led(x, 7, 0) end
+  self.g:set_led(10, 7, 0)  -- col 10: spacer between op4 (col 9) and the action buttons
   local function action_led(col, name)
     self.g:set_led(col, 7, self.actionMode == name and 15 or 4)
     self.g:set_strobe(col, 7, self.actionMode == name and 'fast' or 'off')
@@ -1057,9 +1075,9 @@ function GridUI:_status()
   elseif self.perfMode then
     s = 'PERF — cols0-3 reset, cols5-9 oct, cols11-15 rate'
   elseif self.probMode then
-    s = 'PROB — cols0-1 alt trig, cols11-14 prob%, col15 burst/hit'
+    s = 'PROB — cols0-1 note, 3-4 harm, 6-7 op trig, 11-14 prob%, 15 burst/hit'
   elseif self.soundMode then
-    s = 'SOUND — env/geode/harmenv/harmgeode'
+    s = 'SOUND — env/geode/op env/op geode'
   elseif self.algoMode then
     s = 'ALG — cols0-7 FM algorithm (1-8)'
   elseif self.actionMode then

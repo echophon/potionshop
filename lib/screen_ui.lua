@@ -47,7 +47,7 @@ local PARAMS = {'div', 'reps', 'note', 'level', 'harm', 'env'}
 -- onto the same pages (see _sync_page_from_grid).
 local PAGES  = {'main', 'alt', 'perf', 'prob', 'scale', 'snd'}
 -- main/alt line 1 = run. scale = root + 12 chromatic keys + quantize = 14 stops.
-local LINES_PER_PAGE = {1 + #PARAMS, 1 + #PARAMS, 3, 4, 14, 5}
+local LINES_PER_PAGE = {1 + #PARAMS, 1 + #PARAMS, 3, 5, 14, 5}
 local PAGE_PERF, PAGE_PROB, PAGE_SCALE, PAGE_SND = 3, 4, 5, 6
 
 local NOTE_NAMES = {'c','c#','d','d#','e','f','f#','g','g#','a','a#','b'}
@@ -388,8 +388,8 @@ function Screen:_edit_snd(d)
   local line = self.sel_line[PAGE_SND]
   if line == 1 then self.ctl:set_scalar(ch, 'envMode', clamp(c.envMode + d, 0, #GridUI.ENV_MODE_NAMES - 1))
   elseif line == 2 then self.ctl:set_scalar(ch, 'geodeMode', clamp(c.geodeMode + d, 0, #GridUI.GEODE_MODE_NAMES - 1))
-  elseif line == 3 then self.ctl:set_scalar(ch, 'harmEnvMode', clamp(c.harmEnvMode + d, 0, #GridUI.HARM_ENV_MODE_NAMES - 1))
-  elseif line == 4 then self.ctl:set_scalar(ch, 'harmEnv', clamp(c.harmEnv + d, 0, #GridUI.HARM_GEODE_NAMES - 1))
+  elseif line == 3 then self.ctl:set_scalar(ch, 'opEnvMode', clamp(c.opEnvMode + d, 0, #GridUI.OP_ENV_MODE_NAMES - 1))
+  elseif line == 4 then self.ctl:set_scalar(ch, 'opGeode', clamp(c.opGeode + d, 0, #GridUI.OP_GEODE_NAMES - 1))
   elseif line == 5 then self.ctl:set_scalar(ch, 'algo', clamp(c.algo + d, 1, #GridUI.ALGO_NAMES))
   end
 end
@@ -405,8 +405,10 @@ function Screen:_edit_prob(d)
     self.ctl:set_scalar(ch, 'probHit', not c.probHit)
   elseif line == 3 then
     self.ctl:set_scalar(ch, 'altTrig', clamp(c.altTrig + d, 0, #GridUI.ALT_TRIG_MODE_NAMES - 1))
-  else
+  elseif line == 4 then
     self.ctl:set_scalar(ch, 'harmTrig', clamp(c.harmTrig + d, 0, #GridUI.ALT_TRIG_MODE_NAMES - 1))
+  else
+    self.ctl:set_scalar(ch, 'opTrig', clamp(c.opTrig + d, 0, #GridUI.ALT_TRIG_MODE_NAMES - 1))
   end
 end
 
@@ -573,9 +575,9 @@ function Screen:page_lines()
     lines = {
       {'env',   GridUI.ENV_MODE_NAMES[c.envMode + 1]},
       {'geode', GridUI.GEODE_MODE_NAMES[c.geodeMode + 1]},
-      {'h.env', GridUI.HARM_ENV_MODE_NAMES[c.harmEnvMode + 1]},
-      {'harm',  GridUI.HARM_GEODE_NAMES[c.harmEnv + 1]},
-      {'algo',  GridUI.ALGO_NAMES[c.algo]},
+      {'op.env', GridUI.OP_ENV_MODE_NAMES[c.opEnvMode + 1]},
+      {'op.geo', GridUI.OP_GEODE_NAMES[c.opGeode + 1]},
+      {'algo',   GridUI.ALGO_NAMES[c.algo]},
     }
   elseif self.page == PAGE_PROB then
     lines = {
@@ -583,6 +585,7 @@ function Screen:page_lines()
       {'mode', c.probHit and 'hit' or 'burst'},
       {'note', GridUI.ALT_TRIG_MODE_NAMES[c.altTrig + 1]},
       {'harm', GridUI.ALT_TRIG_MODE_NAMES[c.harmTrig + 1]},
+      {'op',   GridUI.ALT_TRIG_MODE_NAMES[c.opTrig + 1]},
     }
   else  -- PAGE_PERF
     local iv = c.resetInterval

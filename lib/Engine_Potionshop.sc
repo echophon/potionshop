@@ -68,6 +68,7 @@ Engine_Potionshop : CroneEngine {
 			brightnessStart = 2, brightnessEnd = 2, harmDecay = 0.001,
 			m21 = 0, m31 = 0, m41 = 0, m32 = 0, m42 = 0, m43 = 0,  // mod edges (from->to)
 			c1 = 1, c2 = 0, c3 = 0, c4 = 0,                 // carrier gains
+			lvl1 = 1, lvl2 = 1, lvl3 = 1, lvl4 = 1,         // per-operator output levels
 			modIndex = 4, feedback = 0,                     // global PM depth (rad), op4 self-FB (rad)
 			attack = 0.001, ampDecay = 0.4, ampCurve = -4,  // carrier amp env (perc)
 			modDecay = 0.2, drive = 1, gate = 1;            // modulator brightness env, soft-clip, voice gate
@@ -106,14 +107,20 @@ Engine_Potionshop : CroneEngine {
 			// top-down pass: each operator's phase is modulated by the (already
 			// computed) higher-numbered operators feeding it. op4 is the feedback
 			// operator (SinOscFB self-PM); the rest take a phase input via SinOsc.
-			o4 = SinOscFB.ar(freq * r4, feedback);
-			o3 = SinOsc.ar(freq * r3, modEnv * (m43 * o4));
-			o2 = SinOsc.ar(freq * r2, modEnv * (m42 * o4 + m32 * o3));
-			o1 = SinOsc.ar(freq * 1,  modEnv * (m41 * o4 + m31 * o3 + m21 * o2));
+			// Each operator's output is scaled by its level `lvlN` -- which doubles
+			// as its FM depth when it modulates a lower op (it carries lvl into the
+			// phase term below) and its mix gain when it's a carrier (in the sum).
+			o4 = SinOscFB.ar(freq * r4, feedback) * lvl4;
+			o3 = SinOsc.ar(freq * r3, modEnv * (m43 * o4)) * lvl3;
+			o2 = SinOsc.ar(freq * r2, modEnv * (m42 * o4 + m32 * o3)) * lvl2;
+			o1 = SinOsc.ar(freq * 1,  modEnv * (m41 * o4 + m31 * o3 + m21 * o2)) * lvl1;
 
 			// sum carriers, apply amp env + voice-gate + level.
+			// 0.5 master gain: halve the level range so a mid `level` reads as a
+			// moderate hit rather than a heavy accent, and leave headroom for
+			// additive / multi-channel sums (the limiter still backstops peaks).
 			sig = (c1 * o1) + (c2 * o2) + (c3 * o3) + (c4 * o4);
-			sig = sig * ampEnv * cut * amp;
+			sig = sig * ampEnv * cut * amp * 0.5;
 
 			// soft-clip drive: drive=1 is clean, higher blends in tanh saturation
 			// and raises pre-gain together. Master Limiter catches the peaks.
@@ -140,14 +147,16 @@ Engine_Potionshop : CroneEngine {
 		]);
 
 		// trig(freq, amp, algo, harmStart, harmEnd, harmDecay, modIndex,
-		//      attack, ampDecay, ampCurve, modDecay, feedback, drive, ch)
+		//      attack, ampDecay, ampCurve, modDecay, feedback, drive, ch,
+		//      lvl1, lvl2, lvl3, lvl4)
 		//
 		// `algo` (1..8) selects the routing/carrier data; the rest are the final
 		// per-hit values Burst:fire already computes. The handler expands `algo`
 		// into the SynthDef's edge weights + carrier gains (static per note). `ch`
 		// (1..6) is the channel: each channel is monophonic, so a new hit releases
-		// the previous voice on that channel before spawning the new one.
-		this.addCommand("trig", "ffffffffffffff", { arg msg;
+		// the previous voice on that channel before spawning the new one. lvl1..4
+		// are the global per-operator output levels.
+		this.addCommand("trig", "ffffffffffffffffff", { arg msg;
 			var freq = msg[1], amp = msg[2];
 			var algo = msg[3].asInteger.clip(1, 8);
 			var harmStart = msg[4], harmEnd = msg[5], harmDecay = msg[6];
@@ -155,6 +164,7 @@ Engine_Potionshop : CroneEngine {
 			var attack = msg[8], ampDecay = msg[9], ampCurve = msg[10], modDecay = msg[11];
 			var feedback = msg[12], drive = msg[13];
 			var ch = msg[14].asInteger.clip(1, numChannels);
+			var lvl1 = msg[15], lvl2 = msg[16], lvl3 = msg[17], lvl4 = msg[18];
 			var spec, edges, carriers, cgain, weights, pmIndex, voice;
 
 			spec = algorithms[algo - 1];
@@ -188,6 +198,7 @@ Engine_Potionshop : CroneEngine {
 				\c2, carriers.includes(2).if(cgain, 0),
 				\c3, carriers.includes(3).if(cgain, 0),
 				\c4, carriers.includes(4).if(cgain, 0),
+				\lvl1, lvl1, \lvl2, lvl2, \lvl3, lvl3, \lvl4, lvl4,
 				\modIndex, pmIndex, \feedback, feedback,
 				\attack, attack, \ampDecay, ampDecay, \ampCurve, ampCurve,
 				\modDecay, modDecay, \drive, drive

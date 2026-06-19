@@ -29,6 +29,10 @@ Burst.NUM_CHANNELS = NUM_CHANNELS
 local MUSICAL_DIVS = {2, 3, 4, 6, 8, 12, 16}
 Burst.MUSICAL_DIVS = MUSICAL_DIVS
 
+-- per-operator level sequins field names (A layer / B alt layer), in op order.
+local OP_A = {'op1', 'op2', 'op3', 'op4'}
+local OP_B = {'op1B', 'op2B', 'op3B', 'op4B'}
+
 local function round(x) return math.floor(x + 0.5) end
 local function clamp(v, lo, hi) return math.max(lo, math.min(hi, v)) end
 
@@ -102,18 +106,24 @@ local function default_channel()
     levelB = seqx.new{0},
     harmB  = seqx.new{0},
     envB   = seqx.new{0},
+    -- per-operator output levels (0..1), sequenced like `level`: A defaults full
+    -- (1), the B additive layer defaults 0 (no offset). FM depth when the operator
+    -- is a modulator, mix gain when it's a carrier. Drawn once per burst.
+    op1 = seqx.new{1}, op2 = seqx.new{1}, op3 = seqx.new{1}, op4 = seqx.new{1},
+    op1B = seqx.new{0}, op2B = seqx.new{0}, op3B = seqx.new{0}, op4B = seqx.new{0},
     burstProb = 1,
     probHit = false,
     envMode = 0,      -- amp decay timing:  0=shape 1=burst 2=hit
     geodeMode = 0,    -- amp per-hit geode: 0=transient 1=sustain 2=cycle (always on)
-    harmEnvMode = 0,  -- harm sweep timing: 0=off 1=hit 2=burst (bright->clean)
-    harmEnv = 0,      -- harm per-hit geode: 0=fast 1=med 2=slow (always on)
+    opEnvMode = 0,    -- op-level geode timing: 0=off 1=hit 2=burst (SND page)
+    opGeode = 0,      -- op-level per-hit geode shape: 0=transient 1=sustain 2=cycle
     algo = 1,         -- FM algorithm (1..8): DX-style operator routing for this channel
     resetInterval = 0,
     rate = 1,
     octave = 0,     -- -2..2, whole-octave pitch shift (perf page)
     altTrig = 0,    -- alt(B) note layering: 0=hold (add&hold) 1=step (per-hit)
     harmTrig = 0,   -- alt(B) harm layering: 0=hold (add&hold) 1=step (per-hit)
+    opTrig = 0,     -- alt(B) op-level layering: 0=hold (add&hold) 1=step (per-hit)
   }
 end
 
@@ -141,6 +151,8 @@ function Burst.new()
   self.ampPunch = 4     -- perc-curve magnitude (-> Env.perc curve = -ampPunch); 0 = linear
   self.fmFeedback = 0   -- SinOscFB feedback (radians): 0 = pure sine modulator
   self.drive = 1        -- tanh soft-clip drive: 1 = clean, higher = saturated
+  -- per-operator output levels are NOT global anymore: each channel sequences its
+  -- own op1..op4 (A/B) sequins (see default_channel), drawn per burst in run_burst.
   self.outputs = nil    -- optional lib/outputs.lua router (set by the host)
   return self
 end
@@ -174,7 +186,8 @@ end
 function Burst:reset_channel(ch)
   local c = self.channels[ch]
   for _, k in ipairs{'div','reps','note','level','harm','env',
-                     'divB','repsB','noteB','levelB','harmB','envB'} do
+                     'divB','repsB','noteB','levelB','harmB','envB',
+                     'op1','op2','op3','op4','op1B','op2B','op3B','op4B'} do
     c[k]:reset()
   end
 end
@@ -291,6 +304,21 @@ function Burst:run_burst(ch, token, target_in)
     local degreeA = note_seq()
     local degreeB = note_seqB()
     local level = c.level() + c.levelB()
+    -- per-operator levels (op1..op4), sequenced like level. A/B kept separate
+    -- (like note/harm) so the op-trig 'step' mode can advance the B (alt) op
+    -- sequins per hit while the A levels stay held for the burst. opA/opB are
+    -- drawn once at burst start; `ops` (A+B summed, clamped 0..1) is what fire
+    -- receives and is rebuilt per hit when stepping.
+    local op_seqA = {c.op1, c.op2, c.op3, c.op4}
+    local op_seqB = {c.op1B, c.op2B, c.op3B, c.op4B}
+    local opA = {op_seqA[1](), op_seqA[2](), op_seqA[3](), op_seqA[4]()}
+    local opB = {op_seqB[1](), op_seqB[2](), op_seqB[3](), op_seqB[4]()}
+    local function build_ops()
+      local t = {}
+      for k = 1, 4 do t[k] = clamp(opA[k] + opB[k], 0, 1) end
+      return t
+    end
+    local ops = build_ops()
     local harmA = harm_seq()
     local harmB = harm_seqB()
     local harm = harmA + harmB
@@ -311,10 +339,18 @@ function Burst:run_burst(ch, token, target_in)
     local i = 0
     while (total == INF or i < total) and self.tokens[ch] == token do
       -- identity check: a live grid edit / relaunch replaced a timing or
-      -- position sequins, so restart this burst with the new values now.
+      -- position sequins, so restart this burst with the new values now. The op
+      -- sequins are included too (like note/harm) so a live op edit re-anchors
+      -- and the op-trig 'step' mode never advances a stale B sequins.
+      local op_changed = false
+      for k = 1, 4 do
+        if c[OP_A[k]] ~= op_seqA[k] or c[OP_B[k]] ~= op_seqB[k] then
+          op_changed = true; break
+        end
+      end
       if c.div ~= div_seq or c.reps ~= reps_seq or c.note ~= note_seq
          or c.divB ~= div_seqB or c.repsB ~= reps_seqB or c.noteB ~= note_seqB
-         or c.harm ~= harm_seq or c.harmB ~= harm_seqB then
+         or c.harm ~= harm_seq or c.harmB ~= harm_seqB or op_changed then
         restarted = true
         break
       end
@@ -339,12 +375,20 @@ function Burst:run_burst(ch, token, target_in)
         harm = harmA + harmB
       end
 
+      -- OP-TRIG STEP MODE: arpeggiate the alt (B) op-level layer, advancing each
+      -- B op sequins per hit and re-summing with the held A levels. Same
+      -- beat-locked accounting as the note/harm step modes above.
+      if c.opTrig == 1 and i > 0 then
+        for k = 1, 4 do opB[k] = op_seqB[k]() end
+        ops = build_ops()
+      end
+
       if c.probHit and math.random() > c.burstProb then
         -- per-hit skip: advance the playhead but don't trigger a voice.
         self:emit{ type = 'fire', ch = ch, beat = target,
                    freq = freq, level = level, harm = harm, env = env }
       else
-        self:fire(ch, target, freq, level, harm, env, div, total, i)
+        self:fire(ch, target, freq, level, harm, env, div, total, i, ops)
       end
       target = target + (4 / div) / c.rate
       i = i + 1
@@ -356,26 +400,26 @@ function Burst:run_burst(ch, token, target_in)
   return nil
 end
 
-function Burst:fire(ch, beat, freq, level, harm, env, div, total, hit_idx)
+function Burst:fire(ch, beat, freq, level, harm, env, div, total, hit_idx, ops)
   local c = self.channels[ch]
   -- octave shift is applied per hit, not per burst: looping channels
   -- (reps = -1) never redraw freq, so a burst-start shift would be inaudible
   -- on them. Shifting here also feeds the final freq to external outputs.
   freq = freq * (2 ^ c.octave)
   local geo_run = clamp(level, 0, 1)
-  -- geodeMode/harmEnv are 0-based {transient,sustain,cycle}; geode_mod wants
-  -- 1/2/3, so +1 at the call site. Both geodes are always on (no 'off').
+  -- geodeMode is 0-based {transient,sustain,cycle}; geode_mod wants 1/2/3, so +1
+  -- at the call site. The amp geode is always on (no 'off').
   local actual_level = Burst.burst_level_for_hit(level, c.geodeMode + 1, env, hit_idx, total)
 
   -- geo_freq stays at the target pitch (this voice has no pitch envelope).
   local geo_freq = freq
 
-  -- Harm geode: g=1 -> target harm, g=0 -> unison (2). Always applied; sets the
-  -- hit's destination ratio that the harm envelope below sweeps toward.
-  local g = Burst.geode_mod(c.harmEnv + 1, geo_run, hit_idx, total)
-  local geo_harm = 2 + g * math.max(0, harm - 2)
+  -- harm is the summed ratio, used statically. The per-hit harm geode and the
+  -- bright->clean harm sweep were repurposed (SND page) into the op-level geode
+  -- below: harmEnvMode/harmEnv are gone, replaced by opEnvMode/opGeode.
+  local geo_harm = harm
 
-  -- per-hit timing, shared by the amp- and harm-envelope decay maths.
+  -- per-hit timing, drives the amp-envelope decay maths below.
   local sec_per_beat = 60 / get_tempo()
   local interval_sec = (4 / div) * sec_per_beat
 
@@ -410,23 +454,9 @@ function Burst:fire(ch, beat, freq, level, harm, env, div, total, hit_idx)
     mod_dec = amp_dec * fm_decay_ratio
   end
 
-  -- Harm envelope: sweep harm bright -> clean (geo_harm -> unison 2). In hit mode
-  -- the sweep spans the modulator's own life (mod_dec), NOT the amp decay: the FM
-  -- sidebands fade out over mod_dec (the fm-decay macro * amp_dec), so a sweep tied
-  -- to amp_dec finished its bright->clean glide while inaudible. Matching mod_dec lets
-  -- the ratio actually reach 2 before the modulator goes silent, so the whole glide
-  -- is heard while the amp tail still rings clean underneath.
-  -- burst mode sweeps slowly across the whole burst, so per hit it stays bright.
-  -- harmEnvMode 0=off (static ratio, start==end).
+  -- harm ratio is static now (no bright->clean sweep): start == end, ~no decay.
+  -- The modulator-ratio sweep was traded for the per-hit op-level geode (below).
   local harm_start, harm_end, harm_decay = geo_harm, geo_harm, 0.001
-  if c.harmEnvMode ~= 0 then
-    harm_end = 2
-    if c.harmEnvMode == 2 and total ~= INF then
-      harm_decay = total * interval_sec
-    else
-      harm_decay = mod_dec
-    end
-  end
 
   -- output routing (lib/outputs.lua): non-audio destinations replace the
   -- internal voice; midi/crow get the same final freq/level/length it would
@@ -437,14 +467,31 @@ function Burst:fire(ch, beat, freq, level, harm, env, div, total, hit_idx)
   local amp_curve = -self.ampPunch
   local feedback  = self.fmFeedback
   local drive     = self.drive
+  -- per-channel, per-burst operator levels (drawn in run_burst). Copied so the
+  -- op geode below can shape this hit without mutating the held burst values.
+  local ol = {}
+  for k = 1, 4 do ol[k] = (ops and ops[k]) or 1 end
+  -- Op-level geode (SND op-env / op-geode): shape all four op levels per hit,
+  -- mirroring the amp/harm geodes. opEnvMode 0=off -> levels pass through. The
+  -- opGeode shape (transient/sustain/cycle) is driven by geo_run (= level), so a
+  -- mid level is neutral (x1.0) and the modulation deepens as level moves away.
+  -- Timing mirrors the old harm env: 1=hit uses a per-hit timescale (total INF),
+  -- 2=burst spans the whole finite burst (its length).
+  if c.opEnvMode ~= 0 then
+    local op_total = (c.opEnvMode == 2) and total or INF
+    local og = Burst.geode_mod(c.opGeode + 1, geo_run, hit_idx, op_total)
+    for k = 1, 4 do ol[k] = clamp(ol[k] * og, 0, 1) end
+  end
   local out = self.outputs
   if engine and engine.trig and ((not out) or out:wants_audio(ch)) then
     -- 4-op FM (lib/Engine_Potionshop.sc): per-channel algorithm selects the
-    -- operator routing; harm_start/harm_end/harm_decay drive the modulator-ratio
-    -- sweep (the old bright->clean glide), the rest are the final hit envelope.
+    -- operator routing; harm_start/harm_end/harm_decay now carry a static ratio
+    -- (the sweep was repurposed), the rest are the final hit envelope; ol[1..4]
+    -- are this channel's per-burst operator levels, geode-shaped per hit above.
     engine.trig(geo_freq, actual_level, c.algo,
                 harm_start, harm_end, harm_decay, mod_index,
-                attack, amp_dec, amp_curve, mod_dec, feedback, drive, ch)
+                attack, amp_dec, amp_curve, mod_dec, feedback, drive, ch,
+                ol[1], ol[2], ol[3], ol[4])
   end
   if out then
     -- external voices can't sweep the FM ratio; hand them the starting (peak)
@@ -477,9 +524,12 @@ function Burst:randomize(ch)
   c.level = seqx.new(fill(t_len, function() return (ri(16) + 1) / 31 end))
   c.harm  = seqx.new(fill(t_len, function() return 2 + ri(16) * 0.75 end))
   c.env   = seqx.new(fill(t_len, function() return ri(16) / 31 end))
-  -- Sound-page modes (envMode/geodeMode/harmEnvMode/harmEnv) are intentionally
+  -- Sound-page modes (envMode/geodeMode/opEnvMode/opGeode) are intentionally
   -- left untouched: randomize/mutate scramble the value sequences (incl. harm
   -- and env) but preserve the user's chosen envelope/geode mode selections.
+  -- Per-operator levels (op1..op4) are likewise preserved: a randomized op1 = 0
+  -- would silently kill the channel (op1 is usually the carrier), so the FM
+  -- operator balance stays a deliberate, user-set timbre.
 end
 
 -- Perturb A-layer values by ±amount, preserving length and clamping to range.

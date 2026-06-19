@@ -201,10 +201,39 @@ local h_step = harm_trig_harms(1)
 check('harm-trig step arpeggiates the B harm per hit',
   #h_step == 3 and approx(h_step[1], 2) and approx(h_step[2], 5) and approx(h_step[3], 8))
 
--- harm envelope: harmEnvMode sweeps the FM ratio bright->clean over the note.
+-- op-trig mirrors alt/harm-trig for the B op-level layer: 'hold' holds one B
+-- offset across the burst, 'step' advances the B op sequins per hit. op1 {0.5},
+-- op1B {0, 0.2, 0.4}: hold => 0.5,0.5,0.5; step => 0.5,0.7,0.9 (trig arg 15).
+local function op_trig_levels(mode)
+  clock._reset()
+  local saved = engine
+  local caps = {}
+  engine = { trig = function(...) local a = {...}; caps[#caps + 1] = a[15] end }
+  local e = Burst.new()
+  e.quantize = 0
+  e.channels[1].div    = seqx.new{4}
+  e.channels[1].reps   = seqx.new{3}
+  e.channels[1].op1    = seqx.new{0.5}
+  e.channels[1].op1B   = seqx.new{0, 0.2, 0.4}
+  e.channels[1].opTrig = mode
+  e:launch(1)
+  clock._run_until(4)
+  engine = saved
+  return caps
+end
+local o_hold = op_trig_levels(0)
+check('op-trig hold holds one B op offset across the burst',
+  #o_hold == 3 and approx(o_hold[1], 0.5) and approx(o_hold[2], 0.5) and approx(o_hold[3], 0.5))
+local o_step = op_trig_levels(1)
+check('op-trig step arpeggiates the B op level per hit',
+  #o_step == 3 and approx(o_step[1], 0.5) and approx(o_step[2], 0.7) and approx(o_step[3], 0.9))
+
+-- harm is now a STATIC ratio (the bright->clean sweep + per-hit harm geode were
+-- repurposed into the op-level geode on the SND page). The FM ratio passes
+-- through unswept: start == end == harm, ~no decay.
 -- engine.trig(freq, amp, algo, harmStart, harmEnd, harmDecay, modIndex,
---             atk, aDec, ampCurve, mDec, feedback, drive, ch).
-local function first_trig(harmEnvMode)
+--             atk, aDec, ampCurve, mDec, feedback, drive, ch, op1..op4).
+local function first_trig()
   clock._reset()
   local saved = engine
   local cap
@@ -214,25 +243,44 @@ local function first_trig(harmEnvMode)
   e.channels[1].div = seqx.new{4}
   e.channels[1].reps = seqx.new{1}
   e.channels[1].harm = seqx.new{8}
-  e.channels[1].harmEnvMode = harmEnvMode
   e:launch(1)
   clock._run_until(2)
   engine = saved
   return cap
 end
-local off = first_trig(0)
+local off = first_trig()
 check('algo passes at trig arg 3 (default channel = 1)', off and off[3] == 1)
-check('harm env off: ratio is static (start==end, ~no decay)',
+check('harm ratio is static (start==end, ~no decay)',
   off and approx(off[4], 8) and approx(off[5], 8) and off[6] < 0.01)
-local on = first_trig(1)  -- hit: sweep over one interval
-check('harm env on: ratio sweeps target->unison over a real decay',
-  on and approx(on[4], 8) and approx(on[5], 2) and on[6] > 0.01)
--- hit-mode harm sweep spans the modulator's own life (msg[11] = mod decay), not
--- the amp decay (msg[9]): the FM sidebands fade over mod_dec, so a sweep tied to
--- amp_dec finishes its bright->clean glide after the modulator is already silent.
--- Matching mod_dec (= 0.4 * amp_dec) lets the whole glide be heard.
-check('harm env hit: sweep decay == mod decay', on and approx(on[6], on[11]))
-check('harm env hit: sweep decay is 0.4 of amp decay', on and approx(on[6], on[9] * 0.4))
+
+-- op-level geode (SND op env/op geode): shapes the op levels per hit, mirroring
+-- the amp/harm geodes. opEnvMode 0=off passes op levels through; 1=hit applies
+-- the opGeode shape per hit (geo_run = level). cycle shape (opGeode=2) at
+-- level=1, op1=1: multiplier = 0.5+0.5*cos(2*pi*i*0.1) -> hit0 = 1.0, hit5 = 0.0.
+local function op_geode_levels(opEnvMode, opGeode)
+  clock._reset()
+  local saved = engine
+  local caps = {}
+  engine = { trig = function(...) local a = {...}; caps[#caps + 1] = a[15] end }
+  local e = Burst.new()
+  e.quantize = 0
+  e.channels[1].div   = seqx.new{4}
+  e.channels[1].reps  = seqx.new{6}      -- single-shot 6-hit burst
+  e.channels[1].level = seqx.new{1.0}    -- geo_run = 1 (max geode depth)
+  e.channels[1].op1   = seqx.new{1.0}
+  e.channels[1].opEnvMode = opEnvMode
+  e.channels[1].opGeode   = opGeode
+  e:launch(1)
+  clock._run_until(8)
+  engine = saved
+  return caps
+end
+local og_off = op_geode_levels(0, 2)
+check('op env off: op levels pass through unshaped',
+  #og_off == 6 and approx(og_off[1], 1.0) and approx(og_off[6], 1.0))
+local og_hit = op_geode_levels(1, 2)  -- hit + cycle shape
+check('op env hit: op geode shapes op levels per hit',
+  #og_hit == 6 and approx(og_hit[1], 1.0) and approx(og_hit[6], 0.0))
 
 -- shape-mode amp decay tracks the inter-hit gap: 4x faster division -> ~1/4
 -- the decay, so dense/fast channels self-shorten instead of piling up.
@@ -321,6 +369,25 @@ check('voice macros feed trig: modIndex, ampPunch->curve, feedback, drive',
   gv and approx(gv[7], 12) and approx(gv[10], -8) and approx(gv[12], 1.5) and approx(gv[13], 4))
 check('voice fmDecay sets mod decay (0.8 of amp decay)',
   gv and approx(gv[11], gv[9] * 0.8))
+-- per-operator levels ride trig args 15..18; default 1 (per-channel op sequins).
+check('op levels default to 1 (args 15-18)',
+  d and approx(d[15], 1) and approx(d[16], 1) and approx(d[17], 1) and approx(d[18], 1))
+-- now per-channel + sequenced: op1..op4 sequins (A) feed trig args 15-18.
+local ol = macro_trig(function(e)
+  e.channels[1].op1 = seqx.new{0.2}
+  e.channels[1].op2 = seqx.new{0.4}
+  e.channels[1].op3 = seqx.new{0.6}
+  e.channels[1].op4 = seqx.new{0.8}
+end)
+check('per-channel op sequins feed trig args 15-18',
+  ol and approx(ol[15], 0.2) and approx(ol[16], 0.4) and approx(ol[17], 0.6) and approx(ol[18], 0.8))
+-- the B (additive) op layer sums onto A and clamps to 0..1.
+local olb = macro_trig(function(e)
+  e.channels[1].op1 = seqx.new{0.8}; e.channels[1].op1B = seqx.new{0.5}  -- 1.3 -> clamp 1.0
+  e.channels[1].op2 = seqx.new{0.3}; e.channels[1].op2B = seqx.new{0.2}  -- 0.5
+end)
+check('op B layer sums + clamps onto A (args 15-16)',
+  olb and approx(olb[15], 1.0) and approx(olb[16], 0.5))
 
 -- quantization: an off-grid division (triplet, 4/3 beats) must snap every
 -- event FORWARD to the quarter-note grid (quantize=4 -> step 1 beat). We read
@@ -504,6 +571,10 @@ ctl:press(4, 0)   -- HARM_TRIG_COLS[2] -> harmTrig = 1 (step) on channel 0
 check('harm-trig key sets harmTrig to step', geng.channels[1].harmTrig == 1)
 ctl:press(3, 0)   -- HARM_TRIG_COLS[1] -> harmTrig = 0 (hold)
 check('harm-trig key sets harmTrig to hold', geng.channels[1].harmTrig == 0)
+ctl:press(7, 0)   -- OP_TRIG_COLS[2] -> opTrig = 1 (step) on channel 0
+check('op-trig key sets opTrig to step', geng.channels[1].opTrig == 1)
+ctl:press(6, 0)   -- OP_TRIG_COLS[1] -> opTrig = 0 (hold)
+check('op-trig key sets opTrig to hold', geng.channels[1].opTrig == 0)
 ctl:press(13, 6)
 check('PROB mode exited', ctl.probMode == false)
 
@@ -594,6 +665,9 @@ check('alt-trig line steps altTrig to step', seng.channels[1].altTrig == 1)
 sui.sel_line[4] = 4
 sui:enc(3, 1)
 check('harm-trig line steps harmTrig to step', seng.channels[1].harmTrig == 1)
+sui.sel_line[4] = 5
+sui:enc(3, 1)
+check('op-trig line steps opTrig to step', seng.channels[1].opTrig == 1)
 
 -- perf page: values come from the shared interval/octave/rate tables
 sui:set_page(3)
