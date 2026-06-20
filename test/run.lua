@@ -496,28 +496,28 @@ local geng = Burst.new()
 local mg = mock_grid()
 local ctl = GridUI.new(geng, mg)
 
--- param select + A/B layer toggle (row 7)
+-- param select (row 7) — both A/B halves are always shown, so a re-press only
+-- keeps the param selected (no double-press A/B flip)
 check('default selected param = note', ctl.selectedParam == 'note')
 ctl:press(0, 7)
-check('row7 col0 selects div', ctl.selectedParam == 'div' and ctl.paramLayer == 'A')
+check('row7 col0 selects div', ctl.selectedParam == 'div')
 ctl:press(0, 7)
-check('re-press toggles to B layer', ctl.paramLayer == 'B')
+check('re-press keeps param selected (no layer flip)', ctl.selectedParam == 'div')
 
 -- step picker edits a value
 ctl:press(2, 7)  -- select note
-check('selected note again', ctl.selectedParam == 'note' and ctl.paramLayer == 'A')
+check('selected note again', ctl.selectedParam == 'note')
 ctl:press(0, 0)  -- open picker on channel 0 step 0
 check('step picker opened', ctl.picker ~= nil and ctl.picker.kind == 'step')
-ctl:press(5, 0)  -- pick note value index 5 -> 5
+ctl:press(5, 6)  -- pick note value index 5 -> 5 (value grid now on rows 6-7)
 check('picker set note step to 5', seqx.values(geng.channels[1].note)[1] == 5)
 check('picker closed after pick', ctl.picker == nil)
 
--- pressing the already-selected value in the picker removes the step (the only
--- remove path reachable for ch0/ch1, whose rows sit behind the value grid)
+-- pressing the already-selected value in the picker (rows 6-7) removes the step
 geng.channels[1].note = seqx.new{5, 7, 9}
 ctl:press(1, 0)  -- open picker on channel 0 step 1 (value 7)
 check('picker reopened on step 1', ctl.picker ~= nil and ctl.picker.col == 1)
-ctl:press(7, 0)  -- press the lit current value (note 7 -> index 7) again
+ctl:press(7, 6)  -- press the lit current value (note 7 -> index 7) again
 check('re-pressing current value removes the step',
   seqx.len(geng.channels[1].note) == 2
   and seqx.values(geng.channels[1].note)[1] == 5
@@ -525,9 +525,44 @@ check('re-pressing current value removes the step',
 check('picker closed after remove', ctl.picker == nil)
 -- a different value still sets (doesn't remove)
 geng.channels[1].note = seqx.new{5, 7, 9}
-ctl:press(1, 0); ctl:press(3, 0)  -- step 1, pick value 3
+ctl:press(1, 0); ctl:press(3, 6)  -- step 1, pick value 3
 check('picker still sets a different value',
   seqx.len(geng.channels[1].note) == 3 and seqx.values(geng.channels[1].note)[2] == 3)
+
+-- tapping another channel step hops the open picker there (rows 6-7 = values,
+-- so the channel rows stay live for re-targeting)
+geng.channels[1].note = seqx.new{5, 7, 9}
+ctl:press(0, 0)                    -- open on ch0 step0
+ctl:press(2, 0)                    -- tap ch0 step2 -> hop, picker stays open
+check('tapping another step hops the picker',
+  ctl.picker ~= nil and ctl.picker.col == 2)
+-- re-tapping the open step cancels (closes) without removing it
+ctl:press(2, 0)
+check('re-tapping the open step cancels without removing',
+  ctl.picker == nil and seqx.len(geng.channels[1].note) == 3)
+
+-- B layer edits live on the right half (cols 8..15) — no double-press needed
+geng.channels[1].noteB = seqx.new{0}
+ctl:press(8, 0)  -- col 8 = B-layer step 0
+check('right-half press opens the B-layer picker',
+  ctl.picker ~= nil and ctl.picker.layer == 'B' and ctl.picker.col == 0)
+ctl:press(4, 6)  -- pick note value index 4 (value 4)
+check('B-layer picker edits noteB', seqx.values(geng.channels[1].noteB)[1] == 4)
+-- the open B step (col 8) re-tap cancels; an A step (col 0) hops to layer A
+ctl:press(0, 0)  -- open A step 0 again to verify the picker reopened on layer A
+check('A-half press targets the A layer', ctl.picker.layer == 'A' and ctl.picker.col == 0)
+ctl:close_picker()
+
+-- 8-step cap: the add slot stops appearing past SEQ_LEN; commit truncates
+geng.channels[1].note = seqx.new{0, 1, 2, 3, 4, 5, 6, 7}  -- exactly 8 (A half full)
+ctl:press(0, 7)  -- ensure 'note' selected
+ctl:press(2, 7)
+ctl:press(7, 0)  -- step 7 (last A col) exists; opens it
+check('8th A step is editable (full half)', ctl.picker ~= nil and ctl.picker.col == 7)
+ctl:close_picker()
+ctl:commit_step_raw(0, 'note', {0,1,2,3,4,5,6,7,8,9}, 'A')  -- 10 -> capped to 8
+check('commit_step_raw caps a sequence at 8 steps',
+  seqx.len(geng.channels[1].note) == 8)
 
 -- launch toggle (row 6)
 ctl:press(0, 6)
@@ -610,11 +645,14 @@ check('PERF rate col14 sets 2x', geng.channels[1].rate == 2)
 ctl:press(12, 6)
 check('PERF mode exited', ctl.perfMode == false)
 
--- KB mode now enters/exits on row6 col 11
+-- ALG page now enters/exits on row6 col 11 (KB mode disabled; ALG took its slot)
+geng.channels[1].algo = 1
 ctl:press(11, 6)
-check('KB mode entered on col 11', ctl.kbMode == true)
+check('ALG mode entered on col 11', ctl.algoMode == true)
+ctl:press(5, 0)  -- col 5 -> algorithm 6 on channel 0
+check('ALG page sets channel algo (col -> algo n+1)', geng.channels[1].algo == 6)
 ctl:press(11, 6)
-check('KB mode exited on col 11', ctl.kbMode == false)
+check('ALG mode exited on col 11', ctl.algoMode == false)
 
 -- ---- screen_ui: pages, edits, fire reactivity --------------------------
 screen = require 'screen'  -- global drawing API stub, like norns
@@ -977,7 +1015,7 @@ local f0 = fake.fires
 pctl:press(0, 7)  -- select div
 pctl:press(2, 7)  -- select note, layer A
 pctl:press(0, 0)  -- open step picker ch0 col0
-pctl:press(5, 0)  -- pick note value 5
+pctl:press(5, 6)  -- pick note value 5 (value grid on rows 6-7)
 check('grid step edit reflects into text param', fake:get('ch1_note_a') == '5 8 5')
 pctl:press(13, 6)  -- PROB mode
 pctl:press(12, 0)  -- PROB_COLS[2] -> burstProb 0.5 -> prob option index 2

@@ -13,11 +13,15 @@
 -- 1-based at the call site (engine:launch(ch+1), engine.channels[ch+1], ...).
 --
 -- Layout reference (rows/cols, 0-based):
---   rows 0..5 = per-channel step view: up to 16 steps of the active layer
---               (paramLayer A/B; flipped by re-pressing the row-7 param button)
---   row 6     = 0..5 launch · 6..9 dark · 10 ALG · 11 KB · 12 PERF · 13 PROB · 14 QNT · 15 SND
+--   rows 0..5 = per-channel step view: BOTH layers shown side by side — the A
+--               layer on cols 0..7 (left half) and the B layer on cols 8..15
+--               (right half), each capped at 8 steps. The layer you edit is the
+--               half you press; there is no A/B flip (no double-press).
+--   row 6     = 0..5 launch · 6..10 dark · 11 ALG · 12 PERF · 13 PROB · 14 QNT · 15 SND
+--               (KB page disabled; ALG moved into its old col-11 slot)
 --   row 7     = 0..5 param (div/reps/note/level/harm/env) · 6..9 op1..op4
---               (per-operator FM level sequences) · 11 CLR
+--               (per-operator FM level sequences; selects the param shown on
+--               both halves of the channel rows) · 11 CLR
 --             · 12 COPY · 13 PASTE · 14 RANDOMIZE · 15 MUTATE
 --   CLR/COPY/PASTE act on the MAIN (A-layer) sequins of the tapped channel only;
 --   the B (alt) layer is left intact so it can keep variating the copied sequins.
@@ -35,14 +39,23 @@
 --                 rows 1-4 cols 8-15 quantize (8x4 = 32 values, right side)
 --                 keyboards are a compact piano: white keys packed at cols 0-6,
 --                 black keys offset above the white key they follow
---   step picker:  rows 0-1 value grid (press the lit/current value to remove
---                 the step; press any other value to set it)
---   KB mode: see handle_kb_press / render_kb_mode
+--   step picker:  value grid on rows 6-7 (the control rows, borrowed while
+--                 picking) so all six channel rows stay visible. Press the
+--                 lit/current value to remove the step; press any other value
+--                 to set it. On the channel rows: tap another step to hop the
+--                 picker there, or re-tap the open step to cancel/close.
+--   KB mode: DISABLED — entry (row6 col 11) is commented out, so the mode is
+--            unreachable; its handle_kb_press / render_kb_mode code remains in
+--            place and can be restored by un-commenting the entry points.
 
 local seqx   = require 'seqx'
 local scales = require 'scales'
 
 local GRID_W = 16
+-- Each channel row shows both A/B layers side by side: A on cols 0..SEQ_LEN-1,
+-- B on cols B_COL0..15. Each layer is capped at SEQ_LEN steps (half the row).
+local SEQ_LEN = 8
+local B_COL0 = 8
 local NUM_CHANNELS = 6
 -- div/reps/note/level/harm/env occupy row-7 cols 0-5; op1..op4 (per-operator FM
 -- output levels, sequenced like `level`) occupy the previously-dark cols 6-9.
@@ -55,12 +68,18 @@ local PASTE_BUTTON_COL = 13
 local RANDOMIZE_BUTTON_COL = 14
 local MUTATE_BUTTON_COL = 15
 -- row 6 right side
-local ROW6_ALG_COL = 10   -- FM algorithm page (in the otherwise-dark cols 6..10)
-local ROW6_KB_COL = 11
+local ROW6_ALG_COL = 11   -- FM algorithm page (took KB's old slot; cols 6..10 dark)
+-- KB mode is disabled — its entry button is commented out below, which makes the
+-- whole mode unreachable. Left in place so it can be restored by un-commenting.
+-- local ROW6_KB_COL = 11
 local ROW6_PERF_COL = 12
 local ROW6_PROB_COL = 13
 local ROW6_QNT_COL = 14
 local ROW6_SND_COL = 15
+-- The step picker's 32-value grid renders on the control rows (6-7) while a pick
+-- is in progress, leaving all six channel rows visible so the step being edited
+-- is never hidden behind the picker. (The scale picker still owns rows 0-5.)
+local PICKER_ROW0 = 6
 -- KB mode (exit on row 6, same col as entry; page/clear on row 7)
 local KB_EXIT_COL = 11
 local KB_PAGE_BUTTON_COL = 13
@@ -146,6 +165,13 @@ local function index_of(t, v)
   return -1
 end
 
+-- channel-row column <-> (layer, step). Cols 0..SEQ_LEN-1 are the A layer, cols
+-- B_COL0..15 are the B layer; step is 0-based within the layer's half.
+local function decode_col(x)
+  if x < B_COL0 then return 'A', x end
+  return 'B', x - B_COL0
+end
+
 -- index of the picker value nearest `cur` (1-based). Shared by screen_ui and
 -- params_sync so every surface snaps off-grid values identically.
 local function nearest_index(layout, cur)
@@ -157,29 +183,40 @@ local function nearest_index(layout, cur)
   return best
 end
 
+-- Brightness 15 is reserved for the running playhead (render_channel_row /
+-- screen draw_steps), so every *value* tops out at VALUE_MAX. With the playhead
+-- the only thing that can hit 15, it stays legible even over a hot step.
+local VALUE_MAX = 13
 local function value_brightness(param, value)
+  local b
   if param == 'div' then
-    return value <= 4 and 6 or value <= 8 and 8 or value <= 16 and 11 or 14
+    b = value <= 4 and 6 or value <= 8 and 8 or value <= 16 and 11 or VALUE_MAX
   elseif param == 'reps' then
-    return value == -1 and 15 or math.min(4 + value, 14)
+    b = value == -1 and VALUE_MAX or math.min(4 + value, VALUE_MAX)
   elseif param == 'note' then
-    return math.min(4 + math.abs(value), 15)
+    -- signed ramp centered on 7: a negative degree reads dimmer than zero, a
+    -- positive one brighter, so +n and -n no longer collide (they did under the
+    -- old abs() mapping). Reads like pitch height — higher note, brighter cell.
+    b = clamp(round(7 + value), 2, VALUE_MAX)
   elseif param == 'level' or param:match('^op%d') then
-    return math.max(2, round(2 + value * 13))
+    b = math.max(2, round(2 + value * 11))
   elseif param == 'harm' then
     local norm = (value - 2) / 23.25
-    return clamp(round(4 + norm * 10), 4, 14)
+    b = clamp(round(4 + norm * 9), 4, VALUE_MAX)
   elseif param == 'env' then
     local norm = clamp(value, 0, 1)
-    return clamp(round(2 + norm * 12), 2, 14)
+    b = clamp(round(2 + norm * 11), 2, VALUE_MAX)
+  else
+    b = 6
   end
-  return 6
+  return math.min(b, VALUE_MAX)
 end
 
 local GridUI = {}
 GridUI.__index = GridUI
 GridUI.STEP_PICKER_VALUES = STEP_PICKER_VALUES
 GridUI.PARAMS = PARAMS
+GridUI.SEQ_LEN = SEQ_LEN
 -- shared with screen_ui so both surfaces draw/edit from one source of truth
 GridUI.value_brightness = value_brightness
 GridUI.nearest_index = nearest_index
@@ -240,7 +277,10 @@ function GridUI.new(engine, grid, opts)
 
   engine:on(function(ev)
     if ev.type == 'fire' then
-      if self.kbMode or self.picker or self.probMode or self.perfMode or self.soundMode or self.algoMode then return end
+      if self.kbMode or self.probMode or self.perfMode or self.soundMode or self.algoMode then return end
+      -- the scale picker repurposes the channel rows; a step picker does not
+      -- (it lives on rows 6-7), so let its channel-row playheads keep animating
+      if self.picker and self.picker.kind == 'scale' then return end
       self:render_channel_row(ev.ch - 1)
       self.g:refresh()
     elseif ev.type == 'launch' or ev.type == 'stop' then
@@ -278,7 +318,8 @@ end
 -- ---- press dispatch ----------------------------------------------------
 
 function GridUI:press(x, y)
-  if self.kbMode then self:handle_kb_press(x, y); return end
+  -- KB mode disabled (see handle_row6): kbMode never becomes true.
+  -- if self.kbMode then self:handle_kb_press(x, y); return end
   if self.picker then self:handle_picker_press(x, y)
   else self:handle_normal_press(x, y) end
 end
@@ -338,7 +379,8 @@ function GridUI:handle_normal_press(x, y)
       self:render_channel_row(y); self.g:refresh()
       return
     end
-    self:open_step_picker(y, x)
+    local layer, step = decode_col(x)
+    self:open_step_picker(y, step, layer)
   elseif y == 6 then
     self:handle_row6(x)
   elseif y == 7 then
@@ -348,27 +390,29 @@ end
 
 function GridUI:handle_picker_press(x, y)
   local p = self.picker
-  local picker_rows = (p.kind == 'scale') and 6 or 2
-  if y < picker_rows then
-    self:apply_picker_value(p, x, y)
-    return
-  end
-  if p.kind == 'step' and y < 6 then
-    if y == p.ch and x == p.col then
-      self:remove_step(p.ch, p.col, p.layer)
-      self:close_picker()
-    else
-      self:_focus(y)
-      self:open_step_picker(y, x)
-    end
-    return
-  end
-  if y == 6 and p.kind == 'scale' and x == ROW6_QNT_COL then
+  if p.kind == 'scale' then
+    if y < 6 then self:apply_picker_value(p, x, y); return end
+    if y == 6 and x == ROW6_QNT_COL then self:close_picker(); return end
     self:close_picker()
+    self:handle_normal_press(x, y)
     return
   end
-  self:close_picker()
-  self:handle_normal_press(x, y)
+  -- step picker: value grid on rows 6-7 (translate back to the 0-1 layout
+  -- rows), every channel row live on 0-5.
+  if y >= PICKER_ROW0 then
+    self:apply_picker_value(p, x, y - PICKER_ROW0)
+    return
+  end
+  -- a channel step: re-tapping the open step cancels/closes; any other step
+  -- (either layer half) hops the picker there. Removal lives on the value grid
+  -- (tap the lit value), so it no longer needs the channel row to be reachable.
+  local layer, step = decode_col(x)
+  if y == p.ch and layer == p.layer and step == p.col then
+    self:close_picker()
+  else
+    self:_focus(y)
+    self:open_step_picker(y, step, layer)
+  end
 end
 
 -- ---- value application -------------------------------------------------
@@ -377,9 +421,9 @@ function GridUI:apply_picker_value(p, x, y)
   if p.kind == 'step' then
     local v = STEP_PICKER_VALUES[self.selectedParam][y * GRID_W + x + 1]
     if v == nil then return end
-    -- pressing the already-selected (full-bright) value toggles the step off.
-    -- This is the only remove path reachable for ch0/ch1, whose channel rows
-    -- sit behind the picker's value grid (rows 0-1).
+    -- pressing the already-selected (full-bright) value toggles the step off:
+    -- the value grid (rows 6-7) is the remove affordance, freeing the channel
+    -- rows to stay visible and the open-step re-tap to mean cancel.
     local cur = seqx.values(self:seq_ref(p.ch, self.selectedParam, p.layer))[p.col + 1]
     if cur ~= nil and eq(cur, v) then
       self:remove_step(p.ch, p.col, p.layer)
@@ -482,13 +526,14 @@ end
 
 -- ---- picker enter/exit -------------------------------------------------
 
-function GridUI:open_step_picker(ch, col)
+-- col is the 0-based step index within `layer`'s half (decode_col already
+-- stripped the B_COL0 offset).
+function GridUI:open_step_picker(ch, col, layer)
   local param = self.selectedParam
-  local layer = self.paramLayer
   local cur = seqx.values(self:seq_ref(ch, param, layer))
   local len = #cur
   if col == len then
-    if len >= GRID_W then return end
+    if len >= SEQ_LEN then return end
     local nxt = {}
     for i = 1, len do nxt[i] = cur[i] end
     nxt[len + 1] = (layer == 'A') and DEFAULT_VALUE[param] or DEFAULT_VALUE_B[param]
@@ -548,6 +593,12 @@ function GridUI:commit_step_raw(ch, param, vals, layer)
   local final = vals
   if #final == 0 then
     final = {(layer == 'A') and DEFAULT_VALUE[param] or DEFAULT_VALUE_B[param]}
+  elseif #final > SEQ_LEN then
+    -- single chokepoint for the 8-step cap: every surface (grid/screen/params)
+    -- commits through here, so truncating drops over-long sequences everywhere.
+    local capped = {}
+    for i = 1, SEQ_LEN do capped[i] = final[i] end
+    final = capped
   end
   local c = self:chan(ch)
   if layer == 'A' then c[param] = seqx.new(final)
@@ -603,7 +654,8 @@ function GridUI:_exclusive_mode(field)
 end
 
 function GridUI:handle_row6(x)
-  if x == ROW6_KB_COL then self:enter_kb_mode(); return end
+  -- KB mode disabled: entry commented out (col 11 now drives the ALG page).
+  -- if x == ROW6_KB_COL then self:enter_kb_mode(); return end
   if x == ROW6_PERF_COL then
     local was = self.perfMode
     self.probMode = false; self.soundMode = false; self.algoMode = false; self.actionMode = nil
@@ -653,12 +705,9 @@ end
 
 function GridUI:handle_row7(x)
   if x < #PARAMS then
-    if PARAMS[x + 1] == self.selectedParam then
-      self.paramLayer = (self.paramLayer == 'A') and 'B' or 'A'
-    else
-      self.selectedParam = PARAMS[x + 1]
-      self.paramLayer = 'A'
-    end
+    -- both A/B halves are always shown, so a param button only selects which
+    -- param the channel rows display — no A/B flip (no double-press feature).
+    self.selectedParam = PARAMS[x + 1]
     self.picker = nil
     self:render_all()
   elseif x == CLR_BUTTON_COL then self:_toggle_action('clear')
@@ -681,13 +730,21 @@ end
 -- ---- rendering ---------------------------------------------------------
 
 function GridUI:render_all()
-  if self.kbMode then self:render_kb_mode(); self:_status(); self.g:refresh(); self.on_redraw(); return end
+  -- KB mode disabled (see handle_row6): kbMode never becomes true.
+  -- if self.kbMode then self:render_kb_mode(); self:_status(); self.g:refresh(); self.on_redraw(); return end
   self.g:clear()
-  if self.picker then
+  if self.picker and self.picker.kind == 'step' then
+    -- step pick: every channel row stays drawn (the edited step glows on its
+    -- own row) and the value grid borrows the control rows (6-7).
+    for ch = 0, NUM_CHANNELS - 1 do self:render_channel_row(ch) end
+    self:render_step_picker(self.picker)
+    self:_status()
+    self.g:refresh()
+    self.on_redraw()
+    return
+  end
+  if self.picker then          -- scale picker owns rows 0-5
     self:render_picker()
-    if self.picker.kind ~= 'scale' then
-      for ch = 2, NUM_CHANNELS - 1 do self:render_channel_row(ch) end
-    end
   else
     for ch = 0, NUM_CHANNELS - 1 do self:render_channel_row(ch) end
   end
@@ -719,7 +776,7 @@ function GridUI:render_step_picker(p)
         for _, sv in ipairs(vals) do if eq(sv, v) then present = true break end end
         b = present and 5 or 1
       end
-      self.g:set_led(x, y, b)
+      self.g:set_led(x, PICKER_ROW0 + y, b)
     end
   end
 end
@@ -767,25 +824,31 @@ function GridUI:render_channel_row(ch)
   if self.soundMode then self:render_sound_row(ch); return end
   if self.algoMode then self:render_algo_row(ch); return end
   local param = self.selectedParam
-  local layer = self.paramLayer
-  local seq = self:seq_ref(ch, param, layer)
-  local vals = seqx.values(seq)
-  local len = #vals
-  for i = 0, GRID_W - 1 do
-    if i < len then
-      self.g:set_led(i, ch, value_brightness(param, vals[i + 1]))
-      self.g:set_strobe(i, ch, 'off')
-    elseif i == len and len < GRID_W then
-      self.g:set_led(i, ch, 1); self.g:set_strobe(i, ch, 'off')
-    else
-      self.g:set_led(i, ch, 0); self.g:set_strobe(i, ch, 'off')
+  local running = self.engine:is_running(ch + 1)
+  -- A on the left half (cols 0..SEQ_LEN-1), B on the right half (cols B_COL0..15)
+  for _, layer in ipairs({'A', 'B'}) do
+    local base = (layer == 'B') and B_COL0 or 0
+    local seq = self:seq_ref(ch, param, layer)
+    local vals = seqx.values(seq)
+    local len = #vals
+    for i = 0, SEQ_LEN - 1 do
+      local col = base + i
+      if i < len then
+        self.g:set_led(col, ch, value_brightness(param, vals[i + 1]))
+      elseif i == len and len < SEQ_LEN then
+        self.g:set_led(col, ch, 1)  -- the add slot
+      else
+        self.g:set_led(col, ch, 0)
+      end
+      self.g:set_strobe(col, ch, 'off')
     end
-  end
-  if self.engine:is_running(ch + 1) and len > 0 then
-    self.g:set_led(seqx.playhead(seq), ch, 15)
-  end
-  if self.picker and self.picker.kind == 'step' and self.picker.ch == ch and self.picker.layer == layer then
-    self.g:set_led(self.picker.col, ch, 15)
+    if running and len > 0 then
+      self.g:set_led(base + seqx.playhead(seq), ch, 15)
+    end
+    if self.picker and self.picker.kind == 'step'
+       and self.picker.ch == ch and self.picker.layer == layer then
+      self.g:set_led(base + self.picker.col, ch, 15)
+    end
   end
 end
 
@@ -849,7 +912,6 @@ function GridUI:render_action_mode()
   for x = 6, 11 do self.g:set_led(x, 6, 0) end
   self.g:set_led(ROW6_ALG_COL, 6, 8)
   self.g:set_led(ROW6_PERF_COL, 6, 8)
-  self.g:set_led(ROW6_KB_COL, 6, 8)
   self.g:set_led(ROW6_PROB_COL, 6, 8)
   self.g:set_led(ROW6_QNT_COL, 6, 8)
   self.g:set_led(ROW6_SND_COL, 6, 8)
@@ -867,7 +929,6 @@ function GridUI:render_row6()
   end
   self.g:set_led(ROW6_PERF_COL, 6, self.perfMode and 15 or 8)
   self.g:set_strobe(ROW6_PERF_COL, 6, self.perfMode and 'fast' or 'off')
-  self.g:set_led(ROW6_KB_COL, 6, 8)
   self.g:set_led(ROW6_PROB_COL, 6, self.probMode and 15 or 8)
   self.g:set_strobe(ROW6_PROB_COL, 6, self.probMode and 'fast' or 'off')
   local scale_open = self.picker and self.picker.kind == 'scale'
@@ -883,7 +944,7 @@ function GridUI:render_row7()
   for x = 0, #PARAMS - 1 do
     local sel = PARAMS[x + 1] == self.selectedParam
     self.g:set_led(x, 7, sel and 15 or 5)
-    self.g:set_strobe(x, 7, (sel and self.paramLayer == 'B') and 'slow' or 'off')
+    self.g:set_strobe(x, 7, 'off')
   end
   self.g:set_led(10, 7, 0)  -- col 10: spacer between op4 (col 9) and the action buttons
   local function action_led(col, name)
@@ -1090,7 +1151,7 @@ function GridUI:_status()
   elseif self.picker and self.picker.kind == 'scale' then
     s = 'scale: row0 preset, rows1-2 keys, rows3-4 qnt (' .. self.engine.quantize .. ')'
   else
-    s = 'edit ' .. self.selectedParam .. ' [' .. self.paramLayer .. ']'
+    s = 'edit ' .. self.selectedParam .. ' (A | B)'
   end
   self.status = s
   self.on_status(s)

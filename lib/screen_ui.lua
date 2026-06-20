@@ -41,6 +41,7 @@
 local seqx   = require 'seqx'
 local GridUI = require 'grid_ui'
 
+local SEQ_LEN = GridUI.SEQ_LEN  -- max steps per sequence (shared cap with the grid)
 local PARAMS = {'div', 'reps', 'note', 'level', 'harm', 'env'}
 -- Page order mirrors the grid's row-6 button layout (perf · prob · scale · snd),
 -- after the two sequence pages. K2/K3 walk this list; the grid mode buttons map
@@ -167,12 +168,12 @@ function Screen:main_param()
 end
 
 -- cursor positions on a sequence-page line: `run` has one; a param line has
--- one per step plus a trailing `_` add slot (unless at the 16-step grid cap).
+-- one per step plus a trailing `_` add slot (unless at the SEQ_LEN grid cap).
 function Screen:_main_positions(line)
   if line == 1 then return 1 end
   local param = PARAMS[line - 1]
   local len = seqx.len(self.ctl:seq_ref(self.sel_ch, param, self:layer()))
-  return (len < 16) and (len + 1) or len
+  return (len < SEQ_LEN) and (len + 1) or len
 end
 
 -- true when the cursor sits on the focused param's `_` add slot.
@@ -245,8 +246,9 @@ end
 
 -- The grid's PERF/PROB/SND buttons toggle the same modes set_page sets; follow
 -- them so the screen tab always matches what the grid is showing. With no mode
--- active we're on a sequence page: follow the grid's paramLayer so re-pressing a
--- row-7 param (the double-press that flips A↔B) swaps the screen to main/alt.
+-- active we're on a sequence page: the grid shows both A/B halves at once and no
+-- longer flips paramLayer, so this falls back to the screen's own main/alt
+-- choice (K2/K3), which still drives paramLayer for the screen's two seq pages.
 function Screen:_sync_page_from_grid()
   local c = self.ctl
   self.page = (c.picker and c.picker.kind == 'scale') and PAGE_SCALE
@@ -353,7 +355,7 @@ function Screen:_edit_main(d)
   -- the `_` add slot: a value below the bottom of the picker. Turning right
   -- appends a step starting from the lowest value (0 = no offset on alt).
   if self.sel_step >= #vals then
-    if d > 0 and #vals < 16 then
+    if d > 0 and #vals < SEQ_LEN then
       vals[#vals + 1] = layout[clamp(d, 1, #layout)]
       self.ctl:commit_step(self.sel_ch, param, vals, layer)
     end
@@ -630,7 +632,7 @@ function Screen:draw_steps()
     local vals = seqx.values(seq)
     local ph = seqx.playhead(seq)
     local running = self.engine:is_running(self.sel_ch + 1)
-    for i = 1, math.min(#vals, 16) do
+    for i = 1, math.min(#vals, SEQ_LEN) do
       local lvl = GridUI.value_brightness(param, vals[i])
       if running and (i - 1) == ph then lvl = 15 end
       screen.level(math.max(1, lvl))

@@ -41,7 +41,7 @@ local GridUI = require 'grid_ui'
 
 local SEQ_PARAMS = GridUI.PARAMS  -- {'div','reps','note','level','harm','env'}
 local SPV        = GridUI.STEP_PICKER_VALUES
-local MAX_STEPS  = 16
+local MAX_STEPS  = GridUI.SEQ_LEN  -- 8-step cap, shared with grid/screen
 
 local RATE_NAMES = {'0.25x', '0.5x', '1x', '2x', '4x'}
 local RESET_NAMES = {}
