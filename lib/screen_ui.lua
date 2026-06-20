@@ -42,14 +42,19 @@ local seqx   = require 'seqx'
 local GridUI = require 'grid_ui'
 
 local SEQ_LEN = GridUI.SEQ_LEN  -- max steps per sequence (shared cap with the grid)
-local PARAMS = {'div', 'reps', 'note', 'level', 'harm', 'env'}
--- Page order mirrors the grid's row-6 button layout (perf · prob · scale · snd),
--- after the two sequence pages. K2/K3 walk this list; the grid mode buttons map
--- onto the same pages (see _sync_page_from_grid).
-local PAGES  = {'main', 'alt', 'perf', 'prob', 'scale', 'snd'}
--- main/alt line 1 = run. scale = root + 12 chromatic keys + quantize = 14 stops.
-local LINES_PER_PAGE = {1 + #PARAMS, 1 + #PARAMS, 3, 5, 14, 5}
-local PAGE_PERF, PAGE_PROB, PAGE_SCALE, PAGE_SND = 3, 4, 5, 6
+local PARAMS = {'div', 'reps', 'note', 'level', 'env'}
+-- alt (B-layer) page: div/reps have no B layer (see GridUI.has_b), so it carries
+-- only the params that take an additive offset.
+local B_PARAMS = {}
+for _, p in ipairs(PARAMS) do if GridUI.has_b(p) then B_PARAMS[#B_PARAMS + 1] = p end end
+-- Page order mirrors the grid's row-6 button layout (op · perf · prob · scale ·
+-- snd), after the two sequence pages. K2/K3 walk this list; the grid mode buttons
+-- map onto the same pages (see _sync_page_from_grid).
+local PAGES  = {'main', 'alt', 'perf', 'prob', 'scale', 'snd', 'op'}
+-- main line 1 = run + all params; alt line 1 = run + the B-capable params.
+-- scale = root + 12 chromatic keys + quantize = 14 stops. op = r2/r3/r4 + 4 levels.
+local LINES_PER_PAGE = {1 + #PARAMS, 1 + #B_PARAMS, 3, 3, 14, 5, 7}
+local PAGE_PERF, PAGE_PROB, PAGE_SCALE, PAGE_SND, PAGE_OP = 3, 4, 5, 6, 7
 
 local NOTE_NAMES = {'c','c#','d','d#','e','f','f#','g','g#','a','a#','b'}
 
@@ -100,7 +105,7 @@ function Screen.new(engine, controller)
   self.SPV = controller.STEP_PICKER_VALUES
   self.sel_ch = 0
   self._focus_seen = 0  -- last grid focusSeq adopted (edge-trigger; see _sync_focus_from_grid)
-  self.sel_line = {4, 4, 1, 1, 1, 1}  -- per-page focused line (main/alt default to note)
+  self.sel_line = {4, 4, 1, 1, 1, 1, 1}  -- per-page focused line (main/alt default to note)
   self.sel_step = 0
   self.page = 1
   self.dirty = true
@@ -159,11 +164,17 @@ function Screen:_layout(param)
   return layout
 end
 
--- sequence page line 1 is `run`; lines 2..7 are the six params.
+-- the param list for the current sequence page: main (A) shows all six; alt (B)
+-- shows only the B-capable ones (div/reps have no offset).
+function Screen:_seq_params()
+  return (self:layer() == 'B') and B_PARAMS or PARAMS
+end
+
+-- sequence page line 1 is `run`; lines 2.. are the page's params.
 function Screen:main_param()
   if not self:_seq_page() then return nil end
   local line = self.sel_line[self.page]
-  if line >= 2 then return PARAMS[line - 1] end
+  if line >= 2 then return self:_seq_params()[line - 1] end
   return nil
 end
 
@@ -171,7 +182,7 @@ end
 -- one per step plus a trailing `_` add slot (unless at the SEQ_LEN grid cap).
 function Screen:_main_positions(line)
   if line == 1 then return 1 end
-  local param = PARAMS[line - 1]
+  local param = self:_seq_params()[line - 1]
   local len = seqx.len(self.ctl:seq_ref(self.sel_ch, param, self:layer()))
   return (len < SEQ_LEN) and (len + 1) or len
 end
@@ -229,6 +240,7 @@ function Screen:set_page(p)
   c.perfMode  = (self.page == PAGE_PERF)
   c.probMode  = (self.page == PAGE_PROB)
   c.soundMode = (self.page == PAGE_SND)
+  c.opMode    = (self.page == PAGE_OP)
   -- the scale page shares the grid's scale picker, so the grid follows the
   -- screen onto it (and the keymask/root/quantize stay one source of truth)
   if self.page == PAGE_SCALE then
@@ -253,6 +265,7 @@ function Screen:_sync_page_from_grid()
   local c = self.ctl
   self.page = (c.picker and c.picker.kind == 'scale') and PAGE_SCALE
     or c.perfMode and PAGE_PERF or c.probMode and PAGE_PROB or c.soundMode and PAGE_SND
+    or c.opMode and PAGE_OP
     or ((c.paramLayer == 'B') and 2 or 1)
 end
 
@@ -300,7 +313,8 @@ function Screen:_edit_value(d)
   elseif self.page == PAGE_PERF then self:_edit_perf(d)
   elseif self.page == PAGE_PROB then self:_edit_prob(d)
   elseif self.page == PAGE_SCALE then self:_edit_scale(d)
-  elseif self.page == PAGE_SND then self:_edit_snd(d) end
+  elseif self.page == PAGE_SND then self:_edit_snd(d)
+  elseif self.page == PAGE_OP then self:_edit_op(d) end
   self.ctl:render_all()
 end
 
@@ -384,6 +398,21 @@ local function step_table(cur, tbl, d)
   return tbl[clamp(idx + d, 1, #tbl)]
 end
 
+-- OP page cursor: lines 1..3 = op2/op3/op4 ratio (op1 pinned 1.0), lines 4..7 =
+-- op1..op4 level. Ratio steps the curated set; level steps the 0..1 grid.
+function Screen:_edit_op(d)
+  local ch = self.sel_ch
+  local c = self.engine.channels[ch + 1]
+  local line = self.sel_line[PAGE_OP]
+  if line <= 3 then
+    local field = 'opRatio' .. (line + 1)  -- line 1->op2, 2->op3, 3->op4
+    self.ctl:set_scalar(ch, field, step_table(c[field], GridUI.RATIO_VALUES, d))
+  else
+    local field = 'opLevel' .. (line - 3)  -- line 4->op1 .. 7->op4
+    self.ctl:set_scalar(ch, field, step_table(c[field], GridUI.OP_LEVEL_VALUES, d))
+  end
+end
+
 function Screen:_edit_snd(d)
   local ch = self.sel_ch
   local c = self.engine.channels[ch + 1]
@@ -405,12 +434,8 @@ function Screen:_edit_prob(d)
     self.ctl:set_scalar(ch, 'burstProb', step_table(c.burstProb, GridUI.PROB_VALUES, d))
   elseif line == 2 then
     self.ctl:set_scalar(ch, 'probHit', not c.probHit)
-  elseif line == 3 then
-    self.ctl:set_scalar(ch, 'altTrig', clamp(c.altTrig + d, 0, #GridUI.ALT_TRIG_MODE_NAMES - 1))
-  elseif line == 4 then
-    self.ctl:set_scalar(ch, 'harmTrig', clamp(c.harmTrig + d, 0, #GridUI.ALT_TRIG_MODE_NAMES - 1))
   else
-    self.ctl:set_scalar(ch, 'opTrig', clamp(c.opTrig + d, 0, #GridUI.ALT_TRIG_MODE_NAMES - 1))
+    self.ctl:set_scalar(ch, 'altTrig', clamp(c.altTrig + d, 0, #GridUI.ALT_TRIG_MODE_NAMES - 1))
   end
 end
 
@@ -549,7 +574,7 @@ function Screen:page_lines()
     local lines = {
       {'run', run_val, '', run_val},
     }
-    for i, p in ipairs(PARAMS) do
+    for i, p in ipairs(self:_seq_params()) do
       local vals = seqx.values(self.ctl:seq_ref(self.sel_ch, p, self:layer()))
       local focused = (self.sel_line[self.page] == i + 1)
       -- slide a 4-value window so the cursor's step is always visible
@@ -581,13 +606,20 @@ function Screen:page_lines()
       {'op.geo', GridUI.OP_GEODE_NAMES[c.opGeode + 1]},
       {'algo',   GridUI.ALGO_NAMES[c.algo]},
     }
+  elseif self.page == PAGE_OP then
+    local function r(v) return (v % 1 == 0) and tostring(math.floor(v)) or tostring(v) end
+    lines = {
+      {'op2 r', r(c.opRatio2)}, {'op3 r', r(c.opRatio3)}, {'op4 r', r(c.opRatio4)},
+      {'op1 l', string.format('%.2f', c.opLevel1)},
+      {'op2 l', string.format('%.2f', c.opLevel2)},
+      {'op3 l', string.format('%.2f', c.opLevel3)},
+      {'op4 l', string.format('%.2f', c.opLevel4)},
+    }
   elseif self.page == PAGE_PROB then
     lines = {
       {'prob', round(c.burstProb * 100) .. '%'},
       {'mode', c.probHit and 'hit' or 'burst'},
       {'note', GridUI.ALT_TRIG_MODE_NAMES[c.altTrig + 1]},
-      {'harm', GridUI.ALT_TRIG_MODE_NAMES[c.harmTrig + 1]},
-      {'op',   GridUI.ALT_TRIG_MODE_NAMES[c.opTrig + 1]},
     }
   else  -- PAGE_PERF
     local iv = c.resetInterval
@@ -621,31 +653,33 @@ function Screen:draw_lines()
   end
 end
 
--- footer: A + B step squares for the grid's selected param, brightness from
--- the same value_brightness mapping the grid LEDs use.
+-- footer: two rows of step squares mirroring the grid's two lanes (A/B for most
+-- params, div/reps for the paired page), brightness from the same
+-- value_brightness mapping the grid LEDs use.
 function Screen:draw_steps()
-  local param = self.ctl.selectedParam
-  local t = now()
-  for li, layer in ipairs({'A', 'B'}) do
+  local lanes = self.ctl:row_lanes()
+  local running = self.engine:is_running(self.sel_ch + 1)
+  for li, lane in ipairs(lanes) do
     local y = (li == 1) and 52 or 58
-    local seq = self.ctl:seq_ref(self.sel_ch, param, layer)
+    local seq = self.ctl:seq_ref(self.sel_ch, lane.param, lane.layer)
     local vals = seqx.values(seq)
     local ph = seqx.playhead(seq)
-    local running = self.engine:is_running(self.sel_ch + 1)
     for i = 1, math.min(#vals, SEQ_LEN) do
-      local lvl = GridUI.value_brightness(param, vals[i])
+      local lvl = GridUI.value_brightness(lane.param, vals[i])
       if running and (i - 1) == ph then lvl = 15 end
       screen.level(math.max(1, lvl))
       screen.rect(2 + (i - 1) * 5, y, 4, 4)
       screen.fill()
     end
   end
-  -- cursor underline: between the rows when editing A (main), below the B
-  -- row on alt; on the add slot it sits past the last square, reading as
-  -- the `_` itself
-  if self:_seq_page() and self:main_param() then
+  -- cursor underline: beneath the lane (row) holding the focused param — top
+  -- row for lane 1, bottom row for lane 2; on the add slot it sits past the
+  -- last square, reading as the `_` itself
+  local param = self:main_param()
+  if self:_seq_page() and param then
+    local bottom = lanes[2] and lanes[2].param == param and lanes[2].layer == self:layer()
     screen.level(8)
-    screen.rect(2 + self.sel_step * 5, self.page == 1 and 57 or 63, 4, 1)
+    screen.rect(2 + self.sel_step * 5, bottom and 63 or 57, 4, 1)
     screen.fill()
   end
 end

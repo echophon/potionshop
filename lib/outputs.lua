@@ -49,17 +49,16 @@ function M.note_to_volts(note) return (note - 60) / 12 end
 -- never reach here (note() drops them, matching the silent internal voice).
 function M.velocity(level) return clamp(round(level * 127), 1, 127) end
 
--- harmonicity ratio -> normalized 0..1 over the grid's harm picker span
--- (STEP_PICKER_VALUES.harm = 2 + i*0.75, i = 0..31, so 2 .. 25.25). The value
--- arriving here is geo_harm: harmonicity already shaped by the harm-geode
--- envelope per hit, so the normalized result carries that envelope's motion.
-local HARM_MIN, HARM_MAX = 2, 2 + 31 * 0.75
+-- brightness proxy -> normalized 0..1 over the curated FM-ratio span
+-- (RATIO_VALUES = 0.125 .. 14). The value arriving here is the channel's largest
+-- active modulator ratio (Burst:fire), a per-channel stand-in for the old harm.
+local HARM_MIN, HARM_MAX = 0.125, 14
 function M.harm_norm(harm) return clamp((harm - HARM_MIN) / (HARM_MAX - HARM_MIN), 0, 1) end
 
--- ER-301 modulation CV: harmonicity over 0..5 V, a plain step per hit.
+-- ER-301 modulation CV: brightness over 0..5 V, a plain step per hit.
 function M.harm_to_volts(harm) return M.harm_norm(harm) * 5 end
 
--- MIDI modwheel (CC1): harmonicity across the full 0..127 range.
+-- MIDI modwheel (CC1): brightness across the full 0..127 range.
 function M.harm_to_cc(harm) return round(M.harm_norm(harm) * 127) end
 
 -- ---- construction ---------------------------------------------------------

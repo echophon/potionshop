@@ -16,9 +16,10 @@
 // set) uses `SinOscFB` for true 1-sample self-PM. This is phase modulation, the
 // same thing the Yamaha chips do; the modulation index stays stable across pitch.
 //
-// The bright->clean harm sweep from the old voice is preserved: the modulator
-// RATIO SPREAD glides harmStart -> harmEnd over harmDecay (an Env inside the
-// SynthDef), so the channel's harm-envelope modes still bend the timbre.
+// Operator frequency ratios are PER-OPERATOR and per-channel: op1 is pinned to
+// 1.0 (the fundamental) and r2/r3/r4 are passed in from a curated, grid-editable
+// set (lib/burst.lua RATIO_VALUES). This replaced the old single `harm` macro
+// that fanned all three ratios out from unison via one scalar.
 //
 // Signal flow: PotionFM synths (in fmGroup, head) -> masterBus -> PotionMaster
 // (Limiter, at tail) -> engine output. Norns/Crone also soft-limits the main
@@ -63,27 +64,17 @@ Engine_Potionshop : CroneEngine {
 		// Operators evaluated top-down (op4 -> op1). `mAB` = whether op B
 		// modulates op A (A < B); the global `modIndex` (radians) and the
 		// modulator brightness env scale the depth. `cN` = carrier gain for opN.
-		// Modulator ratio spread sweeps brightnessStart -> brightnessEnd.
+		// r2/r3/r4 are the per-operator frequency ratios (op1 = 1.0 pinned), set
+		// per-channel on the grid OP page (no longer a single harm macro).
 		SynthDef("PotionFM", { arg out = 0, freq = 220, amp = 0.3,
-			brightnessStart = 2, brightnessEnd = 2, harmDecay = 0.001,
+			r2 = 1, r3 = 1, r4 = 1,                         // per-operator ratios (op1 = 1.0)
 			m21 = 0, m31 = 0, m41 = 0, m32 = 0, m42 = 0, m43 = 0,  // mod edges (from->to)
 			c1 = 1, c2 = 0, c3 = 0, c4 = 0,                 // carrier gains
 			lvl1 = 1, lvl2 = 1, lvl3 = 1, lvl4 = 1,         // per-operator output levels
 			modIndex = 4, feedback = 0,                     // global PM depth (rad), op4 self-FB (rad)
 			attack = 0.001, ampDecay = 0.4, ampCurve = -4,  // carrier amp env (perc)
 			modDecay = 0.2, drive = 1, gate = 1;            // modulator brightness env, soft-clip, voice gate
-			var ampEnv, cut, modEnv, mrEnv, r2, r3, r4, o1, o2, o3, o4, sig, driveMix;
-
-			// modulator ratio spread: brightness (~2..25) -> a spread amount mr
-			// (1..7), swept start -> end over harmDecay so the FM sidebands glide
-			// bright -> clean (or stay static when start == end / harm env off).
-			// The spread opens FROM UNISON: at mr=1 every modulator sits on the
-			// fundamental (cleanest, near a 2-op), and rises to a wide odd-harmonic
-			// stack as harm climbs. This makes lowest-harm a genuinely clean tone.
-			mrEnv = EnvGen.kr(Env.new(
-				[brightnessStart.linlin(2, 25.25, 1, 7), brightnessEnd.linlin(2, 25.25, 1, 7)],
-				[max(0.001, harmDecay)], \exp));
-			r2 = mrEnv; r3 = (mrEnv * 2) - 1; r4 = (mrEnv * 3) - 2;  // op1 = fundamental (r1 = 1)
+			var ampEnv, cut, modEnv, o1, o2, o3, o4, sig, driveMix;
 
 			// modulator brightness envelope: scales every modulation depth so the
 			// timbre brightens at the attack and decays over the note.
@@ -146,7 +137,7 @@ Engine_Potionshop : CroneEngine {
 			\in, masterBus.index, \out, context.out_b.index
 		]);
 
-		// trig(freq, amp, algo, harmStart, harmEnd, harmDecay, modIndex,
+		// trig(freq, amp, algo, r2, r3, r4, modIndex,
 		//      attack, ampDecay, ampCurve, modDecay, feedback, drive, ch,
 		//      lvl1, lvl2, lvl3, lvl4)
 		//
@@ -159,7 +150,7 @@ Engine_Potionshop : CroneEngine {
 		this.addCommand("trig", "ffffffffffffffffff", { arg msg;
 			var freq = msg[1], amp = msg[2];
 			var algo = msg[3].asInteger.clip(1, 8);
-			var harmStart = msg[4], harmEnd = msg[5], harmDecay = msg[6];
+			var r2 = msg[4], r3 = msg[5], r4 = msg[6];
 			var modIndex = msg[7];
 			var attack = msg[8], ampDecay = msg[9], ampCurve = msg[10], modDecay = msg[11];
 			var feedback = msg[12], drive = msg[13];
@@ -191,7 +182,7 @@ Engine_Potionshop : CroneEngine {
 
 			voice = Synth("PotionFM", [
 				\out, masterBus.index, \freq, freq, \amp, amp,
-				\brightnessStart, harmStart, \brightnessEnd, harmEnd, \harmDecay, harmDecay,
+				\r2, r2, \r3, r3, \r4, r4,
 				\m21, weights[\m21], \m31, weights[\m31], \m41, weights[\m41],
 				\m32, weights[\m32], \m42, weights[\m42], \m43, weights[\m43],
 				\c1, carriers.includes(1).if(cgain, 0),

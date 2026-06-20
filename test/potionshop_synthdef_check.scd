@@ -45,18 +45,14 @@ expand = { arg algo, modIndex;
 // --- SynthDef graph (mirror of the PotionFM + PotionMaster defs) ---
 defs = [
 	SynthDef("PotionFM", { arg out = 0, freq = 220, amp = 0.3,
-		brightnessStart = 2, brightnessEnd = 2, harmDecay = 0.001,
+		r2 = 1, r3 = 1, r4 = 1,
 		m21 = 0, m31 = 0, m41 = 0, m32 = 0, m42 = 0, m43 = 0,
 		c1 = 1, c2 = 0, c3 = 0, c4 = 0,
 		lvl1 = 1, lvl2 = 1, lvl3 = 1, lvl4 = 1,
 		modIndex = 4, feedback = 0,
 		attack = 0.001, ampDecay = 0.4, ampCurve = -4,
 		modDecay = 0.2, drive = 1, gate = 1;
-		var ampEnv, cut, modEnv, mrEnv, r2, r3, r4, o1, o2, o3, o4, sig, driveMix;
-		mrEnv = EnvGen.kr(Env.new(
-			[brightnessStart.linlin(2, 25.25, 1, 7), brightnessEnd.linlin(2, 25.25, 1, 7)],
-			[max(0.001, harmDecay)], \exp));
-		r2 = mrEnv; r3 = (mrEnv * 2) - 1; r4 = (mrEnv * 3) - 2;
+		var ampEnv, cut, modEnv, o1, o2, o3, o4, sig, driveMix;
 		modEnv = modIndex * EnvGen.kr(Env.perc(0.001, max(0.01, modDecay), 1.0, -4));
 		ampEnv = EnvGen.kr(
 			Env.perc(attack, max(0.01, ampDecay), 1.0, ampCurve),

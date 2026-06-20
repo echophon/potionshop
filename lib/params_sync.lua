@@ -7,19 +7,20 @@
 -- FM timbre macros (mod index / fm decay / amp punch / fm feedback / fm drive),
 -- the OUTPUTS group (lib/outputs.lua), plus one group per
 -- channel ("CHANNEL 1".."CHANNEL 6"). Each group holds the channel scalars
--- (run, rate, prob, modes, reset, clear/copy/paste + action triggers) and, per
--- sequence parameter x layer (div/reps/note/level/harm/env/op1/op2/op3/op4 x A/B), a
--- separator-headed block of three params:
+-- (run, rate, prob, modes, reset, per-op ratios/levels, clear/copy/paste + action
+-- triggers) and, per sequence parameter x layer (div/reps/note/level/env x A/B,
+-- where div/reps are A-only), a separator-headed block of three params:
 --   chN_<p>_<a|b>        text — the whole sequence as a space-separated string
 --   chN_<p>_<a|b>_step   number — cursor into the sequence (1-based)
 --   chN_<p>_<a|b>_val    number — value at the cursor, as an INDEX into
 --                        GridUI.STEP_PICKER_VALUES (B layer adds index 0 =
---                        literal 0, the no-offset default, which is off-grid
---                        for div/reps/harm). MIDI-mappable per-step editing.
+--                        literal 0, the no-offset default). MIDI-mappable.
+-- Per-op timbre is NOT sequenced: chN_ratio2/3/4 (curated options) and
+-- chN_level1..4 (0..31 grid) are plain per-channel scalars.
 --
 -- String tokens use the display units the grid/screen use: div/note/reps as
 -- integers ('inf' for infinite reps), level/env on the 0..31 grid scale
--- (value = n/31), harm as the actual ratio (2, 2.75, 3.5, ...). Parsing snaps
+-- (value = n/31). Parsing snaps
 -- every token to the nearest picker value (the same nearest-index rule
 -- screen_ui edits use), so any menu edit stays grid-reachable.
 --
@@ -39,7 +40,7 @@
 local seqx   = require 'seqx'
 local GridUI = require 'grid_ui'
 
-local SEQ_PARAMS = GridUI.PARAMS  -- {'div','reps','note','level','harm','env'}
+local SEQ_PARAMS = GridUI.PARAMS  -- {'div','reps','note','level','env'}
 local SPV        = GridUI.STEP_PICKER_VALUES
 local MAX_STEPS  = GridUI.SEQ_LEN  -- 8-step cap, shared with grid/screen
 
@@ -52,6 +53,15 @@ local PROB_MODE_NAMES = {'burst', 'hit'}
 local PROB_PCT_NAMES = {}
 for i, v in ipairs(GridUI.PROB_VALUES) do PROB_PCT_NAMES[i] = (v * 100) .. '%' end
 local ALT_TRIG_NAMES = GridUI.ALT_TRIG_MODE_NAMES
+-- curated per-op ratio option labels (mirror GridUI.RATIO_VALUES order)
+local RATIO_LABELS = {}
+for i, r in ipairs(GridUI.RATIO_VALUES) do
+  RATIO_LABELS[i] = (r % 1 == 0) and tostring(math.floor(r)) or tostring(r)
+end
+local function ratio_index(v)
+  for i, r in ipairs(GridUI.RATIO_VALUES) do if r == v then return i end end
+  return 1
+end
 local NOTE_NAMES = {'C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'}
 -- pitch-class name -> semitone, accepting sharps, flats, case-insensitively.
 local NAME_TO_PC = {}
@@ -61,10 +71,10 @@ for nm, pc in pairs({db = 1, eb = 3, gb = 6, ab = 8, bb = 10}) do NAME_TO_PC[nm]
 local function round(x) return math.floor(x + 0.5) end
 local function clamp(v, lo, hi) return math.max(lo, math.min(hi, v)) end
 
--- params shown/parsed on the 0..31 grid scale (value = n/31): the amp `level`,
--- the `env` shape, and the four per-operator levels op1..op4.
+-- sequenced params shown/parsed on the 0..31 grid scale (value = n/31): the amp
+-- `level` and the `env` shape.
 local function is_level_like(p)
-  return p == 'level' or p == 'env' or p:match('^op%d') ~= nil
+  return p == 'level' or p == 'env'
 end
 
 local M = {}
@@ -247,8 +257,8 @@ function M:add_globals()
   params:set_action('fm_feedback', function(v) eng.fmFeedback = v / 100 end)
   params:add_number('fm_drive', 'FM drive', 100, 800, round(eng.drive * 100), pct())
   params:set_action('fm_drive', function(v) eng.drive = v / 100 end)
-  -- per-operator output levels are no longer global: they live as per-channel
-  -- op1..op4 sequence blocks (added in _add_channel_params via SEQ_PARAMS).
+  -- per-operator ratios + output levels are per-channel static scalars
+  -- (chN_ratio2/3/4, chN_level1..4), added in the channel groups below.
 end
 
 function M:add_channels()
@@ -311,20 +321,28 @@ function M:_add_channel_params(n)
       self:request_render()
     end)
   end)
-  def(1, function()
-    params:add_option(id('harm_trig'), 'harm trig', ALT_TRIG_NAMES, c.harmTrig + 1)
-    params:set_action(id('harm_trig'), function(i)
-      c.harmTrig = i - 1
-      self:request_render()
+  -- per-operator FM ratios (op2/3/4; op1 pinned 1.0) — curated static scalars
+  for op = 2, 4 do
+    local field = 'opRatio' .. op
+    def(1, function()
+      params:add_option(id('ratio' .. op), 'op' .. op .. ' ratio', RATIO_LABELS, ratio_index(c[field]))
+      params:set_action(id('ratio' .. op), function(i)
+        c[field] = GridUI.RATIO_VALUES[i]
+        self:request_render()
+      end)
     end)
-  end)
-  def(1, function()
-    params:add_option(id('op_trig'), 'op trig', ALT_TRIG_NAMES, c.opTrig + 1)
-    params:set_action(id('op_trig'), function(i)
-      c.opTrig = i - 1
-      self:request_render()
+  end
+  -- per-operator output levels (op1..4) — static scalars on the 0..1 (1/31) grid
+  for op = 1, 4 do
+    local field = 'opLevel' .. op
+    def(1, function()
+      params:add_number(id('level' .. op), 'op' .. op .. ' level', 0, 31, round(c[field] * 31))
+      params:set_action(id('level' .. op), function(v)
+        c[field] = v / 31
+        self:request_render()
+      end)
     end)
-  end)
+  end
   local mode_fields = {
     {'env_mode', 'env mode', 'envMode', GridUI.ENV_MODE_NAMES},
     {'geode', 'geode', 'geodeMode', GridUI.GEODE_MODE_NAMES},
@@ -409,8 +427,11 @@ function M:_add_channel_params(n)
   end)
 
   -- ---- sequence blocks (text + cursor pair per param x layer) ----
+  -- div/reps have no B layer, so they get an A block only (see GridUI.has_b).
   for _, p in ipairs(SEQ_PARAMS) do
     for _, layer in ipairs({'A', 'B'}) do
+      -- div/reps have no B layer (see GridUI.has_b): skip their B block
+      if layer == 'B' and not GridUI.has_b(p) then goto continue end
       local text_id, step_id, val_id = seq_ids(n, p, layer)
       local label = p .. ' ' .. string.lower(layer)
       def(4, function()  -- separator + text + step + val
@@ -450,6 +471,7 @@ function M:_add_channel_params(n)
           self:request_render()
         end)
       end)
+      ::continue::
     end
   end
 
@@ -516,8 +538,6 @@ function M:reflect_scalars(n)
   params:set(id('prob'), GridUI.nearest_index(GridUI.PROB_VALUES, c.burstProb), true)
   params:set(id('prob_mode'), c.probHit and 2 or 1, true)
   params:set(id('alt_trig'), c.altTrig + 1, true)
-  params:set(id('harm_trig'), c.harmTrig + 1, true)
-  params:set(id('op_trig'), c.opTrig + 1, true)
   params:set(id('env_mode'), c.envMode + 1, true)
   params:set(id('geode'), c.geodeMode + 1, true)
   params:set(id('op_env_mode'), c.opEnvMode + 1, true)
@@ -525,6 +545,8 @@ function M:reflect_scalars(n)
   params:set(id('algorithm'), c.algo, true)
   params:set(id('reset'), GridUI.nearest_index(GridUI.RESET_INTERVALS, c.resetInterval), true)
   params:set(id('octave'), c.octave, true)
+  for op = 2, 4 do params:set(id('ratio' .. op), ratio_index(c['opRatio' .. op]), true) end
+  for op = 1, 4 do params:set(id('level' .. op), round(c['opLevel' .. op] * 31), true) end
 end
 
 function M:reflect_channel(n)
