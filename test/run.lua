@@ -81,27 +81,37 @@ local function in_set(v, set)
   return false
 end
 local eng = Burst.new()
-local ok_div, ok_reps, ok_note, ok_level, ok_harm, ok_env, ok_len = true, true, true, true, true, true, true
+local LEVEL_CONST = 16 / 31  -- the fixed init volume (default_channel), not randomized
+local ok_div, ok_reps, ok_note, ok_harm, ok_env, ok_len, ok_level_const =
+  true, true, true, true, true, true, true
 for _ = 1, 200 do
   eng:randomize(1)
   local c = eng.channels[1]
   for _, v in ipairs(seqx.values(c.div))  do if not in_set(v, Burst.MUSICAL_DIVS) then ok_div = false end end
   for _, v in ipairs(seqx.values(c.reps)) do if not in_set(v, {1,2,3,4}) then ok_reps = false end end
   for _, v in ipairs(seqx.values(c.note)) do if not (v >= 0 and v <= 15 and v == math.floor(v)) then ok_note = false end end
-  for _, v in ipairs(seqx.values(c.level)) do local k = v * 31 if not (approx(k, math.floor(k+0.5)) and k >= 1 and k <= 16) then ok_level = false end end
   for _, v in ipairs(seqx.values(c.harm)) do local k = (v - 2) / 0.75 if not (approx(k, math.floor(k+0.5)) and k >= 0 and k <= 15) then ok_harm = false end end
   for _, v in ipairs(seqx.values(c.env)) do local k = v * 31 if not (approx(k, math.floor(k+0.5)) and k >= 0 and k <= 15) then ok_env = false end end
+  -- volume is a constant: randomize must leave it at the init value, length 1.
+  local lv = seqx.values(c.level)
+  if #lv ~= 1 or not approx(lv[1], LEVEL_CONST) then ok_level_const = false end
   local dl = seqx.len(c.div)
   if not (dl >= 2 and dl <= 4) then ok_len = false end
-  if seqx.len(c.level) ~= 1 then ok_len = false end  -- tonal params -> length 1
 end
 check('div values all in MUSICAL_DIVS', ok_div)
 check('reps values all in {1,2,3,4}', ok_reps)
 check('note values 0..15 integer', ok_note)
-check('level values land on picker grid (i/31, i=1..16)', ok_level)
 check('harm values land on picker grid (2+i*0.75)', ok_harm)
 check('env values land on picker grid (i/31)', ok_env)
-check('lengths: div/reps/note 2..4, level len 1', ok_len)
+check('randomize leaves volume at the fixed init constant', ok_level_const)
+check('lengths: div/reps/note 2..4', ok_len)
+
+-- mutate must also leave volume untouched (a constant), even with a custom level.
+local emut = Burst.new()
+emut.channels[1].level = seqx.new{0.42}
+for _ = 1, 50 do emut:mutate(1) end
+check('mutate leaves volume unchanged',
+  seqx.len(emut.channels[1].level) == 1 and approx(seqx.values(emut.channels[1].level)[1], 0.42))
 
 -- ---- burst: clock-coroutine scheduling --------------------------------
 print('burst scheduling:')

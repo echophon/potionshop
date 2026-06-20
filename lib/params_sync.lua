@@ -29,8 +29,8 @@
 -- side effects (on_edit reflection, clipboard) behave identically;
 -- engine/UI -> params only ever happens via SILENT params:set
 -- (third arg true), which never fires actions. Reflection of off-grid engine
--- values (the boot level default, mutate jitter) snaps for display only —
--- the engine keeps its exact value until the user actually edits that param.
+-- values (e.g. mutate's harm/env jitter) snaps for display only — the engine
+-- keeps its exact value until the user actually edits that param.
 --
 -- The module is dependency-injected (engine, controller, params table) so the
 -- off-hardware tests can drive it with a fake paramset; no lib module touches

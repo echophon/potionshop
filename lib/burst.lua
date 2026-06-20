@@ -97,7 +97,9 @@ local function default_channel()
     div   = seqx.new{4, 8},
     reps  = seqx.new{2, 2},
     note  = seqx.new{0},
-    level = seqx.new{0.6},
+    -- volume is a fixed constant (no longer randomized/mutated). 16/31 ≈ 0.52 is
+    -- the grid-exact form of the old 0.5 neutral, so it stays picker-editable.
+    level = seqx.new{16 / 31},
     harm  = seqx.new{2},
     env   = seqx.new{0},
     divB   = seqx.new{0},
@@ -520,8 +522,9 @@ function Burst:randomize(ch)
   c.div  = seqx.new(fill(len, function() return pick(MUSICAL_DIVS) end))
   c.reps = seqx.new(fill(len, function() return pick{1, 2, 2, 3, 4} end))
   c.note = seqx.new(fill(len, function() return ri(16) end))
+  -- volume (level) is intentionally NOT randomized: it stays the channel's fixed
+  -- constant so the mix loudness is stable. Only harm/env are scrambled here.
   local t_len = 1
-  c.level = seqx.new(fill(t_len, function() return (ri(16) + 1) / 31 end))
   c.harm  = seqx.new(fill(t_len, function() return 2 + ri(16) * 0.75 end))
   c.env   = seqx.new(fill(t_len, function() return ri(16) / 31 end))
   -- Sound-page modes (envMode/geodeMode/opEnvMode/opGeode) are intentionally
@@ -557,7 +560,7 @@ function Burst:mutate(ch, amount)
     return clamp(round(v + jitter(amount * 4)), 1, 8)
   end)
   c.note  = map(c.note,  function(v) return round(v + jitter(amount * 4)) end)
-  c.level = map(c.level, function(v) return clamp(v + jitter(amount * 0.5), 0, 1) end)
+  -- volume (level) left untouched: a constant, never jittered (see randomize).
   c.harm  = map(c.harm,  function(v) return clamp(v + jitter(amount * 2), 2, 4) end)
   c.env   = map(c.env,   function(v) return clamp(v + jitter(amount * 0.6), 0, 1) end)
 end
