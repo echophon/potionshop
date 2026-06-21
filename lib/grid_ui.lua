@@ -21,21 +21,24 @@
 --               press; there is no A/B flip (no double-press). See row_lanes.
 --   row 6     = 0..5 launch · 6..9 dark · 10 OP · 11 ALG · 12 PERF · 13 PROB · 14 QNT · 15 SND
 --               (KB page disabled)
---   row 7     = 0..4 param (div/reps/note/level/env) · 5..10 dark · 11 CLR
---             · 12 COPY · 13 PASTE · 14 RANDOMIZE · 15 MUTATE
---             (timbre — per-op ratio/level — is no longer sequenced; it lives on
---             the OP page as per-channel static scalars)
+--   row 7     = 0 div/reps · 1 note · 2 level · 3 attack/decay · 4 modatk/moddec
+--             · 5..10 dark · 11 CLR · 12 COPY · 13 PASTE · 14 RANDOMIZE · 15 MUTATE
+--             (one page-select button each; div/reps, attack/decay and
+--             modatk/moddec are paired pages showing two A-layer lanes. The two
+--             envelope pages are the carrier amp env and the modulator/FM-bright
+--             env. timbre — per-op ratio/level — lives
+--             on the OP page as static scalars)
 --   CLR/COPY/PASTE act on the MAIN (A-layer) sequins of the tapped channel only;
 --   the B (alt) layer is left intact so it can keep variating the copied sequins.
---   OP:    rows 0-5 = per-op RATIO (cols 0-3, op1 locked at 1.0) · per-op LEVEL
+--   OP:    rows 0-5 = per-op RATIO (cols 0-3, op1..op4 all editable) · per-op LEVEL
 --          (cols 8-11). Tap a cell to open its value picker on rows 6-7.
 --   PROB:  rows 0-5 = note alt-trig hold/step (cols 0-1)
 --          · prob 25/50/75/100% (cols 11-14, right-justified)
 --          · col 15 burst/hit toggle
 --   PERF:  rows 0-5 = reset off/1/2/4 bars (cols 0..3) · octave -2..+2 (cols 5..9)
 --          · rate (cols 11..15)
---   SND:   rows 0-5 = env(0-2) · geode(4-6) · op env(8-10) · op geode(12-14)
---   ALG:   rows 0-5 = FM algorithm 1-8 (cols 0-7), the channel's selection bright
+--   SND:   rows 0-5 = env(0-2) · geode(4-6)
+--   ALG:   rows 0-5 = FM algorithm 1-16 (cols 0-15), the channel's selection bright
 --   scale picker: row 0 cols 0-6 scale presets (7)
 --                 rows 1-2 cols 0-6 degree (note-mask) keyboard: black row 1 / white row 2
 --                 rows 4-5 cols 0-6 root keyboard: black row 4 / white row 5
@@ -62,14 +65,26 @@ local GRID_W = 16
 local SEQ_LEN = 8
 local B_COL0 = 8
 local NUM_CHANNELS = 6
--- Sequenced params on row-7 cols 0..4. Timbre (per-op ratios + levels) is no
--- longer sequenced — it lives on the per-channel OP page as static scalars.
-local PARAMS = {'div', 'reps', 'note', 'level', 'env'}
--- div/reps have no B layer (an additive offset on division/repeats isn't
--- musical), so they share one page: div on the left half, reps on the right.
--- Every other param shows its A layer left, B layer right.
-local PAIRED = {div = true, reps = true}
+-- All sequenced params (the row-7 page buttons are a separate, smaller list —
+-- ROW7_PAGES — one per page). Timbre (per-op ratios + levels) is no longer
+-- sequenced — it lives on the per-channel OP page as static scalars.
+local PARAMS = {'div', 'reps', 'note', 'level', 'attack', 'decay', 'modatk', 'moddec'}
+-- Paired params share one page as two A-layer lanes (left|right) instead of a
+-- param's own A|B layers: div|reps (an additive offset on division/repeats isn't
+-- musical), attack|decay (the carrier envelope shape) and modatk|moddec (the
+-- modulator/FM-brightness envelope shape). A paired param therefore has no B
+-- layer; every other param shows its A layer left, B right.
+local PAIRS = { {'div', 'reps'}, {'attack', 'decay'}, {'modatk', 'moddec'} }
+local PAIRED, PAIR_OF = {}, {}
+for _, pr in ipairs(PAIRS) do
+  PAIRED[pr[1]] = true; PAIRED[pr[2]] = true
+  PAIR_OF[pr[1]] = pr;  PAIR_OF[pr[2]] = pr
+end
 local function has_b(param) return not PAIRED[param] end
+-- row-7 page-select buttons: ONE per page. A paired page is represented by its
+-- first member (selecting it shows both lanes via row_lanes); singles are
+-- themselves. Cols 0..#ROW7_PAGES-1.
+local ROW7_PAGES = {'div', 'note', 'level', 'attack', 'modatk'}
 
 -- row 7
 local CLR_BUTTON_COL = 11
@@ -87,7 +102,7 @@ local ROW6_PERF_COL = 12
 local ROW6_PROB_COL = 13
 local ROW6_QNT_COL = 14
 local ROW6_SND_COL = 15
--- OP page channel-row layout: op1..4 RATIO on cols 0..3 (op1 locked at 1.0),
+-- OP page channel-row layout: op1..4 RATIO on cols 0..3 (op1 default 1.0, editable),
 -- op1..4 LEVEL on cols 8..11 (left/right halves, like the A/B convention).
 local OP_RATIO_COL0 = 0
 local OP_LEVEL_COL0 = 8
@@ -130,21 +145,31 @@ local PROB_HIT_COL  = 15
 
 local ENV_MODE_NAMES       = {'shape', 'burst', 'hit'}
 local GEODE_MODE_NAMES     = {'transient', 'sustain', 'cycle'}  -- amp geode, always on
-local OP_ENV_MODE_NAMES    = {'off', 'hit', 'burst'}  -- op-level geode timing
-local OP_GEODE_NAMES       = {'transient', 'sustain', 'cycle'}  -- op-level per-hit geode shape
--- FM algorithm (1..8): DX-style operator routings, labelled by their shape.
+-- FM algorithm (1..16): operator routings, labelled by their shape. 1..8 are the
+-- canonical Yamaha 4-op DX set; 9..16 are extended routings (see Engine_Potionshop
+-- algorithms table — keep ordering in sync). One ALG grid row fits all 16 (cols 0..15).
 local ALGO_NAMES = {'4>3>2>1', '(4,3)>2>1', '4>3>1 2>1', '4>2>1 3>1',
-                    '2>1 4>3', '4>1,2,3', '4>3 +1,2', 'additive'}
+                    '2>1 4>3', '4>1,2,3', '4>3 +1,2', 'additive',
+                    '(4,3,2)>1', '3>2>1 +4', '4>2>1 +3', '4>3>2 +1',
+                    '4>3>1 +2', '(4,3)>1 +2', '4>1,2 +3', '4>2 3>1'}
 -- alt(B)-layer trigger mode for the note layer (altTrig):
 --   hold = add&hold (B drawn once per burst, summed onto A for every hit)
 --   step = advance the B sequins per hit (arpeggiates the alt layer)
 local ALT_TRIG_MODE_NAMES  = {'hold', 'step'}
--- Curated per-operator FM ratios for the OP-page picker. Mirrors
--- Burst.RATIO_VALUES (randomize/mutate) — keep the two in sync.
-local RATIO_VALUES = {0.125, 0.25, 0.5, 0.75, 1, 1.5, 2, 2.5, 3, 4, 5, 6, 7, 9, 11, 14}
+-- Curated per-operator FM ratios for the OP-page picker (32 values across the two
+-- picker rows 6-7: cols 0..15 = ratios 1..16, second row = 17..32). Mirrors
+-- Burst.RATIO_VALUES (randomize/mutate) — keep the two in sync. Superset of the
+-- earlier 16-value set: denser sub-octave bass, a unity-detune zone (1.25/1.75),
+-- and half-integer inharmonic ratios for bell/metallic timbres.
+local RATIO_VALUES = {
+  0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1,
+  1.25, 1.5, 1.75, 2, 2.25, 2.5, 2.75, 3,
+  3.5, 4, 4.5, 5, 5.5, 6, 6.5, 7,
+  7.5, 8, 9, 10, 11, 12, 13, 14,
+}
 
-local DEFAULT_VALUE   = {div = 8, reps = 3, note = 0, level = 0.5, env = 2}
-local DEFAULT_VALUE_B = {div = 0, reps = 0, note = 0, level = 0, env = 0}
+local DEFAULT_VALUE   = {div = 8, reps = 3, note = 0, level = 0.5, attack = 0, decay = 16 / 31, modatk = 0, moddec = 8 / 31}
+local DEFAULT_VALUE_B = {div = 0, reps = 0, note = 0, level = 0, attack = 0, decay = 0, modatk = 0, moddec = 0}
 
 -- 1-based value layouts for the step picker / KB bands. Index 1..32 maps to
 -- grid cell (y*16 + x + 1). These are the grid-reachability contract.
@@ -154,7 +179,10 @@ local STEP_PICKER_VALUES = {
   reps = (function() local t = range(31, function(i) return i + 1 end); t[32] = -1; return t end)(),
   note = range(32, function(i) return i end),
   level = range(32, function(i) return i / 31 end),
-  env   = range(32, function(i) return i / 31 end),
+  attack = range(32, function(i) return i / 31 end),
+  decay  = range(32, function(i) return i / 31 end),
+  modatk = range(32, function(i) return i / 31 end),
+  moddec = range(32, function(i) return i / 31 end),
 }
 -- OP-page op-level picker: 0..1 in 1/31 steps (same layout the old op sequins
 -- used), so every operator level stays grid-reachable.
@@ -213,7 +241,8 @@ local function value_brightness(param, value)
   elseif param == 'harm' then
     local norm = (value - 2) / 23.25
     b = clamp(round(4 + norm * 9), 4, VALUE_MAX)
-  elseif param == 'env' then
+  elseif param == 'attack' or param == 'decay'
+      or param == 'modatk' or param == 'moddec' then
     local norm = clamp(value, 0, 1)
     b = clamp(round(2 + norm * 11), 2, VALUE_MAX)
   else
@@ -234,8 +263,6 @@ GridUI.nearest_index = nearest_index
 GridUI.DEFAULT_VALUE = DEFAULT_VALUE
 GridUI.ENV_MODE_NAMES = ENV_MODE_NAMES
 GridUI.GEODE_MODE_NAMES = GEODE_MODE_NAMES
-GridUI.OP_ENV_MODE_NAMES = OP_ENV_MODE_NAMES
-GridUI.OP_GEODE_NAMES = OP_GEODE_NAMES
 GridUI.ALGO_NAMES = ALGO_NAMES
 GridUI.RESET_INTERVALS = RESET_INTERVALS
 GridUI.OCTAVE_VALUES = OCTAVE_VALUES
@@ -333,8 +360,9 @@ end
 -- a param's A and B layers; div/reps is special — div (A) left, reps (A) right.
 function GridUI:row_lanes()
   local p = self.selectedParam
-  if PAIRED[p] then
-    return {{param = 'div', layer = 'A'}, {param = 'reps', layer = 'A'}}
+  local pr = PAIR_OF[p]
+  if pr then
+    return {{param = pr[1], layer = 'A'}, {param = pr[2], layer = 'A'}}
   end
   return {{param = p, layer = 'A'}, {param = p, layer = 'B'}}
 end
@@ -385,10 +413,10 @@ function GridUI:handle_normal_press(x, y)
       return
     end
     if self.opMode then
-      -- ratios on cols 0..3 (op1 = col 0 is locked at 1.0); levels on cols 8..11
+      -- ratios on cols 0..3 (op1..op4, all editable); levels on cols 8..11
       local ri = x - OP_RATIO_COL0
       local lvi = x - OP_LEVEL_COL0
-      if ri >= 1 and ri <= 3 then            -- op2..op4 ratio (op1 locked)
+      if ri >= 0 and ri <= 3 then            -- op1..op4 ratio
         self:open_scalar_picker(y, 'opRatio' .. (ri + 1), RATIO_VALUES, 'ratio')
       elseif lvi >= 0 and lvi <= 3 then      -- op1..op4 level
         self:open_scalar_picker(y, 'opLevel' .. (lvi + 1), OP_LEVEL_VALUES, 'level')
@@ -397,14 +425,12 @@ function GridUI:handle_normal_press(x, y)
     end
     if self.soundMode then
       if x <= 2 then self:set_scalar(y, 'envMode', x)
-      elseif x >= 4 and x <= 6 then self:set_scalar(y, 'geodeMode', x - 4)
-      elseif x >= 8 and x <= 10 then self:set_scalar(y, 'opEnvMode', x - 8)
-      elseif x >= 12 and x <= 14 then self:set_scalar(y, 'opGeode', x - 12) end
+      elseif x >= 4 and x <= 6 then self:set_scalar(y, 'geodeMode', x - 4) end
       self:render_channel_row(y); self.g:refresh()
       return
     end
     if self.algoMode then
-      if x <= 7 then self:set_scalar(y, 'algo', x + 1) end  -- cols 0..7 -> algo 1..8
+      if x <= #ALGO_NAMES - 1 then self:set_scalar(y, 'algo', x + 1) end  -- cols 0..15 -> algo 1..16
       self:render_channel_row(y); self.g:refresh()
       return
     end
@@ -735,10 +761,10 @@ function GridUI:handle_row6(x)
 end
 
 function GridUI:handle_row7(x)
-  if x < #PARAMS then
-    -- both A/B halves are always shown, so a param button only selects which
-    -- param the channel rows display — no A/B flip (no double-press feature).
-    self.selectedParam = PARAMS[x + 1]
+  if x < #ROW7_PAGES then
+    -- one button per page; a paired page is represented by its first member.
+    -- Both A/B (or both pair) lanes are always shown — no A/B flip.
+    self.selectedParam = ROW7_PAGES[x + 1]
     self.picker = nil
     self:render_all()
   elseif x == CLR_BUTTON_COL then self:_toggle_action('clear')
@@ -896,17 +922,17 @@ function GridUI:render_channel_row(ch)
   end
 end
 
--- OP page: per-op ratio (cols 0..3, op1 locked) + per-op level (cols 8..11),
--- each cell's brightness encoding its value; the picker opens on tap.
+-- OP page: per-op ratio (cols 0..3, op1..op4 all editable) + per-op level
+-- (cols 8..11), each cell's brightness encoding its value; picker opens on tap.
 function GridUI:render_op_row(ch)
   local c = self:chan(ch)
   for x = 0, GRID_W - 1 do self.g:set_led(x, ch, 0); self.g:set_strobe(x, ch, 'off') end
-  local ratios = {1, c.opRatio2, c.opRatio3, c.opRatio4}
+  local ratios = {c.opRatio1, c.opRatio2, c.opRatio3, c.opRatio4}
   for op = 1, 4 do
     -- ratio brightness from its index in the curated set (low ratio = dim)
     local idx = nearest_index(RATIO_VALUES, ratios[op])
     local rb = clamp(round(2 + (idx - 1) / (#RATIO_VALUES - 1) * 11), 2, VALUE_MAX)
-    self.g:set_led(OP_RATIO_COL0 + (op - 1), ch, (op == 1) and 4 or rb)  -- op1 locked
+    self.g:set_led(OP_RATIO_COL0 + (op - 1), ch, rb)
     local lvl = c['opLevel' .. op] or 1
     self.g:set_led(OP_LEVEL_COL0 + (op - 1), ch, math.max(2, round(2 + lvl * 11)))
   end
@@ -956,11 +982,9 @@ function GridUI:render_sound_row(ch)
   for x = 0, GRID_W - 1 do self.g:set_led(x, ch, 0); self.g:set_strobe(x, ch, 'off') end
   for m = 0, 2 do self.g:set_led(m, ch, c.envMode == m and 15 or 4) end
   for m = 0, 2 do self.g:set_led(m + 4, ch, c.geodeMode == m and 15 or 4) end
-  for m = 0, 2 do self.g:set_led(m + 8, ch, c.opEnvMode == m and 15 or 4) end
-  for m = 0, 2 do self.g:set_led(m + 12, ch, c.opGeode == m and 15 or 4) end
 end
 
--- FM algorithm page: cols 0..7 = algorithm 1..8, the channel's selection bright.
+-- FM algorithm page: cols 0..15 = algorithm 1..16, the channel's selection bright.
 function GridUI:render_algo_row(ch)
   local c = self:chan(ch)
   for x = 0, GRID_W - 1 do self.g:set_led(x, ch, 0); self.g:set_strobe(x, ch, 'off') end
@@ -1008,14 +1032,16 @@ function GridUI:render_row6()
 end
 
 function GridUI:render_row7()
-  for x = 0, #PARAMS - 1 do
-    local p = PARAMS[x + 1]
-    -- div/reps share a page, so both buttons light when either is selected
-    local sel = p == self.selectedParam or (PAIRED[self.selectedParam] and PAIRED[p])
+  for x = 0, #ROW7_PAGES - 1 do
+    local bp = ROW7_PAGES[x + 1]
+    -- a page button lights when the selected param belongs to its page (itself,
+    -- or the same pair via PAIR_OF identity).
+    local sel = bp == self.selectedParam
+      or (PAIR_OF[bp] ~= nil and PAIR_OF[self.selectedParam] == PAIR_OF[bp])
     self.g:set_led(x, 7, sel and 15 or 5)
     self.g:set_strobe(x, 7, 'off')
   end
-  for x = #PARAMS, 10 do self.g:set_led(x, 7, 0) end  -- dark gap before the action buttons
+  for x = #ROW7_PAGES, 10 do self.g:set_led(x, 7, 0) end  -- dark gap before the action buttons
   local function action_led(col, name)
     self.g:set_led(col, 7, self.actionMode == name and 15 or 4)
     self.g:set_strobe(col, 7, self.actionMode == name and 'fast' or 'off')
@@ -1209,11 +1235,11 @@ function GridUI:_status()
   elseif self.probMode then
     s = 'PROB — cols0-1 note trig, 11-14 prob%, 15 burst/hit'
   elseif self.soundMode then
-    s = 'SOUND — env/geode/op env/op geode'
+    s = 'SOUND — env(0-2) / geode(4-6)'
   elseif self.algoMode then
-    s = 'ALG — cols0-7 FM algorithm (1-8)'
+    s = 'ALG — cols0-15 FM algorithm (1-16)'
   elseif self.opMode then
-    s = 'OP — cols0-3 op ratio (op1 fixed), cols8-11 op level'
+    s = 'OP — cols0-3 op ratio, cols8-11 op level'
   elseif self.actionMode then
     s = string.upper(self.actionMode) .. ' — tap a channel'
   elseif self.picker and self.picker.kind == 'scalar' then
@@ -1224,13 +1250,14 @@ function GridUI:_status()
   elseif self.picker and self.picker.kind == 'step' then
     local pp = self.picker.param
     local raw = seqx.values(self:seq_ref(self.picker.ch, pp, self.picker.layer))[self.picker.col + 1]
-    local v = (pp == 'env') and round(raw * 31) or raw
+    local v = (pp == 'attack' or pp == 'decay' or pp == 'modatk' or pp == 'moddec') and round(raw * 31) or raw
     s = 'edit ch' .. (self.picker.ch + 1) .. ' step ' .. self.picker.col .. ' ' ..
         pp .. (self.picker.layer == 'B' and 'B' or '') .. '=' .. tostring(v)
   elseif self.picker and self.picker.kind == 'scale' then
     s = 'scale: row0 preset, rows1-2 keys, rows3-4 qnt (' .. self.engine.quantize .. ')'
   else
-    s = PAIRED[self.selectedParam] and 'edit div | reps'
+    local pr = PAIR_OF[self.selectedParam]
+    s = pr and ('edit ' .. pr[1] .. ' | ' .. pr[2])
       or ('edit ' .. self.selectedParam .. ' (A | B)')
   end
   self.status = s

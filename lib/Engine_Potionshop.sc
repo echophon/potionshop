@@ -2,7 +2,8 @@
 // SuperCollider engine for the Norns port of potionshop.
 //
 // FOUR-OPERATOR FM voice (Yamaha DX21/DX27/DX100/TX81Z-style): 4 sine operators,
-// the classic 8 algorithms (operator routings), and per-operator-style feedback.
+// 16 algorithms (operator routings: the classic 8 DX shapes + 8 extended
+// routings), and per-operator-style feedback.
 // This replaced the earlier 2-op `PotionFM` voice (one carrier + one modulator);
 // `Burst:fire` (lib/burst.lua) drives it per hit, adding a per-channel `algo`.
 //
@@ -16,9 +17,10 @@
 // set) uses `SinOscFB` for true 1-sample self-PM. This is phase modulation, the
 // same thing the Yamaha chips do; the modulation index stays stable across pitch.
 //
-// Operator frequency ratios are PER-OPERATOR and per-channel: op1 is pinned to
-// 1.0 (the fundamental) and r2/r3/r4 are passed in from a curated, grid-editable
-// set (lib/burst.lua RATIO_VALUES). This replaced the old single `harm` macro
+// Operator frequency ratios are PER-OPERATOR and per-channel: r1/r2/r3/r4 are all
+// passed in from a curated, grid-editable set (lib/burst.lua RATIO_VALUES); op1
+// defaults to 1.0 (the fundamental) but is now editable like the others, not
+// pinned. This replaced the old single `harm` macro
 // that fanned all three ratios out from unison via one scalar.
 //
 // Signal flow: PotionFM synths (in fmGroup, head) -> masterBus -> PotionMaster
@@ -32,7 +34,9 @@ Engine_Potionshop : CroneEngine {
 	var <voices;        // one live voice node per channel (monophonic-per-channel)
 	classvar numChannels = 6;
 
-	// The 8 DX-style algorithms as DATA. Each entry lists the active modulation
+	// The 16 FM algorithms as DATA (1..8 are the canonical Yamaha 4-op DX set;
+		// 9..16 are extended routings spread across carrier counts so each is
+		// audibly distinct). Each entry lists the active modulation
 	// edges (as [from-op, to-op], op numbers 1..4, always from > to) and the
 	// carrier ops (which reach the output sum). Feedback lives on op4.
 	//
@@ -51,7 +55,15 @@ Engine_Potionshop : CroneEngine {
 			[ [[2,1],[4,3]],                  [1,3] ],        // 5: twin 2-op stacks
 			[ [[4,1],[4,2],[4,3]],            [1,2,3] ],      // 6: op4 mods three carriers
 			[ [[4,3]],                        [1,2,3] ],      // 7: one stack + two bare carriers
-			[ [],                             [1,2,3,4] ]     // 8: additive (no modulation)
+			[ [],                             [1,2,3,4] ],    // 8: additive (no modulation)
+			[ [[4,1],[3,1],[2,1]],            [1] ],          // 9: (4,3,2)->1 parallel triple-mod
+			[ [[3,2],[2,1]],                  [1,4] ],        // 10: 3->2->1 stack + pure op4
+			[ [[4,2],[2,1]],                  [1,3] ],        // 11: 4->2->1 stack + pure op3
+			[ [[4,3],[3,2]],                  [1,2] ],        // 12: 4->3->2 carrier + pure op1
+			[ [[4,3],[3,1]],                  [1,2] ],        // 13: 4->3->1 carrier + pure op2
+			[ [[4,1],[3,1]],                  [1,2] ],        // 14: (4,3)->1 + pure op2
+			[ [[4,1],[4,2]],                  [1,2,3] ],      // 15: op4 mods 2 carriers + pure op3
+			[ [[4,2],[3,1]],                  [1,2] ]         // 16: twin 2-op stacks (4->2, 3->1)
 		];
 	}
 
@@ -64,21 +76,24 @@ Engine_Potionshop : CroneEngine {
 		// Operators evaluated top-down (op4 -> op1). `mAB` = whether op B
 		// modulates op A (A < B); the global `modIndex` (radians) and the
 		// modulator brightness env scale the depth. `cN` = carrier gain for opN.
-		// r2/r3/r4 are the per-operator frequency ratios (op1 = 1.0 pinned), set
+		// r1/r2/r3/r4 are the per-operator frequency ratios (op1 default 1.0, editable), set
 		// per-channel on the grid OP page (no longer a single harm macro).
 		SynthDef("PotionFM", { arg out = 0, freq = 220, amp = 0.3,
-			r2 = 1, r3 = 1, r4 = 1,                         // per-operator ratios (op1 = 1.0)
+			r1 = 1, r2 = 1, r3 = 1, r4 = 1,                 // per-operator ratios (op1 default 1.0)
 			m21 = 0, m31 = 0, m41 = 0, m32 = 0, m42 = 0, m43 = 0,  // mod edges (from->to)
 			c1 = 1, c2 = 0, c3 = 0, c4 = 0,                 // carrier gains
 			lvl1 = 1, lvl2 = 1, lvl3 = 1, lvl4 = 1,         // per-operator output levels
 			modIndex = 4, feedback = 0,                     // global PM depth (rad), op4 self-FB (rad)
 			attack = 0.001, ampDecay = 0.4, ampCurve = -4,  // carrier amp env (perc)
-			modDecay = 0.2, drive = 1, gate = 1;            // modulator brightness env, soft-clip, voice gate
+			modAttack = 0.001, modDecay = 0.2,              // modulator brightness env (perc atk+dec)
+			drive = 1, gate = 1;                            // soft-clip, voice gate
 			var ampEnv, cut, modEnv, o1, o2, o3, o4, sig, driveMix;
 
 			// modulator brightness envelope: scales every modulation depth so the
-			// timbre brightens at the attack and decays over the note.
-			modEnv = modIndex * EnvGen.kr(Env.perc(0.001, max(0.01, modDecay), 1.0, -4));
+			// timbre brightens over its own attack and fades over its own decay --
+			// both per-channel sequenced (grid mod-env page), independent of the
+			// carrier amp env above.
+			modEnv = modIndex * EnvGen.kr(Env.perc(modAttack, max(0.01, modDecay), 1.0, -4));
 
 			// percussive carrier amp env; frees the synth on completion.
 			ampEnv = EnvGen.kr(
@@ -104,7 +119,7 @@ Engine_Potionshop : CroneEngine {
 			o4 = SinOscFB.ar(freq * r4, feedback) * lvl4;
 			o3 = SinOsc.ar(freq * r3, modEnv * (m43 * o4)) * lvl3;
 			o2 = SinOsc.ar(freq * r2, modEnv * (m42 * o4 + m32 * o3)) * lvl2;
-			o1 = SinOsc.ar(freq * 1,  modEnv * (m41 * o4 + m31 * o3 + m21 * o2)) * lvl1;
+			o1 = SinOsc.ar(freq * r1, modEnv * (m41 * o4 + m31 * o3 + m21 * o2)) * lvl1;
 
 			// sum carriers, apply amp env + voice-gate + level.
 			// 0.5 master gain: halve the level range so a mid `level` reads as a
@@ -139,23 +154,28 @@ Engine_Potionshop : CroneEngine {
 
 		// trig(freq, amp, algo, r2, r3, r4, modIndex,
 		//      attack, ampDecay, ampCurve, modDecay, feedback, drive, ch,
-		//      lvl1, lvl2, lvl3, lvl4)
+		//      lvl1, lvl2, lvl3, lvl4, modAttack, r1)
 		//
-		// `algo` (1..8) selects the routing/carrier data; the rest are the final
+		// `algo` (1..16) selects the routing/carrier data; the rest are the final
 		// per-hit values Burst:fire already computes. The handler expands `algo`
 		// into the SynthDef's edge weights + carrier gains (static per note). `ch`
 		// (1..6) is the channel: each channel is monophonic, so a new hit releases
 		// the previous voice on that channel before spawning the new one. lvl1..4
-		// are the global per-operator output levels.
-		this.addCommand("trig", "ffffffffffffffffff", { arg msg;
+		// are the global per-operator output levels. modAttack/modDecay are the
+		// per-channel sequenced modulator-envelope axes; r1 is op1's per-channel
+		// ratio (default 1.0, now editable). Both appended so the older positional
+		// args keep their indices (order: ... modAttack[19], r1[20]).
+		this.addCommand("trig", "ffffffffffffffffffff", { arg msg;
 			var freq = msg[1], amp = msg[2];
-			var algo = msg[3].asInteger.clip(1, 8);
+			var algo = msg[3].asInteger.clip(1, 16);
 			var r2 = msg[4], r3 = msg[5], r4 = msg[6];
 			var modIndex = msg[7];
 			var attack = msg[8], ampDecay = msg[9], ampCurve = msg[10], modDecay = msg[11];
 			var feedback = msg[12], drive = msg[13];
 			var ch = msg[14].asInteger.clip(1, numChannels);
 			var lvl1 = msg[15], lvl2 = msg[16], lvl3 = msg[17], lvl4 = msg[18];
+			var modAttack = msg[19];
+			var r1 = msg[20];
 			var spec, edges, carriers, cgain, weights, pmIndex, voice;
 
 			spec = algorithms[algo - 1];
@@ -182,7 +202,7 @@ Engine_Potionshop : CroneEngine {
 
 			voice = Synth("PotionFM", [
 				\out, masterBus.index, \freq, freq, \amp, amp,
-				\r2, r2, \r3, r3, \r4, r4,
+				\r1, r1, \r2, r2, \r3, r3, \r4, r4,
 				\m21, weights[\m21], \m31, weights[\m31], \m41, weights[\m41],
 				\m32, weights[\m32], \m42, weights[\m42], \m43, weights[\m43],
 				\c1, carriers.includes(1).if(cgain, 0),
@@ -192,7 +212,7 @@ Engine_Potionshop : CroneEngine {
 				\lvl1, lvl1, \lvl2, lvl2, \lvl3, lvl3, \lvl4, lvl4,
 				\modIndex, pmIndex, \feedback, feedback,
 				\attack, attack, \ampDecay, ampDecay, \ampCurve, ampCurve,
-				\modDecay, modDecay, \drive, drive
+				\modAttack, modAttack, \modDecay, modDecay, \drive, drive
 			], fmGroup);
 			voices[ch - 1] = voice;
 			// clear the slot when the voice frees itself (perc done or gate release)

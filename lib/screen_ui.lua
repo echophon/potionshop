@@ -21,8 +21,9 @@
 --        clamped; order mirrors the grid's row-6 button layout)
 --   K1 = untouched — left to the norns system menus
 --
--- Pages: `main` edits launch + the six A-layer param sequences (via the same
--- commit_step path the grid uses); `alt` is its clone for the B (additive
+-- Pages: `main` edits launch + the eight A-layer param sequences (via the same
+-- commit_step path the grid uses; the list scrolls in a window since it exceeds
+-- the visible rows); `alt` is its clone for the B (additive
 -- offset) layer, snapping to the same extended value set params_sync uses
 -- (literal 0 = no offset, plus the picker grid); `perf` / `prob` / `snd` edit
 -- the selected channel's mode fields — the same fields the grid's perfMode/
@@ -42,9 +43,9 @@ local seqx   = require 'seqx'
 local GridUI = require 'grid_ui'
 
 local SEQ_LEN = GridUI.SEQ_LEN  -- max steps per sequence (shared cap with the grid)
-local PARAMS = {'div', 'reps', 'note', 'level', 'env'}
--- alt (B-layer) page: div/reps have no B layer (see GridUI.has_b), so it carries
--- only the params that take an additive offset.
+local PARAMS = {'div', 'reps', 'note', 'level', 'attack', 'decay', 'modatk', 'moddec'}
+-- alt (B-layer) page: div/reps, attack/decay and modatk/moddec have no B layer
+-- (see GridUI.has_b), so it carries only the params that take an additive offset.
 local B_PARAMS = {}
 for _, p in ipairs(PARAMS) do if GridUI.has_b(p) then B_PARAMS[#B_PARAMS + 1] = p end end
 -- Page order mirrors the grid's row-6 button layout (op · perf · prob · scale ·
@@ -52,8 +53,8 @@ for _, p in ipairs(PARAMS) do if GridUI.has_b(p) then B_PARAMS[#B_PARAMS + 1] = 
 -- map onto the same pages (see _sync_page_from_grid).
 local PAGES  = {'main', 'alt', 'perf', 'prob', 'scale', 'snd', 'op'}
 -- main line 1 = run + all params; alt line 1 = run + the B-capable params.
--- scale = root + 12 chromatic keys + quantize = 14 stops. op = r2/r3/r4 + 4 levels.
-local LINES_PER_PAGE = {1 + #PARAMS, 1 + #B_PARAMS, 3, 3, 14, 5, 7}
+-- scale = root + 12 chromatic keys + quantize = 14 stops. op = r1..r4 + 4 levels.
+local LINES_PER_PAGE = {1 + #PARAMS, 1 + #B_PARAMS, 3, 3, 14, 3, 8}
 local PAGE_PERF, PAGE_PROB, PAGE_SCALE, PAGE_SND, PAGE_OP = 3, 4, 5, 6, 7
 
 local NOTE_NAMES = {'c','c#','d','d#','e','f','f#','g','g#','a','a#','b'}
@@ -82,9 +83,12 @@ end
 -- with the grid + params surfaces.
 local nearest_index = GridUI.nearest_index
 
--- compact value formatting for the lines (env shown on the 0..31 grid scale).
+-- compact value formatting for the lines (envelope axes on the 0..31 grid scale).
 local function fmt(param, v)
-  if param == 'env' then return tostring(math.floor(v * 31 + 0.5)) end
+  if param == 'attack' or param == 'decay'
+      or param == 'modatk' or param == 'moddec' then
+    return tostring(math.floor(v * 31 + 0.5))
+  end
   if param == 'level' then return string.format('%.2f', v) end
   if param == 'harm' then return string.format('%.1f', v) end
   return tostring(v)
@@ -164,8 +168,8 @@ function Screen:_layout(param)
   return layout
 end
 
--- the param list for the current sequence page: main (A) shows all six; alt (B)
--- shows only the B-capable ones (div/reps have no offset).
+-- the param list for the current sequence page: main (A) shows all eight; alt (B)
+-- shows only the B-capable ones (the paired pages have no offset).
 function Screen:_seq_params()
   return (self:layer() == 'B') and B_PARAMS or PARAMS
 end
@@ -398,17 +402,17 @@ local function step_table(cur, tbl, d)
   return tbl[clamp(idx + d, 1, #tbl)]
 end
 
--- OP page cursor: lines 1..3 = op2/op3/op4 ratio (op1 pinned 1.0), lines 4..7 =
--- op1..op4 level. Ratio steps the curated set; level steps the 0..1 grid.
+-- OP page cursor: lines 1..4 = op1..op4 ratio (op1 default 1.0, now editable),
+-- lines 5..8 = op1..op4 level. Ratio steps the curated set; level the 0..1 grid.
 function Screen:_edit_op(d)
   local ch = self.sel_ch
   local c = self.engine.channels[ch + 1]
   local line = self.sel_line[PAGE_OP]
-  if line <= 3 then
-    local field = 'opRatio' .. (line + 1)  -- line 1->op2, 2->op3, 3->op4
+  if line <= 4 then
+    local field = 'opRatio' .. line       -- line 1->op1 .. 4->op4
     self.ctl:set_scalar(ch, field, step_table(c[field], GridUI.RATIO_VALUES, d))
   else
-    local field = 'opLevel' .. (line - 3)  -- line 4->op1 .. 7->op4
+    local field = 'opLevel' .. (line - 4) -- line 5->op1 .. 8->op4
     self.ctl:set_scalar(ch, field, step_table(c[field], GridUI.OP_LEVEL_VALUES, d))
   end
 end
@@ -419,9 +423,7 @@ function Screen:_edit_snd(d)
   local line = self.sel_line[PAGE_SND]
   if line == 1 then self.ctl:set_scalar(ch, 'envMode', clamp(c.envMode + d, 0, #GridUI.ENV_MODE_NAMES - 1))
   elseif line == 2 then self.ctl:set_scalar(ch, 'geodeMode', clamp(c.geodeMode + d, 0, #GridUI.GEODE_MODE_NAMES - 1))
-  elseif line == 3 then self.ctl:set_scalar(ch, 'opEnvMode', clamp(c.opEnvMode + d, 0, #GridUI.OP_ENV_MODE_NAMES - 1))
-  elseif line == 4 then self.ctl:set_scalar(ch, 'opGeode', clamp(c.opGeode + d, 0, #GridUI.OP_GEODE_NAMES - 1))
-  elseif line == 5 then self.ctl:set_scalar(ch, 'algo', clamp(c.algo + d, 1, #GridUI.ALGO_NAMES))
+  elseif line == 3 then self.ctl:set_scalar(ch, 'algo', clamp(c.algo + d, 1, #GridUI.ALGO_NAMES))
   end
 end
 
@@ -602,14 +604,12 @@ function Screen:page_lines()
     lines = {
       {'env',   GridUI.ENV_MODE_NAMES[c.envMode + 1]},
       {'geode', GridUI.GEODE_MODE_NAMES[c.geodeMode + 1]},
-      {'op.env', GridUI.OP_ENV_MODE_NAMES[c.opEnvMode + 1]},
-      {'op.geo', GridUI.OP_GEODE_NAMES[c.opGeode + 1]},
       {'algo',   GridUI.ALGO_NAMES[c.algo]},
     }
   elseif self.page == PAGE_OP then
     local function r(v) return (v % 1 == 0) and tostring(math.floor(v)) or tostring(v) end
     lines = {
-      {'op2 r', r(c.opRatio2)}, {'op3 r', r(c.opRatio3)}, {'op4 r', r(c.opRatio4)},
+      {'op1 r', r(c.opRatio1)}, {'op2 r', r(c.opRatio2)}, {'op3 r', r(c.opRatio3)}, {'op4 r', r(c.opRatio4)},
       {'op1 l', string.format('%.2f', c.opLevel1)},
       {'op2 l', string.format('%.2f', c.opLevel2)},
       {'op3 l', string.format('%.2f', c.opLevel3)},
@@ -634,13 +634,26 @@ function Screen:page_lines()
   return lines
 end
 
+-- max line rows that fit above the step squares (y 52/58); longer pages (the
+-- main page now carries 8 params + run = 9 lines) scroll a window around focus.
+local MAX_VISIBLE_LINES = 7
+
 function Screen:draw_lines()
   local lines = self:page_lines()
   local focus = self.sel_line[self.page]
-  for i, l in ipairs(lines) do
+  local n = #lines
+  -- scroll the visible window so the focused line is always shown, keeping the
+  -- top-of-list anchored until the cursor pushes past the window
+  local start = 1
+  if n > MAX_VISIBLE_LINES then
+    start = clamp(focus - 3, 1, n - MAX_VISIBLE_LINES + 1)
+  end
+  local last = math.min(start + MAX_VISIBLE_LINES - 1, n)
+  for i = start, last do
+    local l = lines[i]
     -- lines below the focused one shift 2px down, opening a gap for the
     -- underscore beneath the focused value token
-    local y = 13 + (i - 1) * 6 + (i > focus and 2 or 0)
+    local y = 13 + (i - start) * 6 + (i > focus and 2 or 0)
     screen.level(i == focus and 15 or 2)
     screen.move(46, y)
     screen.text(l[1] .. ': ' .. l[2])

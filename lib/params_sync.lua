@@ -4,12 +4,13 @@
 -- and screen surfaces.
 --
 -- Layout: a global block (scale / root / quantize), a VOICE group of engine-wide
--- FM timbre macros (mod index / fm decay / amp punch / fm feedback / fm drive),
+-- FM timbre macros (mod index / amp punch / fm feedback / fm drive),
 -- the OUTPUTS group (lib/outputs.lua), plus one group per
 -- channel ("CHANNEL 1".."CHANNEL 6"). Each group holds the channel scalars
 -- (run, rate, prob, modes, reset, per-op ratios/levels, clear/copy/paste + action
--- triggers) and, per sequence parameter x layer (div/reps/note/level/env x A/B,
--- where div/reps are A-only), a separator-headed block of three params:
+-- triggers) and, per sequence parameter x layer (div/reps/note/level/attack/decay/
+-- modatk/moddec x A/B, where div/reps, attack/decay and modatk/moddec are A-only),
+-- a 3-param block:
 --   chN_<p>_<a|b>        text — the whole sequence as a space-separated string
 --   chN_<p>_<a|b>_step   number — cursor into the sequence (1-based)
 --   chN_<p>_<a|b>_val    number — value at the cursor, as an INDEX into
@@ -19,7 +20,7 @@
 -- chN_level1..4 (0..31 grid) are plain per-channel scalars.
 --
 -- String tokens use the display units the grid/screen use: div/note/reps as
--- integers ('inf' for infinite reps), level/env on the 0..31 grid scale
+-- integers ('inf' for infinite reps), level/attack/decay on the 0..31 grid scale
 -- (value = n/31). Parsing snaps
 -- every token to the nearest picker value (the same nearest-index rule
 -- screen_ui edits use), so any menu edit stays grid-reachable.
@@ -30,7 +31,7 @@
 -- side effects (on_edit reflection, clipboard) behave identically;
 -- engine/UI -> params only ever happens via SILENT params:set
 -- (third arg true), which never fires actions. Reflection of off-grid engine
--- values (e.g. mutate's harm/env jitter) snaps for display only — the engine
+-- values (e.g. mutate's attack/decay jitter) snaps for display only — the engine
 -- keeps its exact value until the user actually edits that param.
 --
 -- The module is dependency-injected (engine, controller, params table) so the
@@ -40,7 +41,7 @@
 local seqx   = require 'seqx'
 local GridUI = require 'grid_ui'
 
-local SEQ_PARAMS = GridUI.PARAMS  -- {'div','reps','note','level','env'}
+local SEQ_PARAMS = GridUI.PARAMS  -- {'div','reps','note','level','attack','decay'}
 local SPV        = GridUI.STEP_PICKER_VALUES
 local MAX_STEPS  = GridUI.SEQ_LEN  -- 8-step cap, shared with grid/screen
 
@@ -72,9 +73,11 @@ local function round(x) return math.floor(x + 0.5) end
 local function clamp(v, lo, hi) return math.max(lo, math.min(hi, v)) end
 
 -- sequenced params shown/parsed on the 0..31 grid scale (value = n/31): the amp
--- `level` and the `env` shape.
+-- `level`, the carrier `attack`/`decay` axes and the modulator `modatk`/`moddec`
+-- envelope axes.
 local function is_level_like(p)
-  return p == 'level' or p == 'env'
+  return p == 'level' or p == 'attack' or p == 'decay'
+      or p == 'modatk' or p == 'moddec'
 end
 
 local M = {}
@@ -246,11 +249,11 @@ function M:add_globals()
   -- non-audio output types can't render them; these are the actual values the SC
   -- voice receives at fire time. Percent where the underlying value is fractional.
   local function pct() return function(p) return p:get() .. '%' end end
-  params:add_group('voice', 'VOICE', 5)
+  -- (FM decay retired: the modulator-envelope decay is now per-channel sequenced
+  -- via the chN_moddec_a block, not a global macro.)
+  params:add_group('voice', 'VOICE', 4)
   params:add_number('mod_index', 'FM mod index', 1, 24, round(eng.modIndex))
   params:set_action('mod_index', function(v) eng.modIndex = v end)
-  params:add_number('fm_decay', 'FM decay', 10, 150, round(eng.fmDecay * 100), pct())
-  params:set_action('fm_decay', function(v) eng.fmDecay = v / 100 end)
   params:add_number('amp_punch', 'amp punch', 0, 12, round(eng.ampPunch))
   params:set_action('amp_punch', function(v) eng.ampPunch = v end)
   params:add_number('fm_feedback', 'FM feedback', 0, 200, round(eng.fmFeedback * 100), pct())
@@ -321,8 +324,8 @@ function M:_add_channel_params(n)
       self:request_render()
     end)
   end)
-  -- per-operator FM ratios (op2/3/4; op1 pinned 1.0) — curated static scalars
-  for op = 2, 4 do
+  -- per-operator FM ratios (op1..4; op1 default 1.0, now editable) — curated static scalars
+  for op = 1, 4 do
     local field = 'opRatio' .. op
     def(1, function()
       params:add_option(id('ratio' .. op), 'op' .. op .. ' ratio', RATIO_LABELS, ratio_index(c[field]))
@@ -346,8 +349,6 @@ function M:_add_channel_params(n)
   local mode_fields = {
     {'env_mode', 'env mode', 'envMode', GridUI.ENV_MODE_NAMES},
     {'geode', 'geode', 'geodeMode', GridUI.GEODE_MODE_NAMES},
-    {'op_env_mode', 'op env', 'opEnvMode', GridUI.OP_ENV_MODE_NAMES},
-    {'op_geode', 'op geode', 'opGeode', GridUI.OP_GEODE_NAMES},
   }
   for _, m in ipairs(mode_fields) do
     local pid, name, field, names = m[1], m[2], m[3], m[4]
@@ -359,7 +360,7 @@ function M:_add_channel_params(n)
       end)
     end)
   end
-  -- FM algorithm (1..8, 1-based unlike the 0-based modes above).
+  -- FM algorithm (1..16, 1-based unlike the 0-based modes above).
   def(1, function()
     params:add_option(id('algorithm'), 'algorithm', GridUI.ALGO_NAMES, c.algo)
     params:set_action(id('algorithm'), function(i)
@@ -540,12 +541,10 @@ function M:reflect_scalars(n)
   params:set(id('alt_trig'), c.altTrig + 1, true)
   params:set(id('env_mode'), c.envMode + 1, true)
   params:set(id('geode'), c.geodeMode + 1, true)
-  params:set(id('op_env_mode'), c.opEnvMode + 1, true)
-  params:set(id('op_geode'), c.opGeode + 1, true)
   params:set(id('algorithm'), c.algo, true)
   params:set(id('reset'), GridUI.nearest_index(GridUI.RESET_INTERVALS, c.resetInterval), true)
   params:set(id('octave'), c.octave, true)
-  for op = 2, 4 do params:set(id('ratio' .. op), ratio_index(c['opRatio' .. op]), true) end
+  for op = 1, 4 do params:set(id('ratio' .. op), ratio_index(c['opRatio' .. op]), true) end
   for op = 1, 4 do params:set(id('level' .. op), round(c['opLevel' .. op] * 31), true) end
 end
 
