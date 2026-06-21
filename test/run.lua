@@ -362,8 +362,8 @@ local function macro_trig(setup)
   return cap
 end
 local d = macro_trig()
-check('voice macro defaults: modIndex=3, ampCurve=-4, feedback=0, drive=1',
-  d and approx(d[7], 3) and approx(d[10], -4) and approx(d[12], 0) and approx(d[13], 1))
+check('voice macro defaults: modIndex=2, ampCurve=-4, feedback=0, drive=1',
+  d and approx(d[7], 2) and approx(d[10], -4) and approx(d[12], 0) and approx(d[13], 1))
 -- the global voice macros feed the trig args directly (fmDecay was retired; the
 -- modulator decay is now sequenced -> arg 11, with modulator attack at arg 19).
 local gv = macro_trig(function(e)
@@ -371,9 +371,9 @@ local gv = macro_trig(function(e)
 end)
 check('voice macros feed trig: modIndex, ampPunch->curve, feedback, drive',
   gv and approx(gv[7], 12) and approx(gv[10], -8) and approx(gv[12], 1.5) and approx(gv[13], 4))
--- per-operator levels ride trig args 15..18; default 1 (per-channel statics).
-check('op levels default to 1 (args 15-18)',
-  d and approx(d[15], 1) and approx(d[16], 1) and approx(d[17], 1) and approx(d[18], 1))
+-- per-operator levels ride trig args 15..18; op1 default 1, op2..4 default 15/31.
+check('op levels default: op1=1, op2..4=15/31 (args 15-18)',
+  d and approx(d[15], 1) and approx(d[16], 15/31) and approx(d[17], 15/31) and approx(d[18], 15/31))
 -- now per-channel STATIC scalars: opLevel1..4 feed trig args 15-18 directly.
 local ol = macro_trig(function(e)
   e.channels[1].opLevel1 = 0.2

@@ -148,7 +148,7 @@ local function default_channel()
     -- sequenced. ratios 1,1,1 = unison (cleanest, ~2-op); levels: FM depth when
     -- the op is a modulator, mix gain when it's a carrier.
     opRatio1 = 1, opRatio2 = 1, opRatio3 = 1, opRatio4 = 1,
-    opLevel1 = 1, opLevel2 = 1, opLevel3 = 1, opLevel4 = 1,
+    opLevel1 = 1, opLevel2 = 15/31, opLevel3 = 15/31, opLevel4 = 15/31,  -- ~0.48, grid-exact on the i/31 OP page
     burstProb = 1,
     probHit = false,
     envMode = 0,      -- amp decay timing:  0=shape 1=burst 2=hit
@@ -164,7 +164,7 @@ end
 function Burst.new()
   local self = setmetatable({}, Burst)
   self.launchGrid = 4   -- launches snap to the next quarter-note boundary
-  self.quantize = 32    -- global event snap grid (events per whole note); 0 = off
+  self.quantize = 16    -- global event snap grid (events per whole note); 0 = off
   self.scale = scales.by_name.major
   self.root = 0         -- tonic transposition in semitones (0..11; 0 = C)
   self.channels = {}
@@ -180,7 +180,7 @@ function Burst.new()
   -- engine-wide voice timbre macros (lib/params_sync.lua 'VOICE' group). Global,
   -- not per-channel: the non-audio output types can't render them. Read straight
   -- at fire time; these ARE the values handed to the SC voice.
-  self.modIndex = 3     -- FM modulation index (low default = clean, ~2-op tone; up to 24 = bright)
+  self.modIndex = 2     -- FM modulation index (low default = clean, ~2-op tone; up to 24 = bright)
   -- (FM body length is no longer a global macro: the per-channel modatk/moddec
   -- sequences own the modulator envelope; the old self.fmDecay was retired.)
   self.ampPunch = 4     -- perc-curve magnitude (-> Env.perc curve = -ampPunch); 0 = linear

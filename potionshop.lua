@@ -173,9 +173,6 @@ function init()
     end
   end)
 
-  -- sensible starting tempo (web default was 55 bpm)
-  if params:lookup_param('clock_tempo') then params:set('clock_tempo', 55) end
-
   redraw()
 end
 
