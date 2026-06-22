@@ -19,8 +19,9 @@
 --               div/reps the halves are div (left) and reps (right), both A
 --               (div/reps have no B layer). The lane you edit is the half you
 --               press; there is no A/B flip (no double-press). See row_lanes.
---   row 6     = 0..5 launch · 6..10 dark · 11 OP · 12 PERF · 13 PROB · 14 QNT · 15 SND
---               (KB page disabled; FM algorithm is a global param, not a grid page)
+--   row 6     = 0..5 launch · 6..10 dark · 11 OP · 12 PERF · 13 PROB · 14 QNT · 15 dark
+--               (KB page disabled; FM algorithm, env mode and geode are global
+--               params, not grid pages -- the old SND page was reclaimed)
 --   row 7     = 0 div/reps · 1 note · 2 level · 3 attack/decay · 4 modatk/moddec
 --             · 5..10 dark · 11 CLR · 12 COPY · 13 PASTE · 14 RANDOMIZE · 15 MUTATE
 --             (one page-select button each; div/reps, attack/decay and
@@ -37,7 +38,6 @@
 --          · col 15 burst/hit toggle
 --   PERF:  rows 0-5 = reset off/1/2/4 bars (cols 0..3) · octave -2..+2 (cols 5..9)
 --          · rate (cols 11..15)
---   SND:   rows 0-5 = env(0-2) · geode(4-6)
 --   scale picker: row 0 cols 0-6 scale presets (7)
 --                 rows 1-2 cols 0-6 degree (note-mask) keyboard: black row 1 / white row 2
 --                 rows 4-5 cols 0-6 root keyboard: black row 4 / white row 5
@@ -94,13 +94,13 @@ local MUTATE_BUTTON_COL = 15
 -- row 6 right side
 -- KB mode is disabled and the FM algorithm is now a global param (no grid page),
 -- so cols 6..10 on row 6 are dark. The KB entry is commented out below; left in
--- place so the mode can be restored by un-commenting.
+-- place so the mode can be restored by un-commenting. Col 15 (the old SND page) is
+-- likewise dark now that env mode + geode are global VOICE params.
 -- local ROW6_KB_COL = 11
 local ROW6_OP_COL = 11    -- per-channel OP page (took the old ALG slot; per-op ratio + level statics)
 local ROW6_PERF_COL = 12
 local ROW6_PROB_COL = 13
 local ROW6_QNT_COL = 14
-local ROW6_SND_COL = 15
 -- OP page channel-row layout: op1..4 RATIO on cols 0..3 (op1 default 1.0, editable),
 -- op1..4 LEVEL on cols 8..11 (left/right halves, like the A/B convention).
 local OP_RATIO_COL0 = 0
@@ -175,11 +175,14 @@ local DEFAULT_VALUE_B = {div = 0, reps = 0, note = 0, level = 0, attack = 0, dec
 local function range(n, f) local t = {} for i = 0, n - 1 do t[i + 1] = f(i) end return t end
 local STEP_PICKER_VALUES = {
   div  = range(32, function(i) return i + 1 end),
-  -- cells 1..28 = reps 1..28 (hit counts); cells 29..32 = rests of 1..4 steps
-  -- (values 0,-1,-2,-3 -> rest length 1-reps). No infinite sentinel: 2+ steps loop.
+  -- Two aligned rows of 16: the TOP row (cells 1..16) is reps 1..16 (hit counts);
+  -- the BOTTOM row (cells 17..32) is rests of length 1..16 (values 0,-1,..,-15 ->
+  -- rest length 1-reps). Column N pairs N hits (top) with an N-step rest (bottom).
+  -- No infinite sentinel: 2+ steps loop.
   reps = (function()
-    local t = range(28, function(i) return i + 1 end)
-    t[29], t[30], t[31], t[32] = 0, -1, -2, -3
+    local t = {}
+    for i = 1, 16 do t[i] = i end          -- top row: 1..16 hits
+    for i = 1, 16 do t[16 + i] = 1 - i end -- bottom row: rest of length i (reps 0..-15)
     return t
   end)(),
   note = range(32, function(i) return i end),
@@ -235,7 +238,10 @@ local function value_brightness(param, value)
   if param == 'div' then
     b = value <= 4 and 6 or value <= 8 and 8 or value <= 16 and 11 or VALUE_MAX
   elseif param == 'reps' then
-    b = value == -1 and VALUE_MAX or math.min(4 + value, VALUE_MAX)
+    -- hits (>0) ramp brighter with the count; rests (<=0) sit in a dim 2..4 band,
+    -- deeper rests dimmer, so a rest never collides with a hit count (min hit = 5).
+    if value <= 0 then b = clamp(4 + value, 2, 4)
+    else b = math.min(4 + value, VALUE_MAX) end
   elseif param == 'note' then
     -- signed ramp centered on 7: a negative degree reads dimmer than zero, a
     -- positive one brighter, so +n and -n no longer collide (they did under the
@@ -303,7 +309,6 @@ function GridUI.new(engine, grid, opts)
   self.picker = nil            -- {kind='step'|'scalar'|'scale', ...} | nil
   self.probMode = false
   self.perfMode = false
-  self.soundMode = false
   self.opMode = false          -- OP page: per-channel per-op ratio + level statics
   self.actionMode = nil        -- 'randomize'|'mutate'|'clear'|'copy'|'paste'|nil
   self.clipboard = nil         -- {param = {vals...}} snapshot of a channel's A layer
@@ -322,7 +327,7 @@ function GridUI.new(engine, grid, opts)
 
   engine:on(function(ev)
     if ev.type == 'fire' then
-      if self.kbMode or self.probMode or self.perfMode or self.soundMode or self.opMode then return end
+      if self.kbMode or self.probMode or self.perfMode or self.opMode then return end
       -- the scale picker repurposes the channel rows; a step picker does not
       -- (it lives on rows 6-7), so let its channel-row playheads keep animating
       if self.picker and self.picker.kind == 'scale' then return end
@@ -425,12 +430,6 @@ function GridUI:handle_normal_press(x, y)
       elseif lvi >= 0 and lvi <= 3 then      -- op1..op4 level
         self:open_scalar_picker(y, 'opLevel' .. (lvi + 1), OP_LEVEL_VALUES, 'level')
       end
-      return
-    end
-    if self.soundMode then
-      if x <= 2 then self:set_scalar(y, 'envMode', x)
-      elseif x >= 4 and x <= 6 then self:set_scalar(y, 'geodeMode', x - 4) end
-      self:render_channel_row(y); self.g:refresh()
       return
     end
     local li, step = decode_col(x)
@@ -720,7 +719,7 @@ end
 
 -- clear every row-6 latch mode + action mode (so only one page is ever active).
 function GridUI:_clear_latches()
-  self.probMode = false; self.perfMode = false; self.soundMode = false
+  self.probMode = false; self.perfMode = false
   self.opMode = false; self.actionMode = nil
 end
 
@@ -729,7 +728,6 @@ function GridUI:handle_row6(x)
   -- FM algorithm is a global param, no longer a grid page).
   -- if x == ROW6_KB_COL then self:enter_kb_mode(); return end
   local LATCH = {[ROW6_PERF_COL] = 'perfMode', [ROW6_PROB_COL] = 'probMode',
-                 [ROW6_SND_COL] = 'soundMode',
                  [ROW6_OP_COL] = 'opMode'}
   if LATCH[x] then
     local was = self[LATCH[x]]
@@ -892,7 +890,6 @@ end
 function GridUI:render_channel_row(ch)
   if self.probMode then self:render_prob_row(ch); return end
   if self.perfMode then self:render_perf_row(ch); return end
-  if self.soundMode then self:render_sound_row(ch); return end
   if self.opMode then self:render_op_row(ch); return end
   local running = self.engine:is_running(ch + 1)
   -- two lanes side by side: left half (cols 0..SEQ_LEN-1) then right half
@@ -980,13 +977,6 @@ function GridUI:render_perf_row(ch)
   end
 end
 
-function GridUI:render_sound_row(ch)
-  local c = self:chan(ch)
-  for x = 0, GRID_W - 1 do self.g:set_led(x, ch, 0); self.g:set_strobe(x, ch, 'off') end
-  for m = 0, 2 do self.g:set_led(m, ch, c.envMode == m and 15 or 4) end
-  for m = 0, 2 do self.g:set_led(m + 4, ch, c.geodeMode == m and 15 or 4) end
-end
-
 function GridUI:render_action_mode()
   local mark_running = self.actionMode == 'randomize' or self.actionMode == 'mutate'
   for x = 0, 5 do
@@ -998,7 +988,7 @@ function GridUI:render_action_mode()
   self.g:set_led(ROW6_PERF_COL, 6, 8)
   self.g:set_led(ROW6_PROB_COL, 6, 8)
   self.g:set_led(ROW6_QNT_COL, 6, 8)
-  self.g:set_led(ROW6_SND_COL, 6, 8)
+  self.g:set_led(15, 6, 0)  -- reclaimed SND slot stays dark
 end
 
 function GridUI:render_row6()
@@ -1018,8 +1008,8 @@ function GridUI:render_row6()
   local scale_open = self.picker and self.picker.kind == 'scale'
   self.g:set_led(ROW6_QNT_COL, 6, scale_open and 15 or 8)
   self.g:set_strobe(ROW6_QNT_COL, 6, scale_open and 'fast' or 'off')
-  self.g:set_led(ROW6_SND_COL, 6, self.soundMode and 15 or 8)
-  self.g:set_strobe(ROW6_SND_COL, 6, self.soundMode and 'fast' or 'off')
+  self.g:set_led(15, 6, 0)  -- reclaimed SND slot stays dark
+  self.g:set_strobe(15, 6, 'off')
   self.g:set_led(ROW6_OP_COL, 6, self.opMode and 15 or 8)
   self.g:set_strobe(ROW6_OP_COL, 6, self.opMode and 'fast' or 'off')
 end
@@ -1210,7 +1200,6 @@ function GridUI:current_page()
   if self.picker and self.picker.kind == 'scalar' then return 'OP' end
   if self.perfMode then return 'PERF' end
   if self.probMode then return 'PROB' end
-  if self.soundMode then return 'SND' end
   if self.opMode then return 'OP' end
   if self.actionMode then return string.upper(self.actionMode) end
   return 'MAIN'
@@ -1226,8 +1215,6 @@ function GridUI:_status()
     s = 'PERF — cols0-3 reset, cols5-9 oct, cols11-15 rate'
   elseif self.probMode then
     s = 'PROB — cols0-1 note trig, 11-14 prob%, 15 burst/hit'
-  elseif self.soundMode then
-    s = 'SOUND — env(0-2) / geode(4-6)'
   elseif self.opMode then
     s = 'OP — cols0-3 op ratio, cols8-11 op level'
   elseif self.actionMode then

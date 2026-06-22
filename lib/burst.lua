@@ -158,8 +158,6 @@ local function default_channel()
     opLevel1 = 1, opLevel2 = 15/31, opLevel3 = 15/31, opLevel4 = 15/31,  -- ~0.48, grid-exact on the i/31 OP page
     burstProb = 1,
     probHit = false,
-    envMode = 0,      -- amp decay timing:  0=shape 1=burst 2=hit
-    geodeMode = 0,    -- amp per-hit geode: 0=transient 1=sustain 2=cycle (always on)
     resetInterval = 0,
     rate = 1,
     octave = 0,     -- -2..2, whole-octave pitch shift (perf page)
@@ -187,6 +185,8 @@ function Burst.new()
   -- not per-channel: the non-audio output types can't render them. Read straight
   -- at fire time; these ARE the values handed to the SC voice.
   self.algo = 1         -- FM algorithm (1..16): DX-style operator routing, engine-wide
+  self.envMode = 0      -- amp decay timing (0=shape 1=burst 2=hit): engine-wide
+  self.geodeMode = 1    -- amp per-hit geode (0=transient 1=sustain 2=cycle): engine-wide, default sustain
   self.modIndex = 2     -- FM modulation index (low default = clean, ~2-op tone; up to 24 = bright)
   -- (FM body length is no longer a global macro: the per-channel modatk/moddec
   -- sequences own the modulator envelope; the old self.fmDecay was retired.)
@@ -417,10 +417,11 @@ function Burst:fire(ch, beat, freq, level, attack_n, decay_n, modatk_n, moddec_n
   -- redraws freq mid-burst, so a burst-start shift would be inaudible across its
   -- hits. Shifting here also feeds the final freq to external outputs.
   freq = freq * (2 ^ c.octave)
-  -- geodeMode is 0-based {transient,sustain,cycle}; geode_mod wants 1/2/3, so +1
-  -- at the call site. The amp geode is always on (no 'off'). decay_n gates the
-  -- geode's 0.7 build-up clamp (a longer decay overlaps more, like the old env).
-  local actual_level = Burst.burst_level_for_hit(level, c.geodeMode + 1, decay_n, hit_idx, total)
+  -- geodeMode is engine-wide (VOICE group), 0-based {transient,sustain,cycle};
+  -- geode_mod wants 1/2/3, so +1 at the call site. The amp geode is always on (no
+  -- 'off'). decay_n gates the geode's 0.7 build-up clamp (a longer decay overlaps
+  -- more, like the old env).
+  local actual_level = Burst.burst_level_for_hit(level, self.geodeMode + 1, decay_n, hit_idx, total)
 
   -- geo_freq stays at the target pitch (this voice has no pitch envelope).
   local geo_freq = freq
@@ -440,10 +441,10 @@ function Burst:fire(ch, beat, freq, level, attack_n, decay_n, modatk_n, moddec_n
   local sec_per_beat = 60 / get_tempo()
   local interval_sec = (4 / div) * sec_per_beat
 
-  -- amp decaySec from envMode (1=burst-length, 2=per-hit).
+  -- amp decaySec from envMode (engine-wide; 1=burst-length, 2=per-hit).
   local decay_sec = nil
-  if c.envMode ~= 0 then
-    if c.envMode == 1 then
+  if self.envMode ~= 0 then
+    if self.envMode == 1 then
       decay_sec = total * interval_sec
     else
       decay_sec = interval_sec
@@ -539,7 +540,7 @@ function Burst:randomize(ch)
   c.opRatio2 = pick(RATIO_VALUES)
   c.opRatio3 = pick(RATIO_VALUES)
   c.opRatio4 = pick(RATIO_VALUES)
-  -- Sound-page modes (envMode/geodeMode/opEnvMode/opGeode) and per-op LEVELS are
+  -- The engine-wide modes (envMode/geodeMode) and per-op LEVELS are
   -- left untouched: a randomized op1 = 0 would silently kill the channel (op1 is
   -- usually the carrier), so the operator level balance stays a deliberate,
   -- user-set timbre while only the ratios scramble.

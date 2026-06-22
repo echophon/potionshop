@@ -25,13 +25,13 @@
 -- commit_step path the grid uses; the list scrolls in a window since it exceeds
 -- the visible rows); `alt` is its clone for the B (additive
 -- offset) layer, snapping to the same extended value set params_sync uses
--- (literal 0 = no offset, plus the picker grid); `perf` / `prob` / `snd` edit
+-- (literal 0 = no offset, plus the picker grid); `perf` / `prob` edit
 -- the selected channel's mode fields — the same fields the grid's perfMode/
--- probMode/soundMode presses set, picking only from GridUI's shared value
+-- probMode presses set, picking only from GridUI's shared value
 -- tables; `scale` edits the global musical state (root, key mask, quantize)
 -- the grid's scale picker drives — its E2 cursor walks root, the twelve
 -- chromatic keys, then quantize, and E3 sets/toggles via the controller's
--- set_root / set_mask / set_quantize. The grid's PERF/PROB/QNT/SND buttons
+-- set_root / set_mask / set_quantize. The grid's PERF/PROB/QNT buttons
 -- still switch the matching pages (QNT opens the shared scale picker); the
 -- screen tab follows, and main/alt drive the grid's paramLayer.
 --
@@ -48,14 +48,14 @@ local PARAMS = {'div', 'reps', 'note', 'level', 'attack', 'decay', 'modatk', 'mo
 -- (see GridUI.has_b), so it carries only the params that take an additive offset.
 local B_PARAMS = {}
 for _, p in ipairs(PARAMS) do if GridUI.has_b(p) then B_PARAMS[#B_PARAMS + 1] = p end end
--- Page order mirrors the grid's row-6 button layout (op · perf · prob · scale ·
--- snd), after the two sequence pages. K2/K3 walk this list; the grid mode buttons
+-- Page order mirrors the grid's row-6 button layout (op · perf · prob · scale),
+-- after the two sequence pages. K2/K3 walk this list; the grid mode buttons
 -- map onto the same pages (see _sync_page_from_grid).
-local PAGES  = {'main', 'alt', 'perf', 'prob', 'scale', 'snd', 'op'}
+local PAGES  = {'main', 'alt', 'perf', 'prob', 'scale', 'op'}
 -- main line 1 = run + all params; alt line 1 = run + the B-capable params.
 -- scale = root + 12 chromatic keys + quantize = 14 stops. op = r1..r4 + 4 levels.
-local LINES_PER_PAGE = {1 + #PARAMS, 1 + #B_PARAMS, 3, 3, 14, 2, 8}
-local PAGE_PERF, PAGE_PROB, PAGE_SCALE, PAGE_SND, PAGE_OP = 3, 4, 5, 6, 7
+local LINES_PER_PAGE = {1 + #PARAMS, 1 + #B_PARAMS, 3, 3, 14, 8}
+local PAGE_PERF, PAGE_PROB, PAGE_SCALE, PAGE_OP = 3, 4, 5, 6
 
 local NOTE_NAMES = {'c','c#','d','d#','e','f','f#','g','g#','a','a#','b'}
 
@@ -244,7 +244,6 @@ function Screen:set_page(p)
   c.kbMode = false; c.actionMode = nil
   c.perfMode  = (self.page == PAGE_PERF)
   c.probMode  = (self.page == PAGE_PROB)
-  c.soundMode = (self.page == PAGE_SND)
   c.opMode    = (self.page == PAGE_OP)
   -- the scale page shares the grid's scale picker, so the grid follows the
   -- screen onto it (and the keymask/root/quantize stay one source of truth)
@@ -269,7 +268,7 @@ end
 function Screen:_sync_page_from_grid()
   local c = self.ctl
   self.page = (c.picker and c.picker.kind == 'scale') and PAGE_SCALE
-    or c.perfMode and PAGE_PERF or c.probMode and PAGE_PROB or c.soundMode and PAGE_SND
+    or c.perfMode and PAGE_PERF or c.probMode and PAGE_PROB
     or c.opMode and PAGE_OP
     or ((c.paramLayer == 'B') and 2 or 1)
 end
@@ -318,7 +317,6 @@ function Screen:_edit_value(d)
   elseif self.page == PAGE_PERF then self:_edit_perf(d)
   elseif self.page == PAGE_PROB then self:_edit_prob(d)
   elseif self.page == PAGE_SCALE then self:_edit_scale(d)
-  elseif self.page == PAGE_SND then self:_edit_snd(d)
   elseif self.page == PAGE_OP then self:_edit_op(d) end
   self.ctl:render_all()
 end
@@ -415,15 +413,6 @@ function Screen:_edit_op(d)
   else
     local field = 'opLevel' .. (line - 4) -- line 5->op1 .. 8->op4
     self.ctl:set_scalar(ch, field, step_table(c[field], GridUI.OP_LEVEL_VALUES, d))
-  end
-end
-
-function Screen:_edit_snd(d)
-  local ch = self.sel_ch
-  local c = self.engine.channels[ch + 1]
-  local line = self.sel_line[PAGE_SND]
-  if line == 1 then self.ctl:set_scalar(ch, 'envMode', clamp(c.envMode + d, 0, #GridUI.ENV_MODE_NAMES - 1))
-  elseif line == 2 then self.ctl:set_scalar(ch, 'geodeMode', clamp(c.geodeMode + d, 0, #GridUI.GEODE_MODE_NAMES - 1))
   end
 end
 
@@ -600,12 +589,7 @@ function Screen:page_lines()
     return lines
   end
   local lines
-  if self.page == PAGE_SND then
-    lines = {
-      {'env',   GridUI.ENV_MODE_NAMES[c.envMode + 1]},
-      {'geode', GridUI.GEODE_MODE_NAMES[c.geodeMode + 1]},
-    }
-  elseif self.page == PAGE_OP then
+  if self.page == PAGE_OP then
     local function r(v) return (v % 1 == 0) and tostring(math.floor(v)) or tostring(v) end
     lines = {
       {'op1 r', r(c.opRatio1)}, {'op2 r', r(c.opRatio2)}, {'op3 r', r(c.opRatio3)}, {'op4 r', r(c.opRatio4)},

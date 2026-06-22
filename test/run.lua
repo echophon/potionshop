@@ -601,14 +601,15 @@ check('right-half pick edits reps',
 ctl:close_picker()
 
 -- rest cells (reps <= 0) strobe in the picker so they read apart from hit counts.
--- layout indices 29..32 (values 0,-1,-2,-3) land on picker row 7, cols 12..15.
+-- new layout: row 6 (cells 1..16) = reps 1..16 hits; row 7 (cells 17..32) = rests
+-- of length 1..16 (values 0..-15), so the whole bottom row strobes.
 geng.channels[1].reps = seqx.new{2}
 ctl:press(8, 0)  -- open the reps A picker
 ctl:render_all()
-check('rest cells strobe in reps picker',
-  mg.strobes[7 * 16 + 12] == 'slow' and mg.strobes[7 * 16 + 15] == 'slow')
-check('hit-count cells do not strobe',
-  mg.strobes[6 * 16 + 0] == nil and mg.strobes[7 * 16 + 0] == nil)
+check('rest cells strobe across the whole bottom row',
+  mg.strobes[7 * 16 + 0] == 'slow' and mg.strobes[7 * 16 + 15] == 'slow')
+check('hit-count cells (top row) do not strobe',
+  mg.strobes[6 * 16 + 0] == nil and mg.strobes[6 * 16 + 15] == nil)
 ctl:close_picker()
 
 -- attack/decay is a second paired page on a SINGLE button (col 3); selecting it
@@ -720,11 +721,13 @@ check('OP level picker sets opLevel1', approx(geng.channels[1].opLevel1, 1.0))
 ctl:press(11, 6)
 check('OP mode exited', ctl.opMode == false)
 
--- SND mode geode set
-ctl:press(15, 6)
-check('SND mode entered', ctl.soundMode == true)
-ctl:press(5, 0)  -- col5 -> geode index 1 (sustain) on channel 0
-check('SND sets geodeMode to 1', geng.channels[1].geodeMode == 1)
+-- env mode + geode are engine-wide VOICE macros now (no grid SND page, col 15 dark)
+check('geodeMode is a global engine field, not per-channel',
+  geng.geodeMode ~= nil and geng.channels[1].geodeMode == nil)
+check('envMode is a global engine field, not per-channel',
+  geng.envMode ~= nil and geng.channels[1].envMode == nil)
+check('geode defaults to sustain (1)', Burst.new().geodeMode == 1)
+check('no SND grid mode exists', ctl.soundMode == nil)
 
 -- PERF mode (row6 col 12): reset cols 0-3, octave cols 5-9, rate cols 11-15
 ctl:press(12, 6)
@@ -758,12 +761,12 @@ local sui = ScreenUI.new(seng, sctl)
 
 -- smoke: redraw runs clean on every page
 local pages_ok = true
-for p = 1, 7 do
+for p = 1, 6 do
   sui:set_page(p)
   local ok, err = pcall(function() sui:redraw() end)
   if not ok then pages_ok = false; print('      redraw error page ' .. p .. ': ' .. tostring(err)) end
 end
-check('redraw runs clean on all 7 pages', pages_ok)
+check('redraw runs clean on all 6 pages', pages_ok)
 sui:set_page(3)
 check('set_page syncs grid modes (perf -> perfMode)', sctl.perfMode == true)
 sui:set_page(5)
@@ -780,16 +783,6 @@ check('main E3 edit lands on note picker grid',
   in_set(seqx.values(seng.channels[1].note)[1], GridUI.STEP_PICKER_VALUES.note))
 check('main E2 sync keeps grid selectedParam agreeing', sctl.selectedParam == 'note')
 
--- snd page: edits cycle the shared mode tables
-sui:set_page(6)
-sui.sel_line[6] = 2
-local g0 = seng.channels[1].geodeMode
-sui:enc(3, 1)
-check('snd E3 steps geodeMode within table', seng.channels[1].geodeMode == g0 + 1)
-sui:enc(3, 99)
-check('snd E3 clamps at table end', seng.channels[1].geodeMode == #GridUI.GEODE_MODE_NAMES - 1)
-check('snd page_lines labels map to env/geode (not perf/prob)', sui:page_lines()[1][1] == 'env')
-
 -- prob page: prob steps the discrete 25/50/75/100% set
 sui:set_page(4)
 sui.sel_line[4] = 1
@@ -805,18 +798,18 @@ check('alt-trig line steps altTrig to step', seng.channels[1].altTrig == 1)
 
 -- op page: ratio lines (1..4 = op1..op4) step the curated set, level lines
 -- (5..8 = op1..op4) step the 0..1 grid.
-sui:set_page(7)
-sui.sel_line[7] = 1   -- op1 ratio (now editable, was pinned)
+sui:set_page(6)
+sui.sel_line[6] = 1   -- op1 ratio (now editable, was pinned)
 seng.channels[1].opRatio1 = 1
 sui:enc(3, 1)
 check('op page ratio line steps opRatio1 up the curated set',
   in_set(seng.channels[1].opRatio1, GridUI.RATIO_VALUES) and seng.channels[1].opRatio1 ~= 1)
-sui.sel_line[7] = 2   -- op2 ratio
+sui.sel_line[6] = 2   -- op2 ratio
 seng.channels[1].opRatio2 = 1
 sui:enc(3, 1)
 check('op page ratio line steps opRatio2 up the curated set',
   in_set(seng.channels[1].opRatio2, GridUI.RATIO_VALUES) and seng.channels[1].opRatio2 ~= 1)
-sui.sel_line[7] = 5   -- op1 level
+sui.sel_line[6] = 5   -- op1 level
 seng.channels[1].opLevel1 = 1.0
 sui:enc(3, -1)
 check('op page level line steps opLevel1 down the 0..1 grid',
@@ -881,9 +874,10 @@ check('channel column draws note letter after fire', letter_drawn)
 
 -- grid mode buttons drive the screen tab (grid -> screen sync)
 sui:set_page(1)
-sctl:press(15, 6)  -- SND on the grid
+sctl:press(11, 6)  -- OP on the grid
 sui:redraw()
-check('grid SND press switches screen to snd page', sui.page == 6)
+check('grid OP press switches screen to op page', sui.page == 6)
+sctl:press(11, 6)  -- toggle OP off
 sctl:press(13, 6)  -- PROB on the grid
 sui:redraw()
 check('grid PROB press switches screen to prob page', sui.page == 4)
@@ -1147,12 +1141,12 @@ pctl:press(13, 6)  -- exit PROB
 check('grid edits fired zero param actions', fake.fires == f0)
 
 -- screen edit reflects too (same set_scalar path)
-pui:set_page(6)  -- snd page
+pui:set_page(3)  -- perf page
 pui.sel_ch = 0
-pui.sel_line[6] = 2  -- geode line
-pui:enc(3, peng.channels[1].geodeMode < 3 and 1 or -1)
-check('screen snd edit reflects geode option',
-  fake:get('ch1_geode') == peng.channels[1].geodeMode + 1)
+pui.sel_line[3] = 2  -- octave line
+pui:enc(3, peng.channels[1].octave < 2 and 1 or -1)
+check('screen perf edit reflects octave param',
+  fake:get('ch1_octave') == peng.channels[1].octave)
 pui:set_page(1)
 check('screen edits fired zero param actions', fake.fires == f0)
 
@@ -1378,13 +1372,13 @@ engine.trig = function() engine.trigs = engine.trigs + 1 end
 local oeng = Burst.new()
 oeng.outputs = outs
 midi_log = {}
-oeng:fire(1, 0, 440, 0.5, 0, 4, 0, 0, 4, 0)  -- ch1 is midi: external only (note_on + modwheel cc)
+oeng:fire(1, 0, 440, 0.5, 0, 4, 0, 0, 4, 1, 0)  -- ch1 is midi: external only (note_on + modwheel cc)
 check('fire on midi channel skips engine.trig', engine.trigs == 0 and #midi_log == 2)
 ofake:set('ch1_output', Outputs.DEST.AUDIO_MIDI)
 midi_log = {}
-oeng:fire(1, 0, 440, 0.5, 0, 4, 0, 0, 4, 0)
+oeng:fire(1, 0, 440, 0.5, 0, 4, 0, 0, 4, 1, 0)
 check('audio+midi fires both', engine.trigs == 1 and #midi_log == 2)
-oeng:fire(2, 0, 440, 0.5, 0, 4, 0, 0, 4, 0)  -- ch2 is on crow 3+4
+oeng:fire(2, 0, 440, 0.5, 0, 4, 0, 0, 4, 1, 0)  -- ch2 is on crow 3+4
 check('fire on crow channel skips engine.trig', engine.trigs == 1)
 engine = nil
 

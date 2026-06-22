@@ -4,10 +4,11 @@
 -- and screen surfaces.
 --
 -- Layout: a global block (scale / root / quantize), a VOICE group of engine-wide
--- FM timbre macros (FM algorithm / mod index / amp punch / fm feedback / fm drive),
+-- FM timbre macros (FM algorithm / env mode / geode / mod index / amp punch /
+-- fm feedback / fm drive),
 -- the OUTPUTS group (lib/outputs.lua), plus one group per
 -- channel ("CHANNEL 1".."CHANNEL 6"). Each group holds the channel scalars
--- (run, rate, prob, modes, reset, per-op ratios/levels, clear/copy/paste + action
+-- (run, rate, prob, alt trig, reset, per-op ratios/levels, clear/copy/paste + action
 -- triggers) and, per sequence parameter x layer (div/reps/note/level/attack/decay/
 -- modatk/moddec x A/B, where div/reps, attack/decay and modatk/moddec are A-only),
 -- a 3-param block:
@@ -99,7 +100,7 @@ end
 
 -- engine value -> display token (the units the grid/screen show).
 function M.fmt_value(p, v)
-  if p == 'reps' and v <= 0 then return 'r' .. (1 - v) end  -- rest: r1..r4 = 1..4 steps
+  if p == 'reps' and v <= 0 then return 'r' .. (1 - v) end  -- rest: r1..r16 = 1..16 steps
   if is_level_like(p) then return tostring(round(v * 31)) end
   if p == 'harm' then
     local s = string.format('%.2f', v)
@@ -254,11 +255,18 @@ function M:add_globals()
   local function pct() return function(p) return p:get() .. '%' end end
   -- (FM decay retired: the modulator-envelope decay is now per-channel sequenced
   -- via the chN_moddec_a block, not a global macro.)
-  params:add_group('voice', 'VOICE', 5)
+  params:add_group('voice', 'VOICE', 7)
   -- FM algorithm (1..16, 1-based): engine-wide operator routing. Was per-channel
   -- (chN_algorithm + grid ALG page); now a single global timbre macro.
   params:add_option('algorithm', 'FM algorithm', GridUI.ALGO_NAMES, eng.algo)
   params:set_action('algorithm', function(i) eng.algo = i end)
+  -- amp decay timing + per-hit amp geode: both were per-channel (grid/screen SND
+  -- page); now engine-wide macros (the SND page was reclaimed). 0-based fields, so
+  -- the option index is value + 1.
+  params:add_option('env_mode', 'env mode', GridUI.ENV_MODE_NAMES, eng.envMode + 1)
+  params:set_action('env_mode', function(i) eng.envMode = i - 1 end)
+  params:add_option('geode', 'geode', GridUI.GEODE_MODE_NAMES, eng.geodeMode + 1)
+  params:set_action('geode', function(i) eng.geodeMode = i - 1 end)
   params:add_number('mod_index', 'FM mod index', 1, 24, round(eng.modIndex))
   params:set_action('mod_index', function(v) eng.modIndex = v end)
   params:add_number('amp_punch', 'amp punch', 0, 12, round(eng.ampPunch))
@@ -353,20 +361,7 @@ function M:_add_channel_params(n)
       end)
     end)
   end
-  local mode_fields = {
-    {'env_mode', 'env mode', 'envMode', GridUI.ENV_MODE_NAMES},
-    {'geode', 'geode', 'geodeMode', GridUI.GEODE_MODE_NAMES},
-  }
-  for _, m in ipairs(mode_fields) do
-    local pid, name, field, names = m[1], m[2], m[3], m[4]
-    def(1, function()
-      params:add_option(id(pid), name, names, c[field] + 1)
-      params:set_action(id(pid), function(i)
-        c[field] = i - 1
-        self:request_render()
-      end)
-    end)
-  end
+  -- env mode + geode are no longer per-channel: they're engine-wide VOICE macros.
   def(1, function()
     params:add_option(id('reset'), 'reset', RESET_NAMES,
       GridUI.nearest_index(GridUI.RESET_INTERVALS, c.resetInterval))
@@ -538,8 +533,6 @@ function M:reflect_scalars(n)
   params:set(id('prob'), GridUI.nearest_index(GridUI.PROB_VALUES, c.burstProb), true)
   params:set(id('prob_mode'), c.probHit and 2 or 1, true)
   params:set(id('alt_trig'), c.altTrig + 1, true)
-  params:set(id('env_mode'), c.envMode + 1, true)
-  params:set(id('geode'), c.geodeMode + 1, true)
   params:set(id('reset'), GridUI.nearest_index(GridUI.RESET_INTERVALS, c.resetInterval), true)
   params:set(id('octave'), c.octave, true)
   for op = 1, 4 do params:set(id('ratio' .. op), ratio_index(c['opRatio' .. op]), true) end
@@ -557,6 +550,8 @@ end
 function M:reflect_globals()
   local params = self.params
   params:set('algorithm', clamp(self.engine.algo, 1, #GridUI.ALGO_NAMES), true)
+  params:set('env_mode', clamp(self.engine.envMode + 1, 1, #GridUI.ENV_MODE_NAMES), true)
+  params:set('geode', clamp(self.engine.geodeMode + 1, 1, #GridUI.GEODE_MODE_NAMES), true)
   params:set('quantize', clamp(self.engine.quantize, 1, 32), true)
   params:set('root', clamp((self.engine.root or 0) + 1, 1, 12), true)
   if params:lookup_param('keymask') then
