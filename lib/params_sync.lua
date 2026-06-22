@@ -3,21 +3,26 @@
 -- PSETs, MIDI mapping) and keeps them bidirectionally in sync with the grid
 -- and screen surfaces.
 --
--- Layout: a global block (scale / root / quantize / mod_index) plus one group per
+-- Layout: a global block (scale / root), a VOICE group of engine-wide
+-- FM timbre macros (FM algorithm / env mode / geode / mod index / amp punch /
+-- fm feedback / fm drive),
+-- the OUTPUTS group (lib/outputs.lua), plus one group per
 -- channel ("CHANNEL 1".."CHANNEL 6"). Each group holds the channel scalars
--- (run, rate, prob, modes, reset, clear/copy/paste + action triggers) and, per
--- sequence parameter x layer (div/reps/note/level/harm/env x A/B), a
--- separator-headed block of three params:
+-- (run, rate, quantize, prob, alt trig, reset, per-op ratios/levels, clear/copy/paste + action
+-- triggers) and, per sequence parameter x layer (div/reps/note/level/attack/decay/
+-- modatk/moddec x A/B, where div/reps, attack/decay and modatk/moddec are A-only),
+-- a 3-param block:
 --   chN_<p>_<a|b>        text — the whole sequence as a space-separated string
 --   chN_<p>_<a|b>_step   number — cursor into the sequence (1-based)
 --   chN_<p>_<a|b>_val    number — value at the cursor, as an INDEX into
 --                        GridUI.STEP_PICKER_VALUES (B layer adds index 0 =
---                        literal 0, the no-offset default, which is off-grid
---                        for div/reps/harm). MIDI-mappable per-step editing.
+--                        literal 0, the no-offset default). MIDI-mappable.
+-- Per-op timbre is NOT sequenced: chN_ratio2/3/4 (curated options) and
+-- chN_level1..4 (0..31 grid) are plain per-channel scalars.
 --
 -- String tokens use the display units the grid/screen use: div/note/reps as
--- integers ('inf' for infinite reps), level/env on the 0..31 grid scale
--- (value = n/31), harm as the actual ratio (2, 2.75, 3.5, ...). Parsing snaps
+-- integers ('rN' for an N-step rest, reps <= 0), level/attack/decay on the 0..31 grid scale
+-- (value = n/31). Parsing snaps
 -- every token to the nearest picker value (the same nearest-index rule
 -- screen_ui edits use), so any menu edit stays grid-reachable.
 --
@@ -27,8 +32,8 @@
 -- side effects (on_edit reflection, clipboard) behave identically;
 -- engine/UI -> params only ever happens via SILENT params:set
 -- (third arg true), which never fires actions. Reflection of off-grid engine
--- values (the boot level default, mutate jitter) snaps for display only —
--- the engine keeps its exact value until the user actually edits that param.
+-- values (e.g. mutate's attack/decay jitter) snaps for display only — the engine
+-- keeps its exact value until the user actually edits that param.
 --
 -- The module is dependency-injected (engine, controller, params table) so the
 -- off-hardware tests can drive it with a fake paramset; no lib module touches
@@ -37,11 +42,15 @@
 local seqx   = require 'seqx'
 local GridUI = require 'grid_ui'
 
-local SEQ_PARAMS = GridUI.PARAMS  -- {'div','reps','note','level','harm','env'}
+local SEQ_PARAMS = GridUI.PARAMS  -- {'div','reps','note','level','attack','decay'}
 local SPV        = GridUI.STEP_PICKER_VALUES
-local MAX_STEPS  = 16
+local MAX_STEPS  = GridUI.SEQ_LEN  -- 8-step cap, shared with grid/screen
 
 local RATE_NAMES = {'0.25x', '0.5x', '1x', '2x', '4x'}
+-- curated per-channel quantize labels (mirror GridUI.QUANTIZE_VALUES order),
+-- shown as "1/N" since the value is events per whole note
+local QUANTIZE_NAMES = {}
+for i, q in ipairs(GridUI.QUANTIZE_VALUES) do QUANTIZE_NAMES[i] = '1/' .. q end
 local RESET_NAMES = {}
 for i, v in ipairs(GridUI.RESET_INTERVALS) do
   RESET_NAMES[i] = (v == 0) and 'off' or (v .. (v == 1 and ' bar' or ' bars'))
@@ -50,10 +59,31 @@ local PROB_MODE_NAMES = {'burst', 'hit'}
 local PROB_PCT_NAMES = {}
 for i, v in ipairs(GridUI.PROB_VALUES) do PROB_PCT_NAMES[i] = (v * 100) .. '%' end
 local ALT_TRIG_NAMES = GridUI.ALT_TRIG_MODE_NAMES
+-- curated per-op ratio option labels (mirror GridUI.RATIO_VALUES order)
+local RATIO_LABELS = {}
+for i, r in ipairs(GridUI.RATIO_VALUES) do
+  RATIO_LABELS[i] = (r % 1 == 0) and tostring(math.floor(r)) or tostring(r)
+end
+local function ratio_index(v)
+  for i, r in ipairs(GridUI.RATIO_VALUES) do if r == v then return i end end
+  return 1
+end
 local NOTE_NAMES = {'C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'}
+-- pitch-class name -> semitone, accepting sharps, flats, case-insensitively.
+local NAME_TO_PC = {}
+for i, nm in ipairs(NOTE_NAMES) do NAME_TO_PC[string.lower(nm)] = i - 1 end
+for nm, pc in pairs({db = 1, eb = 3, gb = 6, ab = 8, bb = 10}) do NAME_TO_PC[nm] = pc end
 
 local function round(x) return math.floor(x + 0.5) end
 local function clamp(v, lo, hi) return math.max(lo, math.min(hi, v)) end
+
+-- sequenced params shown/parsed on the 0..31 grid scale (value = n/31): the amp
+-- `level`, the carrier `attack`/`decay` axes and the modulator `modatk`/`moddec`
+-- envelope axes.
+local function is_level_like(p)
+  return p == 'level' or p == 'attack' or p == 'decay'
+      or p == 'modatk' or p == 'moddec'
+end
 
 local M = {}
 M.__index = M
@@ -74,8 +104,8 @@ end
 
 -- engine value -> display token (the units the grid/screen show).
 function M.fmt_value(p, v)
-  if p == 'reps' and v == -1 then return 'inf' end
-  if p == 'level' or p == 'env' then return tostring(round(v * 31)) end
+  if p == 'reps' and v <= 0 then return 'r' .. (1 - v) end  -- rest: r1..r16 = 1..16 steps
+  if is_level_like(p) then return tostring(round(v * 31)) end
   if p == 'harm' then
     local s = string.format('%.2f', v)
     s = s:gsub('0+$', ''):gsub('%.$', '')  -- 2.00 -> 2, 3.50 -> 3.5
@@ -86,14 +116,41 @@ end
 
 -- display token -> engine value, snapped to the picker grid; nil = invalid.
 function M.parse_token(p, layer, tok)
-  if p == 'reps' and tok == 'inf' then return -1 end
+  if p == 'reps' then
+    local rn = tok:match('^r(%d+)$')  -- rest token r1..rN -> reps 1-N (0,-1,-2,..)
+    if rn then return SPV[p][GridUI.nearest_index(SPV[p], 1 - tonumber(rn))] end
+  end
   local n = tonumber(tok)
   if n == nil then return nil end
   if layer == 'B' and n == 0 then return 0 end
-  if p == 'level' or p == 'env' then
+  if is_level_like(p) then
     return clamp(round(n), 0, 31) / 31
   end
   return SPV[p][GridUI.nearest_index(SPV[p], n)]
+end
+
+-- keymask <-> text. The note mask is viewed/edited/stored like a sequence
+-- string: a space-separated list of pitch-class names (c, c#, ...). Tokens
+-- accept note names (sharp or flat) or bare semitone numbers; everything maps
+-- to a pitch class 0..11, the same discrete set the grid's note-mask keyboard
+-- reaches. mask_from_text dedups but preserves order; the controller's set_mask
+-- sorts on commit (so the reflected text comes back canonical).
+function M.mask_to_text(mask)
+  local toks = {}
+  for _, s in ipairs(mask) do toks[#toks + 1] = NOTE_NAMES[(s % 12) + 1] end
+  return table.concat(toks, ' ')
+end
+
+function M.mask_from_text(str)
+  local out, seen = {}, {}
+  for tok in tostring(str or ''):gmatch('%S+') do
+    local pc
+    local n = tonumber(tok)
+    if n ~= nil then pc = math.floor(n) % 12
+    else pc = NAME_TO_PC[string.lower(tok)] end
+    if pc ~= nil and not seen[pc] then seen[pc] = true; out[#out + 1] = pc end
+  end
+  return out
 end
 
 function M.to_text(p, layer, vals)
@@ -174,17 +231,56 @@ function M:add_globals()
     for _, v in ipairs(self.scales.by_name[name]) do
       controller.customMask[#controller.customMask + 1] = v
     end
+    self:reflect_globals()  -- keep the keymask text in step with the chosen scale
     self:request_render()
   end)
 
   params:add_option('root', 'root', NOTE_NAMES, (eng.root or 0) + 1)
   params:set_action('root', function(i) eng.root = i - 1; self:request_render() end)
 
-  params:add_number('quantize', 'quantize (per whole note)', 1, 32, clamp(eng.quantize, 1, 32))
-  params:set_action('quantize', function(v) eng.quantize = v; self:request_render() end)
+  -- the note mask, edited/stored as a sequence-like string of pitch-class names.
+  -- Commits through the controller's set_mask (the one set-the-whole-mask path),
+  -- so it behaves exactly like a grid note-mask edit; an empty/invalid string is
+  -- refused (a scale needs a degree) and the display restored.
+  params:add_text('keymask', 'key mask', M.mask_to_text(eng.scale))
+  params:set_action('keymask', function(str)
+    local mask = M.mask_from_text(str)
+    if #mask > 0 then self.controller:set_mask(mask)
+    else self:reflect_globals() end
+    self:request_render()
+  end)
 
-  params:add_number('mod_index', 'FM mod index', 1, 24, eng.modIndex)
+  -- quantize is per-channel now (chN_quantize, added in the channel loop below) —
+  -- the old global 'quantize' param is gone.
+
+  -- VOICE: engine-wide FM timbre macros. Global (not per-channel) since the
+  -- non-audio output types can't render them; these are the actual values the SC
+  -- voice receives at fire time. Percent where the underlying value is fractional.
+  local function pct() return function(p) return p:get() .. '%' end end
+  -- (FM decay retired: the modulator-envelope decay is now per-channel sequenced
+  -- via the chN_moddec_a block, not a global macro.)
+  params:add_group('voice', 'VOICE', 7)
+  -- FM algorithm (1..16, 1-based): engine-wide operator routing. Was per-channel
+  -- (chN_algorithm + grid ALG page); now a single global timbre macro.
+  params:add_option('algorithm', 'FM algorithm', GridUI.ALGO_NAMES, eng.algo)
+  params:set_action('algorithm', function(i) eng.algo = i end)
+  -- amp decay timing + per-hit amp geode: both were per-channel (grid/screen SND
+  -- page); now engine-wide macros (the SND page was reclaimed). 0-based fields, so
+  -- the option index is value + 1.
+  params:add_option('env_mode', 'env mode', GridUI.ENV_MODE_NAMES, eng.envMode + 1)
+  params:set_action('env_mode', function(i) eng.envMode = i - 1 end)
+  params:add_option('geode', 'geode', GridUI.GEODE_MODE_NAMES, eng.geodeMode + 1)
+  params:set_action('geode', function(i) eng.geodeMode = i - 1 end)
+  params:add_number('mod_index', 'FM mod index', 1, 24, round(eng.modIndex))
   params:set_action('mod_index', function(v) eng.modIndex = v end)
+  params:add_number('amp_punch', 'amp punch', 0, 12, round(eng.ampPunch))
+  params:set_action('amp_punch', function(v) eng.ampPunch = v end)
+  params:add_number('fm_feedback', 'FM feedback', 0, 200, round(eng.fmFeedback * 100), pct())
+  params:set_action('fm_feedback', function(v) eng.fmFeedback = v / 100 end)
+  params:add_number('fm_drive', 'FM drive', 100, 800, round(eng.drive * 100), pct())
+  params:set_action('fm_drive', function(v) eng.drive = v / 100 end)
+  -- per-operator ratios + output levels are per-channel static scalars
+  -- (chN_ratio2/3/4, chN_level1..4), added in the channel groups below.
 end
 
 function M:add_channels()
@@ -226,6 +322,14 @@ function M:_add_channel_params(n)
     end)
   end)
   def(1, function()
+    params:add_option(id('quantize'), 'quantize', QUANTIZE_NAMES,
+      GridUI.nearest_index(GridUI.QUANTIZE_VALUES, c.quantize))
+    params:set_action(id('quantize'), function(i)
+      c.quantize = GridUI.QUANTIZE_VALUES[i]
+      self:request_render()
+    end)
+  end)
+  def(1, function()
     params:add_option(id('prob'), 'probability', PROB_PCT_NAMES,
       GridUI.nearest_index(GridUI.PROB_VALUES, c.burstProb))
     params:set_action(id('prob'), function(i)
@@ -247,29 +351,29 @@ function M:_add_channel_params(n)
       self:request_render()
     end)
   end)
-  def(1, function()
-    params:add_option(id('harm_trig'), 'harm trig', ALT_TRIG_NAMES, c.harmTrig + 1)
-    params:set_action(id('harm_trig'), function(i)
-      c.harmTrig = i - 1
-      self:request_render()
-    end)
-  end)
-  local mode_fields = {
-    {'env_mode', 'env mode', 'envMode', GridUI.ENV_MODE_NAMES},
-    {'geode', 'geode', 'geodeMode', GridUI.GEODE_MODE_NAMES},
-    {'harm_env_mode', 'harm env', 'harmEnvMode', GridUI.HARM_ENV_MODE_NAMES},
-    {'harm_geode', 'harm geode', 'harmEnv', GridUI.HARM_GEODE_NAMES},
-  }
-  for _, m in ipairs(mode_fields) do
-    local pid, name, field, names = m[1], m[2], m[3], m[4]
+  -- per-operator FM ratios (op1..4; op1 default 1.0, now editable) — curated static scalars
+  for op = 1, 4 do
+    local field = 'opRatio' .. op
     def(1, function()
-      params:add_option(id(pid), name, names, c[field] + 1)
-      params:set_action(id(pid), function(i)
-        c[field] = i - 1
+      params:add_option(id('ratio' .. op), 'op' .. op .. ' ratio', RATIO_LABELS, ratio_index(c[field]))
+      params:set_action(id('ratio' .. op), function(i)
+        c[field] = GridUI.RATIO_VALUES[i]
         self:request_render()
       end)
     end)
   end
+  -- per-operator output levels (op1..4) — static scalars on the 0..1 (1/31) grid
+  for op = 1, 4 do
+    local field = 'opLevel' .. op
+    def(1, function()
+      params:add_number(id('level' .. op), 'op' .. op .. ' level', 0, 31, round(c[field] * 31))
+      params:set_action(id('level' .. op), function(v)
+        c[field] = v / 31
+        self:request_render()
+      end)
+    end)
+  end
+  -- env mode + geode are no longer per-channel: they're engine-wide VOICE macros.
   def(1, function()
     params:add_option(id('reset'), 'reset', RESET_NAMES,
       GridUI.nearest_index(GridUI.RESET_INTERVALS, c.resetInterval))
@@ -330,8 +434,11 @@ function M:_add_channel_params(n)
   end)
 
   -- ---- sequence blocks (text + cursor pair per param x layer) ----
+  -- div/reps have no B layer, so they get an A block only (see GridUI.has_b).
   for _, p in ipairs(SEQ_PARAMS) do
     for _, layer in ipairs({'A', 'B'}) do
+      -- div/reps have no B layer (see GridUI.has_b): skip their B block
+      if layer == 'B' and not GridUI.has_b(p) then goto continue end
       local text_id, step_id, val_id = seq_ids(n, p, layer)
       local label = p .. ' ' .. string.lower(layer)
       def(4, function()  -- separator + text + step + val
@@ -371,6 +478,7 @@ function M:_add_channel_params(n)
           self:request_render()
         end)
       end)
+      ::continue::
     end
   end
 
@@ -434,16 +542,14 @@ function M:reflect_scalars(n)
   if not params:lookup_param(id('run')) then return end
   params:set(id('run'), self.engine:is_running(n) and 1 or 0, true)
   params:set(id('rate'), GridUI.nearest_index(GridUI.RATE_VALUES, c.rate), true)
+  params:set(id('quantize'), GridUI.nearest_index(GridUI.QUANTIZE_VALUES, c.quantize), true)
   params:set(id('prob'), GridUI.nearest_index(GridUI.PROB_VALUES, c.burstProb), true)
   params:set(id('prob_mode'), c.probHit and 2 or 1, true)
   params:set(id('alt_trig'), c.altTrig + 1, true)
-  params:set(id('harm_trig'), c.harmTrig + 1, true)
-  params:set(id('env_mode'), c.envMode + 1, true)
-  params:set(id('geode'), c.geodeMode + 1, true)
-  params:set(id('harm_env_mode'), c.harmEnvMode + 1, true)
-  params:set(id('harm_geode'), c.harmEnv + 1, true)
   params:set(id('reset'), GridUI.nearest_index(GridUI.RESET_INTERVALS, c.resetInterval), true)
   params:set(id('octave'), c.octave, true)
+  for op = 1, 4 do params:set(id('ratio' .. op), ratio_index(c['opRatio' .. op]), true) end
+  for op = 1, 4 do params:set(id('level' .. op), round(c['opLevel' .. op] * 31), true) end
 end
 
 function M:reflect_channel(n)
@@ -456,8 +562,13 @@ end
 
 function M:reflect_globals()
   local params = self.params
-  params:set('quantize', clamp(self.engine.quantize, 1, 32), true)
+  params:set('algorithm', clamp(self.engine.algo, 1, #GridUI.ALGO_NAMES), true)
+  params:set('env_mode', clamp(self.engine.envMode + 1, 1, #GridUI.ENV_MODE_NAMES), true)
+  params:set('geode', clamp(self.engine.geodeMode + 1, 1, #GridUI.GEODE_MODE_NAMES), true)
   params:set('root', clamp((self.engine.root or 0) + 1, 1, 12), true)
+  if params:lookup_param('keymask') then
+    params:set('keymask', M.mask_to_text(self.engine.scale), true)
+  end
   -- a custom note mask has no preset index; leave the option untouched then
   local si = self:_scale_index(self.engine.scale)
   if si then params:set('scale', si, true) end

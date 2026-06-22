@@ -127,31 +127,30 @@
 
     <!-- params -->
     <div class="block">
-      <h2>The six params (row 7 · cols 0–5)</h2>
+      <h2>Sequence pages (row 7 · cols 0–4)</h2>
       <table>
-        <tr><th>param</th><th>does</th><th>range</th></tr>
-        <tr><td class="k">div</td><td>hit spacing = <code>4/div</code> beats</td><td>1–32</td></tr>
-        <tr><td class="k">reps</td><td>hits per burst (<code>-1</code>=∞)</td><td>1–31,−1</td></tr>
-        <tr><td class="k">note</td><td>scale degree</td><td>0–31</td></tr>
-        <tr><td class="k">level</td><td>amp + geode "run CV"</td><td>0–1</td></tr>
-        <tr><td class="k">harm</td><td>FM ratio / brightness</td><td>2–25</td></tr>
-        <tr><td class="k">env</td><td>staccato → legato</td><td>0–1</td></tr>
+        <tr><th>page</th><th>lanes · does</th></tr>
+        <tr><td class="k">div / reps</td><td>spacing <code>4/div</code> beats | hits per burst</td></tr>
+        <tr><td class="k">note</td><td>scale degree (A | B offset)</td></tr>
+        <tr><td class="k">level</td><td>amp + geode "run CV" (A | B offset)</td></tr>
+        <tr><td class="k">attack / decay</td><td>carrier amp envelope</td></tr>
+        <tr><td class="k">modatk / moddec</td><td>modulator / FM-bright envelope</td></tr>
       </table>
-      <p class="note">Each param has its own <b>A</b> + <b>B</b> sequence per channel. B is an additive offset (adds value <code>0</code> = none).</p>
+      <p class="note">Each row shows <b>two lanes side by side</b>: left half cols 0–7, right half 8–15. For <code>note</code>/<code>level</code> they're the <b>A</b> + <b>B</b> layers (B = additive offset, adds <code>0</code> = none); paired pages show their two members, both A. <b>reps ≤ 0</b> = a rest spanning <code>1−reps</code> steps.</p>
     </div>
 
     <!-- gestures -->
     <div class="block warm">
       <h2>Gestures</h2>
       <table>
-        <tr><td>press a step</td><td class="dim">→ step picker</td></tr>
+        <tr><td>press a step</td><td class="dim">→ step picker (rows 6–7)</td></tr>
         <tr><td>press dim append slot</td><td class="dim">→ add step + picker</td></tr>
         <tr><td>in picker, press lit value</td><td class="dim">→ remove step</td></tr>
-        <tr><td>press selected param again</td><td class="dim">→ flip A⇄B</td></tr>
+        <tr><td>the lane you press</td><td class="dim">→ is the lane you edit (no A/B flip)</td></tr>
         <tr><td>press a page button again</td><td class="dim">→ back to MAIN</td></tr>
         <tr><td>arm action, tap a channel</td><td class="dim">→ apply it</td></tr>
       </table>
-      <p class="note"><b>Blink:</b> fast = "you are here" (active page / armed action) · slow = latched (B layer, or a toggle that's on).</p>
+      <p class="note"><b>Blink:</b> fast = "you are here" (active page / armed action) · slow = a latched toggle that's on.</p>
     </div>
 
     <!-- actions -->
@@ -173,7 +172,6 @@
       <table>
         <tr><th>cols</th><th>control</th></tr>
         <tr><td class="k">0–1</td><td>note alt-trig: hold / step</td></tr>
-        <tr><td class="k">3–4</td><td>harm alt-trig: hold / step</td></tr>
         <tr><td class="k">11–14</td><td>prob 25 / 50 / 75 / 100%</td></tr>
         <tr><td class="k">15</td><td>gate burst (off) / each hit (on)</td></tr>
       </table>
@@ -192,42 +190,35 @@
       <p class="note">reset rewinds seqs + re-anchors a running burst to the bar (keeps duplicates locked).</p>
     </div>
 
-    <!-- SND -->
+    <!-- OP -->
     <div class="block pur">
-      <h2>SND page (row 6 · col 15)</h2>
+      <h2>OP page (row 6 · col 11)</h2>
       <table>
-        <tr><th>cols</th><th>bank · options</th></tr>
-        <tr><td class="k">0–2</td><td>env: shape / burst / hit</td></tr>
-        <tr><td class="k">4–6</td><td>geode: transient / sustain / cycle</td></tr>
-        <tr><td class="k">8–10</td><td>h.env: off / hit / burst</td></tr>
-        <tr><td class="k">12–14</td><td>harm geode: transient / sustain / cycle</td></tr>
+        <tr><th>cols</th><th>per-op timbre (static)</th></tr>
+        <tr><td class="k">0–3</td><td>op1–4 <b>ratio</b> (op1 = fundamental)</td></tr>
+        <tr><td class="k">8–11</td><td>op1–4 <b>level</b> (FM depth / mix gain)</td></tr>
       </table>
-      <p class="note">Both geodes always on (shaping curves). <code>level</code> drives them: 0.5 neutral.</p>
+      <p class="note">Tap a cell → value picker on rows 6–7. Timbre is per-channel and not sequenced. Algorithm, geode &amp; env mode are engine-wide (PARAMETERS ▸ VOICE).</p>
     </div>
 
     <!-- scale -->
     <div class="block gold">
-      <h2>Scale picker (QNT · row 6 col 14)</h2>
+      <h2>Scale picker (SCALE · row 6 col 14)</h2>
       <table>
         <tr><td class="k">row 0 / 0–6</td><td>7 scale presets</td></tr>
         <tr><td class="k">rows 1–2</td><td>degree keys (mask) — piano</td></tr>
         <tr><td class="k">rows 4–5</td><td>root keys — pick tonic</td></tr>
-        <tr><td class="k">r1–4 / 8–15</td><td>quantize 8×4 (snap grid)</td></tr>
       </table>
-      <p class="note">Black row above white; cols 2 &amp; 6 have no black key. Press QNT again to exit.</p>
+      <p class="note">Black row above white; cols 2 &amp; 6 have no black key. Press SCALE again to exit.</p>
     </div>
 
-    <!-- KB -->
-    <div class="block">
-      <h2>Keyboard mode (KB · row 6 col 11)</h2>
+    <!-- QNT -->
+    <div class="block gold">
+      <h2>QNT page (row 6 · col 15)</h2>
       <table>
-        <tr><td class="k">pg1 rows</td><td>note (0–1) div (2–3) reps (4–5)</td></tr>
-        <tr><td class="k">pg2 rows</td><td>level (0–1) harm (2–3) env (4–5)</td></tr>
-        <tr><td class="k">r7 0–5</td><td>pick channel (again = B layer)</td></tr>
-        <tr><td class="k">r7 13/14</td><td>page / clear buffers</td></tr>
-        <tr><td class="k">r6 11</td><td>exit (commits buffers)</td></tr>
+        <tr><td class="k">cols 0–7</td><td>1/3 · 1/4 · 1/6 · 1/8 · 1/12 · 1/16 · 1/24 · 1/32</td></tr>
       </table>
-      <p class="note">Tap cells to append into the band; commits live as you go.</p>
+      <p class="note">Per-channel forward-snap grid (events per whole note). Each channel can lock to its own grid; tempo never changes, only <i>when</i> a hit lands.</p>
     </div>
 
     <!-- screen -->
@@ -237,7 +228,7 @@
         <tr><td class="k">E1</td><td>select channel 1–6</td></tr>
         <tr><td class="k">E2</td><td>walk cursor (run → steps → <code>_</code>)</td></tr>
         <tr><td class="k">E3</td><td>edit value · run: R=launch L=stop</td></tr>
-        <tr><td class="k">K2/K3</td><td>page: main·alt·snd·prob·perf</td></tr>
+        <tr><td class="k">K2/K3</td><td>page: main·alt·perf·prob·scale·op</td></tr>
         <tr><td class="k">K1</td><td>norns system menu</td></tr>
       </table>
       <p class="note">E3 below lowest = remove step · on <code>_</code> turn R = append. main=A, alt=B (synced to grid).</p>
@@ -248,13 +239,13 @@
       <h2>Outputs (PARAMETERS ▸ OUTPUTS)</h2>
       <table>
         <tr><td class="k">audio</td><td>internal FM (default)</td></tr>
-        <tr><td class="k">midi</td><td>note + CC1 = harmonicity</td></tr>
+        <tr><td class="k">midi</td><td>note + CC1 = brightness</td></tr>
         <tr><td class="k">crow 1+2</td><td>v/oct + AR env</td></tr>
         <tr><td class="k">crow 3+4</td><td>v/oct + AR env</td></tr>
         <tr><td class="k">crow ii jf</td><td>Just Friends, voice = ch</td></tr>
         <tr><td class="k">crow ii er301</td><td>ER-301, port = ch</td></tr>
       </table>
-      <p class="note">Tempo lives in the norns CLOCK menu (boots at 55 bpm). All state saved in PSETs.</p>
+      <p class="note">Tempo lives in the norns CLOCK menu. All state saved in PSETs.</p>
     </div>
 
     <!-- concepts -->
@@ -263,9 +254,10 @@
       <ul>
         <li><b>burst</b> = <code>reps</code> hits, <code>4/div</code> apart, then repeat</li>
         <li><b>sequins</b> = looping value list, advances per burst</li>
-        <li><b>A/B</b> = base seq + additive offset seq</li>
-        <li><b>geode</b> = per-hit amp/ratio shaping curve</li>
-        <li><b>quantize</b> = shared forward-snap grid</li>
+        <li><b>A/B</b> = base seq + additive offset seq (note/level)</li>
+        <li><b>rest</b> = <code>reps ≤ 0</code>: silent, still eats time</li>
+        <li><b>geode</b> = per-hit amp shaping curve</li>
+        <li><b>quantize</b> = per-channel forward-snap grid</li>
         <li><b>reset</b> = rewind seqs every 1/2/4 bars</li>
       </ul>
     </div>
@@ -288,13 +280,13 @@ function strip(id, cells, ruler){
 const r6=[];
 for(let x=0;x<6;x++) r6[x]={cls:'launch',t:'L'+(x+1)};
 [6,7,8,9,10].forEach(x=>r6[x]={cls:'off'});
-r6[11]={cls:'mode',t:'KB'}; r6[12]={cls:'mode',t:'PERF'};
-r6[13]={cls:'mode',t:'PROB'}; r6[14]={cls:'mode',t:'QNT'}; r6[15]={cls:'mode',t:'SND'};
+r6[11]={cls:'mode',t:'OP'}; r6[12]={cls:'mode',t:'PERF'};
+r6[13]={cls:'mode',t:'PROB'}; r6[14]={cls:'scale',t:'SCALE'}; r6[15]={cls:'qnt',t:'QNT'};
 strip('r6',r6,'r6ruler');
 
 const r7=[];
-['div','rep','note','lvl','harm','env'].forEach((t,x)=>r7[x]={cls:'param',t});
-[6,7,8,9,10].forEach(x=>r7[x]={cls:'off'});
+['d/r','note','lvl','a/d','m.env'].forEach((t,x)=>r7[x]={cls:'param',t});
+[5,6,7,8,9,10].forEach(x=>r7[x]={cls:'off'});
 r7[11]={cls:'action',t:'CLR'}; r7[12]={cls:'action',t:'COPY'};
 r7[13]={cls:'action',t:'PASTE'}; r7[14]={cls:'action',t:'RND'}; r7[15]={cls:'action',t:'MUT'};
 strip('r7',r7);

@@ -13,35 +13,80 @@
 -- 1-based at the call site (engine:launch(ch+1), engine.channels[ch+1], ...).
 --
 -- Layout reference (rows/cols, 0-based):
---   rows 0..5 = per-channel step view: up to 16 steps of the active layer
---               (paramLayer A/B; flipped by re-pressing the row-7 param button)
---   row 6     = 0..5 launch · 6..10 dark · 11 KB · 12 PERF · 13 PROB · 14 QNT · 15 SND
---   row 7     = 0..5 param (div/reps/note/level/harm/env) · 11 CLR
---             · 12 COPY · 13 PASTE · 14 RANDOMIZE · 15 MUTATE
+--   rows 0..5 = per-channel step view: two lanes side by side — the left half
+--               (cols 0..7) and the right half (cols 8..15), each capped at 8
+--               steps. For most params the halves are the A and B layers; for
+--               div/reps the halves are div (left) and reps (right), both A
+--               (div/reps have no B layer). The lane you edit is the half you
+--               press; there is no A/B flip (no double-press). See row_lanes.
+--   row 6     = 0..5 launch · 6..10 dark · 11 OP · 12 PERF · 13 PROB · 14 SCALE · 15 QNT
+--               (SCALE opens the scale picker; QNT is the per-channel quantize
+--               page. KB page disabled; FM algorithm, env mode and geode are
+--               global params, not grid pages -- the old SND page was reclaimed)
+--   row 7     = 0 div/reps · 1 note · 2 level · 3 attack/decay · 4 modatk/moddec
+--             · 5..10 dark · 11 CLR · 12 COPY · 13 PASTE · 14 RANDOMIZE · 15 MUTATE
+--             (one page-select button each; div/reps, attack/decay and
+--             modatk/moddec are paired pages showing two A-layer lanes. The two
+--             envelope pages are the carrier amp env and the modulator/FM-bright
+--             env. timbre — per-op ratio/level — lives
+--             on the OP page as static scalars)
 --   CLR/COPY/PASTE act on the MAIN (A-layer) sequins of the tapped channel only;
 --   the B (alt) layer is left intact so it can keep variating the copied sequins.
---   PROB:  rows 0-5 = note alt-trig hold/step (cols 0-1) · harm alt-trig
---          hold/step (cols 3-4) · prob 25/50/75/100% (cols 11-14,
---          right-justified) · col 15 burst/hit toggle
+--   OP:    rows 0-5 = per-op RATIO (cols 0-3, op1..op4 all editable) · per-op LEVEL
+--          (cols 8-11). Tap a cell to open its value picker on rows 6-7.
+--   PROB:  rows 0-5 = note alt-trig hold/step (cols 0-1)
+--          · prob 25/50/75/100% (cols 11-14, right-justified)
+--          · col 15 burst/hit toggle
 --   PERF:  rows 0-5 = reset off/1/2/4 bars (cols 0..3) · octave -2..+2 (cols 5..9)
 --          · rate (cols 11..15)
---   SND:   rows 0-5 = env(0-2) · geode(4-6) · harm env(8-10) · harm geode(12-14)
+--   QNT:   rows 0-5 = per-channel quantize, one cell per curated value on cols 0-7
+--          ({3,4,6,8,12,16,24,32} = 1/3..1/32 events per whole note).
 --   scale picker: row 0 cols 0-6 scale presets (7)
 --                 rows 1-2 cols 0-6 degree (note-mask) keyboard: black row 1 / white row 2
 --                 rows 4-5 cols 0-6 root keyboard: black row 4 / white row 5
---                 rows 1-4 cols 8-15 quantize (8x4 = 32 values, right side)
+--                 (quantize is no longer here — it is per-channel on the QNT page)
 --                 keyboards are a compact piano: white keys packed at cols 0-6,
 --                 black keys offset above the white key they follow
---   step picker:  rows 0-1 value grid (press the lit/current value to remove
---                 the step; press any other value to set it)
---   KB mode: see handle_kb_press / render_kb_mode
+--   step picker:  value grid on rows 6-7 (the control rows, borrowed while
+--                 picking) so all six channel rows stay visible. Press the
+--                 lit/current value to remove the step; press any other value
+--                 to set it. On the channel rows: tap another step to hop the
+--                 picker there, or re-tap the open step to cancel/close.
+--   scalar picker: same rows-6-7 value grid, but writes a per-channel static
+--                 scalar (OP-page op ratio / op level) instead of a sequence step.
+--   KB mode: DISABLED — entry (row6 col 11) is commented out, so the mode is
+--            unreachable; its handle_kb_press / render_kb_mode code remains in
+--            place and can be restored by un-commenting the entry points.
 
 local seqx   = require 'seqx'
 local scales = require 'scales'
 
 local GRID_W = 16
+-- Each channel row shows both A/B layers side by side: A on cols 0..SEQ_LEN-1,
+-- B on cols B_COL0..15. Each layer is capped at SEQ_LEN steps (half the row).
+local SEQ_LEN = 8
+local B_COL0 = 8
 local NUM_CHANNELS = 6
-local PARAMS = {'div', 'reps', 'note', 'level', 'harm', 'env'}
+-- All sequenced params (the row-7 page buttons are a separate, smaller list —
+-- ROW7_PAGES — one per page). Timbre (per-op ratios + levels) is no longer
+-- sequenced — it lives on the per-channel OP page as static scalars.
+local PARAMS = {'div', 'reps', 'note', 'level', 'attack', 'decay', 'modatk', 'moddec'}
+-- Paired params share one page as two A-layer lanes (left|right) instead of a
+-- param's own A|B layers: div|reps (an additive offset on division/repeats isn't
+-- musical), attack|decay (the carrier envelope shape) and modatk|moddec (the
+-- modulator/FM-brightness envelope shape). A paired param therefore has no B
+-- layer; every other param shows its A layer left, B right.
+local PAIRS = { {'div', 'reps'}, {'attack', 'decay'}, {'modatk', 'moddec'} }
+local PAIRED, PAIR_OF = {}, {}
+for _, pr in ipairs(PAIRS) do
+  PAIRED[pr[1]] = true; PAIRED[pr[2]] = true
+  PAIR_OF[pr[1]] = pr;  PAIR_OF[pr[2]] = pr
+end
+local function has_b(param) return not PAIRED[param] end
+-- row-7 page-select buttons: ONE per page. A paired page is represented by its
+-- first member (selecting it shows both lanes via row_lanes); singles are
+-- themselves. Cols 0..#ROW7_PAGES-1.
+local ROW7_PAGES = {'div', 'note', 'level', 'attack', 'modatk'}
 
 -- row 7
 local CLR_BUTTON_COL = 11
@@ -50,11 +95,24 @@ local PASTE_BUTTON_COL = 13
 local RANDOMIZE_BUTTON_COL = 14
 local MUTATE_BUTTON_COL = 15
 -- row 6 right side
-local ROW6_KB_COL = 11
+-- KB mode is disabled and the FM algorithm is now a global param (no grid page),
+-- so cols 6..10 on row 6 are dark. The KB entry is commented out below; left in
+-- place so the mode can be restored by un-commenting. Col 15 (the old SND page) is
+-- likewise dark now that env mode + geode are global VOICE params.
+-- local ROW6_KB_COL = 11
+local ROW6_OP_COL = 11    -- per-channel OP page (took the old ALG slot; per-op ratio + level statics)
 local ROW6_PERF_COL = 12
 local ROW6_PROB_COL = 13
-local ROW6_QNT_COL = 14
-local ROW6_SND_COL = 15
+local ROW6_SCALE_COL = 14 -- opens the scale picker (scale preset / degrees / root)
+local ROW6_QNT_COL = 15   -- per-channel QNT page (event snap grid, curated set)
+-- OP page channel-row layout: op1..4 RATIO on cols 0..3 (op1 default 1.0, editable),
+-- op1..4 LEVEL on cols 8..11 (left/right halves, like the A/B convention).
+local OP_RATIO_COL0 = 0
+local OP_LEVEL_COL0 = 8
+-- The step picker's 32-value grid renders on the control rows (6-7) while a pick
+-- is in progress, leaving all six channel rows visible so the step being edited
+-- is never hidden behind the picker. (The scale picker still owns rows 0-5.)
+local PICKER_ROW0 = 6
 -- KB mode (exit on row 6, same col as entry; page/clear on row 7)
 local KB_EXIT_COL = 11
 local KB_PAGE_BUTTON_COL = 13
@@ -72,47 +130,79 @@ local KB_BLACK_COL = {[0] = 1, [1] = 3, [3] = 6, [4] = 8, [5] = 10}
 local SCALE_PRESET_ROW = 0
 local DEG_BLACK_ROW, DEG_WHITE_ROW = 1, 2
 local ROOT_BLACK_ROW, ROOT_WHITE_ROW = 4, 5
--- Quantize block: 8 cols x 4 rows on the right side.
-local QNT_COL0, QNT_ROW0, QNT_W, QNT_H = 8, 1, 8, 4
+-- (the scale picker no longer hosts a quantize block — quantize is per-channel on
+-- its own QNT page; the right side of the scale picker is now unused.)
 local RESET_INTERVALS = {0, 1, 2, 4}
 local RESET_COLS      = {0, 1, 2, 3}
 local OCTAVE_VALUES = {-2, -1, 0, 1, 2}
 local OCTAVE_COLS   = {5, 6, 7, 8, 9}
 local RATE_VALUES = {0.25, 0.5, 1, 2, 4}
 local RATE_COLS   = {11, 12, 13, 14, 15}
--- PROB page: alt-trig modes packed left, prob options right-justified, hit toggle
--- at the far right (col 15, unchanged). burstProb is now a discrete 4-value set.
+-- PROB page: note alt-trig mode packed left, prob options right-justified, hit
+-- toggle at the far right (col 15). burstProb is a discrete 4-value set. (harm/op
+-- trig columns are gone — harm and op levels no longer have a B layer.)
 local ALT_TRIG_COLS  = {0, 1}                -- note alt(B) layer: hold / step
-local HARM_TRIG_COLS = {3, 4}                -- harm alt(B) layer: hold / step
 local PROB_VALUES   = {0.25, 0.5, 0.75, 1.0}
 local PROB_COLS     = {11, 12, 13, 14}
 local PROB_HIT_COL  = 15
 
 local ENV_MODE_NAMES       = {'shape', 'burst', 'hit'}
 local GEODE_MODE_NAMES     = {'transient', 'sustain', 'cycle'}  -- amp geode, always on
-local HARM_ENV_MODE_NAMES  = {'off', 'hit', 'burst'}  -- harm sweep timing
-local HARM_GEODE_NAMES     = {'transient', 'sustain', 'cycle'}  -- harm per-hit geode, always on
--- alt(B)-layer trigger modes: how a B sequins feeds a burst. Shared by the note
--- (altTrig) and harm (harmTrig) layers.
+-- FM algorithm (1..16): operator routings, labelled by their shape. 1..8 are the
+-- canonical Yamaha 4-op DX set; 9..16 are extended routings (see Engine_Potionshop
+-- algorithms table — keep ordering in sync). One ALG grid row fits all 16 (cols 0..15).
+local ALGO_NAMES = {'4>3>2>1', '(4,3)>2>1', '4>3>1 2>1', '4>2>1 3>1',
+                    '2>1 4>3', '4>1,2,3', '4>3 +1,2', 'additive',
+                    '(4,3,2)>1', '3>2>1 +4', '4>2>1 +3', '4>3>2 +1',
+                    '4>3>1 +2', '(4,3)>1 +2', '4>1,2 +3', '4>2 3>1'}
+-- alt(B)-layer trigger mode for the note layer (altTrig):
 --   hold = add&hold (B drawn once per burst, summed onto A for every hit)
 --   step = advance the B sequins per hit (arpeggiates the alt layer)
 local ALT_TRIG_MODE_NAMES  = {'hold', 'step'}
+-- Curated per-operator FM ratios for the OP-page picker (32 values across the two
+-- picker rows 6-7: cols 0..15 = ratios 1..16, second row = 17..32). Mirrors
+-- Burst.RATIO_VALUES (randomize/mutate) — keep the two in sync. Superset of the
+-- earlier 16-value set: denser sub-octave bass, a unity-detune zone (1.25/1.75),
+-- and half-integer inharmonic ratios for bell/metallic timbres.
+local RATIO_VALUES = {
+  0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1,
+  1.25, 1.5, 1.75, 2, 2.25, 2.5, 2.75, 3,
+  3.5, 4, 4.5, 5, 5.5, 6, 6.5, 7,
+  7.5, 8, 9, 10, 11, 12, 13, 14,
+}
 
-local DEFAULT_VALUE   = {div = 8, reps = 3, note = 0, level = 0.5, harm = 2, env = 2}
-local DEFAULT_VALUE_B = {div = 0, reps = 0, note = 0, level = 0, harm = 0, env = 0}
+local DEFAULT_VALUE   = {div = 8, reps = 3, note = 0, level = 0.5, attack = 0, decay = 16 / 31, modatk = 0, moddec = 8 / 31}
+local DEFAULT_VALUE_B = {div = 0, reps = 0, note = 0, level = 0, attack = 0, decay = 0, modatk = 0, moddec = 0}
 
 -- 1-based value layouts for the step picker / KB bands. Index 1..32 maps to
 -- grid cell (y*16 + x + 1). These are the grid-reachability contract.
 local function range(n, f) local t = {} for i = 0, n - 1 do t[i + 1] = f(i) end return t end
 local STEP_PICKER_VALUES = {
   div  = range(32, function(i) return i + 1 end),
-  reps = (function() local t = range(31, function(i) return i + 1 end); t[32] = -1; return t end)(),
+  -- Two aligned rows of 16: the TOP row (cells 1..16) is reps 1..16 (hit counts);
+  -- the BOTTOM row (cells 17..32) is rests of length 1..16 (values 0,-1,..,-15 ->
+  -- rest length 1-reps). Column N pairs N hits (top) with an N-step rest (bottom).
+  -- No infinite sentinel: 2+ steps loop.
+  reps = (function()
+    local t = {}
+    for i = 1, 16 do t[i] = i end          -- top row: 1..16 hits
+    for i = 1, 16 do t[16 + i] = 1 - i end -- bottom row: rest of length i (reps 0..-15)
+    return t
+  end)(),
   note = range(32, function(i) return i end),
   level = range(32, function(i) return i / 31 end),
-  harm  = range(32, function(i) return 2 + i * 0.75 end),
-  env   = range(32, function(i) return i / 31 end),
+  attack = range(32, function(i) return i / 31 end),
+  decay  = range(32, function(i) return i / 31 end),
+  modatk = range(32, function(i) return i / 31 end),
+  moddec = range(32, function(i) return i / 31 end),
 }
-local QUANTIZE_VALUES = range(32, function(i) return i + 1 end)
+-- OP-page op-level picker: 0..1 in 1/31 steps (same layout the old op sequins
+-- used), so every operator level stays grid-reachable.
+local OP_LEVEL_VALUES = range(32, function(i) return i / 31 end)
+-- Curated per-channel quantize grids (events per whole note). Mirrors
+-- Burst.QUANTIZE_VALUES — keep in sync. Edited on the per-channel QNT page.
+local QUANTIZE_VALUES = {3, 4, 6, 8, 12, 16, 24, 32}
+local QUANTIZE_COLS   = {0, 1, 2, 3, 4, 5, 6, 7}
 
 local function round(x) return math.floor(x + 0.5) end
 local function clamp(v, lo, hi) return math.max(lo, math.min(hi, v)) end
@@ -127,6 +217,14 @@ local function index_of(t, v)
   return -1
 end
 
+-- channel-row column -> (lane index 1|2, step). Cols 0..SEQ_LEN-1 are the left
+-- lane (1), cols B_COL0..15 the right lane (2); step is 0-based within the half.
+-- The lane's actual param/layer comes from row_lanes (A/B, or div/reps).
+local function decode_col(x)
+  if x < B_COL0 then return 1, x end
+  return 2, x - B_COL0
+end
+
 -- index of the picker value nearest `cur` (1-based). Shared by screen_ui and
 -- params_sync so every surface snaps off-grid values identically.
 local function nearest_index(layout, cur)
@@ -138,42 +236,60 @@ local function nearest_index(layout, cur)
   return best
 end
 
+-- Brightness 15 is reserved for the running playhead (render_channel_row /
+-- screen draw_steps), so every *value* tops out at VALUE_MAX. With the playhead
+-- the only thing that can hit 15, it stays legible even over a hot step.
+local VALUE_MAX = 13
 local function value_brightness(param, value)
+  local b
   if param == 'div' then
-    return value <= 4 and 6 or value <= 8 and 8 or value <= 16 and 11 or 14
+    b = value <= 4 and 6 or value <= 8 and 8 or value <= 16 and 11 or VALUE_MAX
   elseif param == 'reps' then
-    return value == -1 and 15 or math.min(4 + value, 14)
+    -- hits (>0) ramp brighter with the count; rests (<=0) sit in a dim 2..4 band,
+    -- deeper rests dimmer, so a rest never collides with a hit count (min hit = 5).
+    if value <= 0 then b = clamp(4 + value, 2, 4)
+    else b = math.min(4 + value, VALUE_MAX) end
   elseif param == 'note' then
-    return math.min(4 + math.abs(value), 15)
-  elseif param == 'level' then
-    return math.max(2, round(2 + value * 13))
+    -- signed ramp centered on 7: a negative degree reads dimmer than zero, a
+    -- positive one brighter, so +n and -n no longer collide (they did under the
+    -- old abs() mapping). Reads like pitch height — higher note, brighter cell.
+    b = clamp(round(7 + value), 2, VALUE_MAX)
+  elseif param == 'level' or param:match('^op%d') then
+    b = math.max(2, round(2 + value * 11))
   elseif param == 'harm' then
     local norm = (value - 2) / 23.25
-    return clamp(round(4 + norm * 10), 4, 14)
-  elseif param == 'env' then
+    b = clamp(round(4 + norm * 9), 4, VALUE_MAX)
+  elseif param == 'attack' or param == 'decay'
+      or param == 'modatk' or param == 'moddec' then
     local norm = clamp(value, 0, 1)
-    return clamp(round(2 + norm * 12), 2, 14)
+    b = clamp(round(2 + norm * 11), 2, VALUE_MAX)
+  else
+    b = 6
   end
-  return 6
+  return math.min(b, VALUE_MAX)
 end
 
 local GridUI = {}
 GridUI.__index = GridUI
 GridUI.STEP_PICKER_VALUES = STEP_PICKER_VALUES
 GridUI.PARAMS = PARAMS
+GridUI.SEQ_LEN = SEQ_LEN
+GridUI.has_b = has_b
 -- shared with screen_ui so both surfaces draw/edit from one source of truth
 GridUI.value_brightness = value_brightness
 GridUI.nearest_index = nearest_index
 GridUI.DEFAULT_VALUE = DEFAULT_VALUE
 GridUI.ENV_MODE_NAMES = ENV_MODE_NAMES
 GridUI.GEODE_MODE_NAMES = GEODE_MODE_NAMES
-GridUI.HARM_ENV_MODE_NAMES = HARM_ENV_MODE_NAMES
-GridUI.HARM_GEODE_NAMES = HARM_GEODE_NAMES
+GridUI.ALGO_NAMES = ALGO_NAMES
 GridUI.RESET_INTERVALS = RESET_INTERVALS
 GridUI.OCTAVE_VALUES = OCTAVE_VALUES
 GridUI.RATE_VALUES = RATE_VALUES
+GridUI.QUANTIZE_VALUES = QUANTIZE_VALUES
 GridUI.PROB_VALUES = PROB_VALUES
 GridUI.ALT_TRIG_MODE_NAMES = ALT_TRIG_MODE_NAMES
+GridUI.RATIO_VALUES = RATIO_VALUES
+GridUI.OP_LEVEL_VALUES = OP_LEVEL_VALUES
 
 -- opts.on_status(string): pushed status text (for screen). opts.on_redraw():
 -- called after any state change so the screen can refresh too. opts.on_edit(ev):
@@ -198,10 +314,11 @@ function GridUI.new(engine, grid, opts)
   -- same channel. ch is 0-based.
   self.focusCh = 0
   self.focusSeq = 0
-  self.picker = nil            -- {kind='step',ch,col,layer} | {kind='scale'} | nil
+  self.picker = nil            -- {kind='step'|'scalar'|'scale', ...} | nil
   self.probMode = false
   self.perfMode = false
-  self.soundMode = false
+  self.qntMode = false         -- QNT page: per-channel event snap grid (curated set)
+  self.opMode = false          -- OP page: per-channel per-op ratio + level statics
   self.actionMode = nil        -- 'randomize'|'mutate'|'clear'|'copy'|'paste'|nil
   self.clipboard = nil         -- {param = {vals...}} snapshot of a channel's A layer
   self.status = ''
@@ -219,7 +336,10 @@ function GridUI.new(engine, grid, opts)
 
   engine:on(function(ev)
     if ev.type == 'fire' then
-      if self.kbMode or self.picker or self.probMode or self.perfMode or self.soundMode then return end
+      if self.kbMode or self.probMode or self.perfMode or self.qntMode or self.opMode then return end
+      -- the scale picker repurposes the channel rows; a step picker does not
+      -- (it lives on rows 6-7), so let its channel-row playheads keep animating
+      if self.picker and self.picker.kind == 'scale' then return end
       self:render_channel_row(ev.ch - 1)
       self.g:refresh()
     elseif ev.type == 'launch' or ev.type == 'stop' then
@@ -254,10 +374,22 @@ function GridUI:set_scalar(ch, field, value)
   self.on_edit{ type = 'scalar', ch = ch }
 end
 
+-- The two step lanes a channel row shows, left ([1]) then right ([2]). Normally
+-- a param's A and B layers; div/reps is special — div (A) left, reps (A) right.
+function GridUI:row_lanes()
+  local p = self.selectedParam
+  local pr = PAIR_OF[p]
+  if pr then
+    return {{param = pr[1], layer = 'A'}, {param = pr[2], layer = 'A'}}
+  end
+  return {{param = p, layer = 'A'}, {param = p, layer = 'B'}}
+end
+
 -- ---- press dispatch ----------------------------------------------------
 
 function GridUI:press(x, y)
-  if self.kbMode then self:handle_kb_press(x, y); return end
+  -- KB mode disabled (see handle_row6): kbMode never becomes true.
+  -- if self.kbMode then self:handle_kb_press(x, y); return end
   if self.picker then self:handle_picker_press(x, y)
   else self:handle_normal_press(x, y) end
 end
@@ -265,6 +397,14 @@ end
 function GridUI:handle_normal_press(x, y)
   if y < 6 then
     self:_focus(y)
+    if self.qntMode then
+      local qi = index_of(QUANTIZE_COLS, x)
+      if qi ~= -1 then
+        self:set_scalar(y, 'quantize', QUANTIZE_VALUES[qi + 1])
+        self:render_channel_row(y); self.g:refresh()
+      end
+      return
+    end
     if self.perfMode then
       local rate_idx = index_of(RATE_COLS, x)
       if rate_idx ~= -1 then
@@ -287,29 +427,31 @@ function GridUI:handle_normal_press(x, y)
     end
     if self.probMode then
       local trig_idx = index_of(ALT_TRIG_COLS, x)
-      local harm_idx = index_of(HARM_TRIG_COLS, x)
       local prob_idx = index_of(PROB_COLS, x)
       if x == PROB_HIT_COL then
         self:set_scalar(y, 'probHit', not self:chan(y).probHit)
       elseif trig_idx ~= -1 then
         self:set_scalar(y, 'altTrig', trig_idx)
-      elseif harm_idx ~= -1 then
-        self:set_scalar(y, 'harmTrig', harm_idx)
       elseif prob_idx ~= -1 then
         self:set_scalar(y, 'burstProb', PROB_VALUES[prob_idx + 1])
       end
       self:render_channel_row(y); self.g:refresh()
       return
     end
-    if self.soundMode then
-      if x <= 2 then self:set_scalar(y, 'envMode', x)
-      elseif x >= 4 and x <= 6 then self:set_scalar(y, 'geodeMode', x - 4)
-      elseif x >= 8 and x <= 10 then self:set_scalar(y, 'harmEnvMode', x - 8)
-      elseif x >= 12 and x <= 14 then self:set_scalar(y, 'harmEnv', x - 12) end
-      self:render_channel_row(y); self.g:refresh()
+    if self.opMode then
+      -- ratios on cols 0..3 (op1..op4, all editable); levels on cols 8..11
+      local ri = x - OP_RATIO_COL0
+      local lvi = x - OP_LEVEL_COL0
+      if ri >= 0 and ri <= 3 then            -- op1..op4 ratio
+        self:open_scalar_picker(y, 'opRatio' .. (ri + 1), RATIO_VALUES, 'ratio')
+      elseif lvi >= 0 and lvi <= 3 then      -- op1..op4 level
+        self:open_scalar_picker(y, 'opLevel' .. (lvi + 1), OP_LEVEL_VALUES, 'level')
+      end
       return
     end
-    self:open_step_picker(y, x)
+    local li, step = decode_col(x)
+    local lane = self:row_lanes()[li]
+    self:open_step_picker(y, step, lane.param, lane.layer)
   elseif y == 6 then
     self:handle_row6(x)
   elseif y == 7 then
@@ -319,51 +461,61 @@ end
 
 function GridUI:handle_picker_press(x, y)
   local p = self.picker
-  local picker_rows = (p.kind == 'scale') and 6 or 2
-  if y < picker_rows then
-    self:apply_picker_value(p, x, y)
-    return
-  end
-  if p.kind == 'step' and y < 6 then
-    if y == p.ch and x == p.col then
-      self:remove_step(p.ch, p.col, p.layer)
-      self:close_picker()
-    else
-      self:_focus(y)
-      self:open_step_picker(y, x)
-    end
-    return
-  end
-  if y == 6 and p.kind == 'scale' and x == ROW6_QNT_COL then
+  if p.kind == 'scale' then
+    if y < 6 then self:apply_picker_value(p, x, y); return end
+    if y == 6 and x == ROW6_SCALE_COL then self:close_picker(); return end
     self:close_picker()
+    self:handle_normal_press(x, y)
     return
   end
-  self:close_picker()
-  self:handle_normal_press(x, y)
+  -- step/scalar picker: value grid on rows 6-7, every channel row live on 0-5.
+  if y >= PICKER_ROW0 then
+    self:apply_picker_value(p, x, y - PICKER_ROW0)
+    return
+  end
+  if p.kind == 'scalar' then
+    -- a channel-row tap closes the scalar picker (re-tap to cancel, or move on).
+    self:close_picker()
+    self:_focus(y)
+    self:handle_normal_press(x, y)
+    return
+  end
+  -- a channel step: re-tapping the open step cancels/closes; any other step
+  -- (either half) hops the picker there. Removal lives on the value grid (tap
+  -- the lit value), so it no longer needs the channel row to be reachable.
+  local li, step = decode_col(x)
+  local lane = self:row_lanes()[li]
+  if y == p.ch and lane.param == p.param and lane.layer == p.layer and step == p.col then
+    self:close_picker()
+  else
+    self:_focus(y)
+    self:open_step_picker(y, step, lane.param, lane.layer)
+  end
 end
 
 -- ---- value application -------------------------------------------------
 
 function GridUI:apply_picker_value(p, x, y)
   if p.kind == 'step' then
-    local v = STEP_PICKER_VALUES[self.selectedParam][y * GRID_W + x + 1]
+    local v = STEP_PICKER_VALUES[p.param][y * GRID_W + x + 1]
     if v == nil then return end
-    -- pressing the already-selected (full-bright) value toggles the step off.
-    -- This is the only remove path reachable for ch0/ch1, whose channel rows
-    -- sit behind the picker's value grid (rows 0-1).
-    local cur = seqx.values(self:seq_ref(p.ch, self.selectedParam, p.layer))[p.col + 1]
+    -- pressing the already-selected (full-bright) value toggles the step off:
+    -- the value grid (rows 6-7) is the remove affordance, freeing the channel
+    -- rows to stay visible and the open-step re-tap to mean cancel.
+    local cur = seqx.values(self:seq_ref(p.ch, p.param, p.layer))[p.col + 1]
     if cur ~= nil and eq(cur, v) then
-      self:remove_step(p.ch, p.col, p.layer)
+      self:remove_step(p.ch, p.col, p.param, p.layer)
     else
-      self:set_step(p.ch, p.col, v, p.layer)
+      self:set_step(p.ch, p.col, v, p.param, p.layer)
     end
     self:close_picker()
+  elseif p.kind == 'scalar' then
+    local v = p.layout[y * GRID_W + x + 1]
+    if v == nil then return end
+    self:set_scalar(p.ch, p.field, v)  -- single edit path: fires on_edit{scalar}
+    self:close_picker()
   elseif p.kind == 'scale' then
-    -- quantize block (right side): 8x4 grid, cols 8..15, rows 1..4
-    if x >= QNT_COL0 and y >= QNT_ROW0 and y < QNT_ROW0 + QNT_H then
-      local idx = (y - QNT_ROW0) * QNT_W + (x - QNT_COL0) + 1
-      self.engine.quantize = QUANTIZE_VALUES[idx]
-    elseif y == SCALE_PRESET_ROW then
+    if y == SCALE_PRESET_ROW then
       local name = scales.picker_names[x + 1]
       if not name then return end
       self.selectedScaleName = name
@@ -402,29 +554,86 @@ function GridUI:toggle_mask_note(semitone)
   self.engine.scale = copy
 end
 
+-- preset scale name whose intervals match `mask` exactly, or nil (custom mask).
+-- Lets a whole-mask edit re-light the matching preset on the scale picker.
+function GridUI:_mask_preset_name(mask)
+  for _, name in ipairs(scales.names) do
+    local ref = scales.by_name[name]
+    if #ref == #mask then
+      local same = true
+      for k = 1, #ref do if ref[k] ~= mask[k] then same = false break end end
+      if same then return name end
+    end
+  end
+  return nil
+end
+
+-- Replace the whole custom note mask at once (the params keymask edit path).
+-- Shares toggle_mask_note's invariants: dedup + sort, refuse to empty the scale,
+-- re-point engine.scale, and emit on_edit{global} so params/screen reflect.
+-- Semitones outside 0..11 are dropped; this is the only set-the-mask path so
+-- the keymask param stays grid-reachable just like the sequence text params.
+function GridUI:set_mask(semitones)
+  local seen, mask = {}, {}
+  for _, s in ipairs(semitones) do
+    s = math.floor(s)
+    if s >= 0 and s <= 11 and not seen[s] then seen[s] = true; mask[#mask + 1] = s end
+  end
+  if #mask == 0 then return end
+  table.sort(mask)
+  self.customMask = mask
+  local copy = {}
+  for _, s in ipairs(mask) do copy[#copy + 1] = s end
+  self.engine.scale = copy
+  local name = self:_mask_preset_name(mask)
+  if name then self.selectedScaleName = name end
+  self.on_edit{ type = 'global' }
+end
+
+-- Global musical scalars (root tonic). Like set_mask this is the single mutation
+-- path so on_edit{global} fires and the params/screen reflect; the screen scale
+-- page edits through it. (quantize is per-channel now — edited via set_scalar on
+-- the QNT page / chN_quantize param, not here.)
+function GridUI:set_root(semitone)
+  self.engine.root = semitone % 12
+  self.on_edit{ type = 'global' }
+end
+
 -- ---- picker enter/exit -------------------------------------------------
 
-function GridUI:open_step_picker(ch, col)
-  local param = self.selectedParam
-  local layer = self.paramLayer
+-- col is the 0-based step index within the lane's half (decode_col already
+-- stripped the B_COL0 offset); param/layer come from the pressed lane.
+function GridUI:open_step_picker(ch, col, param, layer)
   local cur = seqx.values(self:seq_ref(ch, param, layer))
   local len = #cur
   if col == len then
-    if len >= GRID_W then return end
+    if len >= SEQ_LEN then return end
     local nxt = {}
     for i = 1, len do nxt[i] = cur[i] end
     nxt[len + 1] = (layer == 'A') and DEFAULT_VALUE[param] or DEFAULT_VALUE_B[param]
     self:commit_step(ch, param, nxt, layer)
-    self.picker = {kind = 'step', ch = ch, col = col, layer = layer}
+    self.picker = {kind = 'step', ch = ch, col = col, param = param, layer = layer}
   elseif col < len then
-    self.picker = {kind = 'step', ch = ch, col = col, layer = layer}
+    self.picker = {kind = 'step', ch = ch, col = col, param = param, layer = layer}
   else
     return
   end
   self:render_all()
 end
 
+-- OP-page scalar picker: edits a per-channel static field (opRatioN / opLevelN)
+-- by tapping a value on the rows-6-7 grid. `layout` is the value array, `valkind`
+-- ('ratio'|'level') is for the status string.
+function GridUI:open_scalar_picker(ch, field, layout, valkind)
+  self:_focus(ch)
+  self.picker = {kind = 'scalar', ch = ch, field = field, layout = layout, valkind = valkind}
+  self:render_all()
+end
+
 function GridUI:open_scale_picker()
+  -- entering the scale page is exclusive with the other row-6 latch modes, so
+  -- only one row-6 button stays lit (see handle_row6's latch handlers)
+  self:_clear_latches()
   self.customMask = {}
   for _, v in ipairs(self.engine.scale) do self.customMask[#self.customMask + 1] = v end
   self.picker = {kind = 'scale'}
@@ -444,8 +653,7 @@ function GridUI:seq_ref(ch, param, layer)
   return c[param .. 'B']
 end
 
-function GridUI:set_step(ch, col, value, layer)
-  local param = self.selectedParam
+function GridUI:set_step(ch, col, value, param, layer)
   local cur = seqx.values(self:seq_ref(ch, param, layer))
   local nxt = {}
   for i = 1, #cur do nxt[i] = cur[i] end
@@ -453,8 +661,7 @@ function GridUI:set_step(ch, col, value, layer)
   self:commit_step(ch, param, nxt, layer)
 end
 
-function GridUI:remove_step(ch, col, layer)
-  local param = self.selectedParam
+function GridUI:remove_step(ch, col, param, layer)
   local cur = seqx.values(self:seq_ref(ch, param, layer))
   local nxt = {}
   for i = 1, #cur do nxt[i] = cur[i] end
@@ -466,6 +673,12 @@ function GridUI:commit_step_raw(ch, param, vals, layer)
   local final = vals
   if #final == 0 then
     final = {(layer == 'A') and DEFAULT_VALUE[param] or DEFAULT_VALUE_B[param]}
+  elseif #final > SEQ_LEN then
+    -- single chokepoint for the 8-step cap: every surface (grid/screen/params)
+    -- commits through here, so truncating drops over-long sequences everywhere.
+    local capped = {}
+    for i = 1, SEQ_LEN do capped[i] = final[i] end
+    final = capped
   end
   local c = self:chan(ch)
   if layer == 'A' then c[param] = seqx.new(final)
@@ -513,34 +726,25 @@ end
 
 -- ---- row 6 / row 7 -----------------------------------------------------
 
-function GridUI:_exclusive_mode(field)
-  -- set self[field]=true and clear the other latch modes + action mode
-  self.probMode = false; self.perfMode = false; self.soundMode = false
-  self.actionMode = nil
-  self[field] = true
+-- clear every row-6 latch mode + action mode (so only one page is ever active).
+function GridUI:_clear_latches()
+  self.probMode = false; self.perfMode = false
+  self.qntMode = false; self.opMode = false; self.actionMode = nil
 end
 
 function GridUI:handle_row6(x)
-  if x == ROW6_KB_COL then self:enter_kb_mode(); return end
-  if x == ROW6_PERF_COL then
-    local was = self.perfMode
-    self.probMode = false; self.soundMode = false; self.actionMode = nil
-    self.perfMode = not was
+  -- KB mode disabled: entry commented out (its old col 11 slot is now dark; the
+  -- FM algorithm is a global param, no longer a grid page).
+  -- if x == ROW6_KB_COL then self:enter_kb_mode(); return end
+  local LATCH = {[ROW6_PERF_COL] = 'perfMode', [ROW6_PROB_COL] = 'probMode',
+                 [ROW6_QNT_COL] = 'qntMode', [ROW6_OP_COL] = 'opMode'}
+  if LATCH[x] then
+    local was = self[LATCH[x]]
+    self:_clear_latches()
+    self[LATCH[x]] = not was
     self:render_all(); return
   end
-  if x == ROW6_PROB_COL then
-    local was = self.probMode
-    self.soundMode = false; self.perfMode = false; self.actionMode = nil
-    self.probMode = not was
-    self:render_all(); return
-  end
-  if x == ROW6_QNT_COL then self:open_scale_picker(); return end
-  if x == ROW6_SND_COL then
-    local was = self.soundMode
-    self.probMode = false; self.perfMode = false; self.actionMode = nil
-    self.soundMode = not was
-    self:render_all(); return
-  end
+  if x == ROW6_SCALE_COL then self:open_scale_picker(); return end
 
   if self.actionMode and x < 6 then
     self:_focus(x)
@@ -564,13 +768,10 @@ function GridUI:handle_row6(x)
 end
 
 function GridUI:handle_row7(x)
-  if x < #PARAMS then
-    if PARAMS[x + 1] == self.selectedParam then
-      self.paramLayer = (self.paramLayer == 'A') and 'B' or 'A'
-    else
-      self.selectedParam = PARAMS[x + 1]
-      self.paramLayer = 'A'
-    end
+  if x < #ROW7_PAGES then
+    -- one button per page; a paired page is represented by its first member.
+    -- Both A/B (or both pair) lanes are always shown — no A/B flip.
+    self.selectedParam = ROW7_PAGES[x + 1]
     self.picker = nil
     self:render_all()
   elseif x == CLR_BUTTON_COL then self:_toggle_action('clear')
@@ -584,8 +785,8 @@ end
 function GridUI:_toggle_action(name)
   if self.actionMode == name then self.actionMode = nil
   else
+    self:_clear_latches()
     self.actionMode = name
-    self.probMode = false; self.perfMode = false; self.soundMode = false
   end
   self:render_all()
 end
@@ -593,13 +794,22 @@ end
 -- ---- rendering ---------------------------------------------------------
 
 function GridUI:render_all()
-  if self.kbMode then self:render_kb_mode(); self:_status(); self.g:refresh(); self.on_redraw(); return end
+  -- KB mode disabled (see handle_row6): kbMode never becomes true.
+  -- if self.kbMode then self:render_kb_mode(); self:_status(); self.g:refresh(); self.on_redraw(); return end
   self.g:clear()
-  if self.picker then
+  if self.picker and (self.picker.kind == 'step' or self.picker.kind == 'scalar') then
+    -- step/scalar pick: every channel row stays drawn (the edited cell glows on
+    -- its own row) and the value grid borrows the control rows (6-7).
+    for ch = 0, NUM_CHANNELS - 1 do self:render_channel_row(ch) end
+    if self.picker.kind == 'step' then self:render_step_picker(self.picker)
+    else self:render_scalar_picker(self.picker) end
+    self:_status()
+    self.g:refresh()
+    self.on_redraw()
+    return
+  end
+  if self.picker then          -- scale picker owns rows 0-5
     self:render_picker()
-    if self.picker.kind ~= 'scale' then
-      for ch = 2, NUM_CHANNELS - 1 do self:render_channel_row(ch) end
-    end
   else
     for ch = 0, NUM_CHANNELS - 1 do self:render_channel_row(ch) end
   end
@@ -617,10 +827,9 @@ function GridUI:render_picker()
 end
 
 function GridUI:render_step_picker(p)
-  local param = self.selectedParam
-  local vals = seqx.values(self:seq_ref(p.ch, param, p.layer))
+  local vals = seqx.values(self:seq_ref(p.ch, p.param, p.layer))
   local focused = vals[p.col + 1]
-  local layout = STEP_PICKER_VALUES[param]
+  local layout = STEP_PICKER_VALUES[p.param]
   for y = 0, 1 do
     for x = 0, GRID_W - 1 do
       local v = layout[y * GRID_W + x + 1]
@@ -631,8 +840,22 @@ function GridUI:render_step_picker(p)
         for _, sv in ipairs(vals) do if eq(sv, v) then present = true break end end
         b = present and 5 or 1
       end
-      self.g:set_led(x, y, b)
+      self.g:set_led(x, PICKER_ROW0 + y, b)
+      -- rests (reps <= 0) pulse to set them apart from the hit-count cells.
+      if p.param == 'reps' and v <= 0 then
+        self.g:set_strobe(x, PICKER_ROW0 + y, 'slow')
+      end
     end
+  end
+end
+
+-- OP-page scalar picker: the value layout across rows 6-7, current value bright.
+function GridUI:render_scalar_picker(p)
+  local cur = self:chan(p.ch)[p.field]
+  for i = 1, #p.layout do
+    local x = (i - 1) % GRID_W
+    local y = PICKER_ROW0 + math.floor((i - 1) / GRID_W)
+    self.g:set_led(x, y, eq(p.layout[i], cur) and 15 or 1)
   end
 end
 
@@ -662,51 +885,72 @@ function GridUI:render_scale_picker()
   for x, semi in pairs(KB_WHITE_COL) do
     self.g:set_led(x, ROOT_WHITE_ROW, semi == root and 15 or 3)
   end
-
-  -- quantize: 8x4 block on the right
-  local curq = self.engine.quantize
-  for r = 0, QNT_H - 1 do
-    for c = 0, QNT_W - 1 do
-      local idx = r * QNT_W + c + 1
-      self.g:set_led(QNT_COL0 + c, QNT_ROW0 + r, QUANTIZE_VALUES[idx] == curq and 15 or 3)
-    end
-  end
 end
 
 function GridUI:render_channel_row(ch)
   if self.probMode then self:render_prob_row(ch); return end
   if self.perfMode then self:render_perf_row(ch); return end
-  if self.soundMode then self:render_sound_row(ch); return end
-  local param = self.selectedParam
-  local layer = self.paramLayer
-  local seq = self:seq_ref(ch, param, layer)
-  local vals = seqx.values(seq)
-  local len = #vals
-  for i = 0, GRID_W - 1 do
-    if i < len then
-      self.g:set_led(i, ch, value_brightness(param, vals[i + 1]))
-      self.g:set_strobe(i, ch, 'off')
-    elseif i == len and len < GRID_W then
-      self.g:set_led(i, ch, 1); self.g:set_strobe(i, ch, 'off')
-    else
-      self.g:set_led(i, ch, 0); self.g:set_strobe(i, ch, 'off')
+  if self.qntMode then self:render_qnt_row(ch); return end
+  if self.opMode then self:render_op_row(ch); return end
+  local running = self.engine:is_running(ch + 1)
+  -- two lanes side by side: left half (cols 0..SEQ_LEN-1) then right half
+  -- (cols B_COL0..15). Normally A/B of the selected param; div/reps shows
+  -- div left + reps right (see row_lanes).
+  local lanes = self:row_lanes()
+  for li, lane in ipairs(lanes) do
+    local base = (li == 2) and B_COL0 or 0
+    local seq = self:seq_ref(ch, lane.param, lane.layer)
+    local vals = seqx.values(seq)
+    local len = #vals
+    for i = 0, SEQ_LEN - 1 do
+      local col = base + i
+      if i < len then
+        self.g:set_led(col, ch, value_brightness(lane.param, vals[i + 1]))
+      elseif i == len and len < SEQ_LEN then
+        self.g:set_led(col, ch, 1)  -- the add slot
+      else
+        self.g:set_led(col, ch, 0)
+      end
+      self.g:set_strobe(col, ch, 'off')
+    end
+    if running and len > 0 then
+      self.g:set_led(base + seqx.playhead(seq), ch, 15)
+    end
+    if self.picker and self.picker.kind == 'step' and self.picker.ch == ch
+       and self.picker.param == lane.param and self.picker.layer == lane.layer then
+      self.g:set_led(base + self.picker.col, ch, 15)
     end
   end
-  if self.engine:is_running(ch + 1) and len > 0 then
-    self.g:set_led(seqx.playhead(seq), ch, 15)
+end
+
+-- OP page: per-op ratio (cols 0..3, op1..op4 all editable) + per-op level
+-- (cols 8..11), each cell's brightness encoding its value; picker opens on tap.
+function GridUI:render_op_row(ch)
+  local c = self:chan(ch)
+  for x = 0, GRID_W - 1 do self.g:set_led(x, ch, 0); self.g:set_strobe(x, ch, 'off') end
+  local ratios = {c.opRatio1, c.opRatio2, c.opRatio3, c.opRatio4}
+  for op = 1, 4 do
+    -- ratio brightness from its index in the curated set (low ratio = dim)
+    local idx = nearest_index(RATIO_VALUES, ratios[op])
+    local rb = clamp(round(2 + (idx - 1) / (#RATIO_VALUES - 1) * 11), 2, VALUE_MAX)
+    self.g:set_led(OP_RATIO_COL0 + (op - 1), ch, rb)
+    local lvl = c['opLevel' .. op] or 1
+    self.g:set_led(OP_LEVEL_COL0 + (op - 1), ch, math.max(2, round(2 + lvl * 11)))
   end
-  if self.picker and self.picker.kind == 'step' and self.picker.ch == ch and self.picker.layer == layer then
-    self.g:set_led(self.picker.col, ch, 15)
+  if self.picker and self.picker.kind == 'scalar' and self.picker.ch == ch then
+    local f = self.picker.field
+    local op = tonumber(f:sub(-1))
+    if f:match('^opRatio') then self.g:set_led(OP_RATIO_COL0 + (op - 1), ch, 15)
+    elseif f:match('^opLevel') then self.g:set_led(OP_LEVEL_COL0 + (op - 1), ch, 15) end
   end
 end
 
 function GridUI:render_prob_row(ch)
   local c = self:chan(ch)
   for x = 0, GRID_W - 1 do self.g:set_led(x, ch, 0); self.g:set_strobe(x, ch, 'off') end
-  -- alt-trig modes (left): note layer cols 0-1, harm layer cols 3-4
+  -- note alt-trig mode (cols 0-1): hold / step
   for i = 1, #ALT_TRIG_MODE_NAMES do
     self.g:set_led(ALT_TRIG_COLS[i], ch, c.altTrig == (i - 1) and 15 or 4)
-    self.g:set_led(HARM_TRIG_COLS[i], ch, c.harmTrig == (i - 1) and 15 or 4)
   end
   -- prob options (right-justified): nearest discrete value highlighted
   local sel = nearest_index(PROB_VALUES, c.burstProb)
@@ -724,23 +968,33 @@ function GridUI:render_perf_row(ch)
   for i = 1, #RESET_INTERVALS do
     self.g:set_led(RESET_COLS[i], ch, RESET_INTERVALS[i] == c.resetInterval and 15 or 3)
   end
-  for i = 1, #OCTAVE_VALUES do
-    -- center (0) sits a touch brighter so the no-shift column reads as home
-    local base = OCTAVE_VALUES[i] == 0 and 5 or 3
-    self.g:set_led(OCTAVE_COLS[i], ch, OCTAVE_VALUES[i] == c.octave and 15 or base)
-  end
-  for i = 1, #RATE_VALUES do
-    self.g:set_led(RATE_COLS[i], ch, RATE_VALUES[i] == c.rate and 15 or 3)
+  self:render_scaled_row(ch, OCTAVE_VALUES, OCTAVE_COLS, c.octave)
+  self:render_scaled_row(ch, RATE_VALUES, RATE_COLS, c.rate)
+end
+
+-- QNT page: the channel's quantize grid as one selector across cols 0..7
+-- (the curated 1/3..1/32 set). Brightness scales with the value's index so the
+-- coarse-to-fine ordering reads at a glance; selected cell is full-bright.
+function GridUI:render_qnt_row(ch)
+  local c = self:chan(ch)
+  for x = 0, GRID_W - 1 do self.g:set_led(x, ch, 0); self.g:set_strobe(x, ch, 'off') end
+  local sel = nearest_index(QUANTIZE_VALUES, c.quantize)
+  for i = 1, #QUANTIZE_VALUES do
+    self.g:set_led(QUANTIZE_COLS[i], ch, i == sel and 15 or 3)
   end
 end
 
-function GridUI:render_sound_row(ch)
-  local c = self:chan(ch)
-  for x = 0, GRID_W - 1 do self.g:set_led(x, ch, 0); self.g:set_strobe(x, ch, 'off') end
-  for m = 0, 2 do self.g:set_led(m, ch, c.envMode == m and 15 or 4) end
-  for m = 0, 2 do self.g:set_led(m + 4, ch, c.geodeMode == m and 15 or 4) end
-  for m = 0, 2 do self.g:set_led(m + 8, ch, c.harmEnvMode == m and 15 or 4) end
-  for m = 0, 2 do self.g:set_led(m + 12, ch, c.harmEnv == m and 15 or 4) end
+-- Light a 5-cell selector where the lit cell's brightness scales with its
+-- distance from the centre (default) value: the home column reads dim and the
+-- selection brightens as it moves toward either extreme, so the offset amount
+-- shows at a glance. Unselected cells stay at a low base.
+function GridUI:render_scaled_row(ch, values, cols, cur)
+  local center = math.ceil(#values / 2)
+  for i = 1, #values do
+    local b = 3
+    if values[i] == cur then b = clamp(4 + math.abs(i - center) * 5, 4, 14) end
+    self.g:set_led(cols[i], ch, b)
+  end
 end
 
 function GridUI:render_action_mode()
@@ -749,12 +1003,12 @@ function GridUI:render_action_mode()
     self.g:set_led(x, 6, 10)
     self.g:set_strobe(x, 6, (mark_running and self.engine:is_running(x + 1)) and 'slow' or 'off')
   end
-  for x = 6, 11 do self.g:set_led(x, 6, 0) end
+  for x = 6, 10 do self.g:set_led(x, 6, 0) end
+  self.g:set_led(ROW6_OP_COL, 6, 8)
   self.g:set_led(ROW6_PERF_COL, 6, 8)
-  self.g:set_led(ROW6_KB_COL, 6, 8)
   self.g:set_led(ROW6_PROB_COL, 6, 8)
+  self.g:set_led(ROW6_SCALE_COL, 6, 8)
   self.g:set_led(ROW6_QNT_COL, 6, 8)
-  self.g:set_led(ROW6_SND_COL, 6, 8)
 end
 
 function GridUI:render_row6()
@@ -765,25 +1019,32 @@ function GridUI:render_row6()
       self.g:set_led(x, 6, self.engine:is_running(x + 1) and 15 or 4)
       self.g:set_strobe(x, 6, 'off')
     end
-    for x = 6, 11 do self.g:set_led(x, 6, 0) end
+    for x = 6, 10 do self.g:set_led(x, 6, 0) end
   end
   self.g:set_led(ROW6_PERF_COL, 6, self.perfMode and 15 or 8)
   self.g:set_strobe(ROW6_PERF_COL, 6, self.perfMode and 'fast' or 'off')
-  self.g:set_led(ROW6_KB_COL, 6, 8)
   self.g:set_led(ROW6_PROB_COL, 6, self.probMode and 15 or 8)
   self.g:set_strobe(ROW6_PROB_COL, 6, self.probMode and 'fast' or 'off')
-  self.g:set_led(ROW6_QNT_COL, 6, 8)
-  self.g:set_led(ROW6_SND_COL, 6, self.soundMode and 15 or 8)
-  self.g:set_strobe(ROW6_SND_COL, 6, self.soundMode and 'fast' or 'off')
+  local scale_open = self.picker and self.picker.kind == 'scale'
+  self.g:set_led(ROW6_SCALE_COL, 6, scale_open and 15 or 8)
+  self.g:set_strobe(ROW6_SCALE_COL, 6, scale_open and 'fast' or 'off')
+  self.g:set_led(ROW6_QNT_COL, 6, self.qntMode and 15 or 8)
+  self.g:set_strobe(ROW6_QNT_COL, 6, self.qntMode and 'fast' or 'off')
+  self.g:set_led(ROW6_OP_COL, 6, self.opMode and 15 or 8)
+  self.g:set_strobe(ROW6_OP_COL, 6, self.opMode and 'fast' or 'off')
 end
 
 function GridUI:render_row7()
-  for x = 0, #PARAMS - 1 do
-    local sel = PARAMS[x + 1] == self.selectedParam
+  for x = 0, #ROW7_PAGES - 1 do
+    local bp = ROW7_PAGES[x + 1]
+    -- a page button lights when the selected param belongs to its page (itself,
+    -- or the same pair via PAIR_OF identity).
+    local sel = bp == self.selectedParam
+      or (PAIR_OF[bp] ~= nil and PAIR_OF[self.selectedParam] == PAIR_OF[bp])
     self.g:set_led(x, 7, sel and 15 or 5)
-    self.g:set_strobe(x, 7, (sel and self.paramLayer == 'B') and 'slow' or 'off')
+    self.g:set_strobe(x, 7, 'off')
   end
-  for x = 6, 10 do self.g:set_led(x, 7, 0) end
+  for x = #ROW7_PAGES, 10 do self.g:set_led(x, 7, 0) end  -- dark gap before the action buttons
   local function action_led(col, name)
     self.g:set_led(col, 7, self.actionMode == name and 15 or 4)
     self.g:set_strobe(col, 7, self.actionMode == name and 'fast' or 'off')
@@ -956,9 +1217,11 @@ function GridUI:current_page()
   if self.kbMode then return 'KB' end
   if self.picker and self.picker.kind == 'scale' then return 'SCALE' end
   if self.picker and self.picker.kind == 'step' then return 'PICK' end
+  if self.picker and self.picker.kind == 'scalar' then return 'OP' end
   if self.perfMode then return 'PERF' end
   if self.probMode then return 'PROB' end
-  if self.soundMode then return 'SND' end
+  if self.qntMode then return 'QNT' end
+  if self.opMode then return 'OP' end
   if self.actionMode then return string.upper(self.actionMode) end
   return 'MAIN'
 end
@@ -972,20 +1235,30 @@ function GridUI:_status()
   elseif self.perfMode then
     s = 'PERF — cols0-3 reset, cols5-9 oct, cols11-15 rate'
   elseif self.probMode then
-    s = 'PROB — cols0-1 alt trig, cols11-14 prob%, col15 burst/hit'
-  elseif self.soundMode then
-    s = 'SOUND — env/geode/harmenv/harmgeode'
+    s = 'PROB — cols0-1 note trig, 11-14 prob%, 15 burst/hit'
+  elseif self.qntMode then
+    s = 'QNT — cols0-7 per-channel quantize (1/3..1/32)'
+  elseif self.opMode then
+    s = 'OP — cols0-3 op ratio, cols8-11 op level'
   elseif self.actionMode then
     s = string.upper(self.actionMode) .. ' — tap a channel'
+  elseif self.picker and self.picker.kind == 'scalar' then
+    local op = tonumber(self.picker.field:sub(-1))
+    local kind = self.picker.valkind == 'ratio' and 'ratio' or 'level'
+    s = 'edit ch' .. (self.picker.ch + 1) .. ' op' .. op .. ' ' .. kind ..
+        '=' .. tostring(self:chan(self.picker.ch)[self.picker.field])
   elseif self.picker and self.picker.kind == 'step' then
-    local raw = seqx.values(self:seq_ref(self.picker.ch, self.selectedParam, self.picker.layer))[self.picker.col + 1]
-    local v = (self.selectedParam == 'env') and round(raw * 31) or raw
+    local pp = self.picker.param
+    local raw = seqx.values(self:seq_ref(self.picker.ch, pp, self.picker.layer))[self.picker.col + 1]
+    local v = (pp == 'attack' or pp == 'decay' or pp == 'modatk' or pp == 'moddec') and round(raw * 31) or raw
     s = 'edit ch' .. (self.picker.ch + 1) .. ' step ' .. self.picker.col .. ' ' ..
-        self.selectedParam .. (self.picker.layer == 'B' and 'B' or '') .. '=' .. tostring(v)
+        pp .. (self.picker.layer == 'B' and 'B' or '') .. '=' .. tostring(v)
   elseif self.picker and self.picker.kind == 'scale' then
-    s = 'scale: row0 preset, rows1-2 keys, rows3-4 qnt (' .. self.engine.quantize .. ')'
+    s = 'scale: row0 preset, rows1-2 keys, rows4-5 root'
   else
-    s = 'edit ' .. self.selectedParam .. ' [' .. self.paramLayer .. ']'
+    local pr = PAIR_OF[self.selectedParam]
+    s = pr and ('edit ' .. pr[1] .. ' | ' .. pr[2])
+      or ('edit ' .. self.selectedParam .. ' (A | B)')
   end
   self.status = s
   self.on_status(s)
