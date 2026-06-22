@@ -19,9 +19,10 @@
 --               div/reps the halves are div (left) and reps (right), both A
 --               (div/reps have no B layer). The lane you edit is the half you
 --               press; there is no A/B flip (no double-press). See row_lanes.
---   row 6     = 0..5 launch · 6..10 dark · 11 OP · 12 PERF · 13 PROB · 14 QNT · 15 dark
---               (KB page disabled; FM algorithm, env mode and geode are global
---               params, not grid pages -- the old SND page was reclaimed)
+--   row 6     = 0..5 launch · 6..10 dark · 11 OP · 12 PERF · 13 PROB · 14 SCALE · 15 QNT
+--               (SCALE opens the scale picker; QNT is the per-channel quantize
+--               page. KB page disabled; FM algorithm, env mode and geode are
+--               global params, not grid pages -- the old SND page was reclaimed)
 --   row 7     = 0 div/reps · 1 note · 2 level · 3 attack/decay · 4 modatk/moddec
 --             · 5..10 dark · 11 CLR · 12 COPY · 13 PASTE · 14 RANDOMIZE · 15 MUTATE
 --             (one page-select button each; div/reps, attack/decay and
@@ -38,10 +39,12 @@
 --          · col 15 burst/hit toggle
 --   PERF:  rows 0-5 = reset off/1/2/4 bars (cols 0..3) · octave -2..+2 (cols 5..9)
 --          · rate (cols 11..15)
+--   QNT:   rows 0-5 = per-channel quantize, one cell per curated value on cols 0-7
+--          ({3,4,6,8,12,16,24,32} = 1/3..1/32 events per whole note).
 --   scale picker: row 0 cols 0-6 scale presets (7)
 --                 rows 1-2 cols 0-6 degree (note-mask) keyboard: black row 1 / white row 2
 --                 rows 4-5 cols 0-6 root keyboard: black row 4 / white row 5
---                 rows 1-4 cols 8-15 quantize (8x4 = 32 values, right side)
+--                 (quantize is no longer here — it is per-channel on the QNT page)
 --                 keyboards are a compact piano: white keys packed at cols 0-6,
 --                 black keys offset above the white key they follow
 --   step picker:  value grid on rows 6-7 (the control rows, borrowed while
@@ -100,7 +103,8 @@ local MUTATE_BUTTON_COL = 15
 local ROW6_OP_COL = 11    -- per-channel OP page (took the old ALG slot; per-op ratio + level statics)
 local ROW6_PERF_COL = 12
 local ROW6_PROB_COL = 13
-local ROW6_QNT_COL = 14
+local ROW6_SCALE_COL = 14 -- opens the scale picker (scale preset / degrees / root)
+local ROW6_QNT_COL = 15   -- per-channel QNT page (event snap grid, curated set)
 -- OP page channel-row layout: op1..4 RATIO on cols 0..3 (op1 default 1.0, editable),
 -- op1..4 LEVEL on cols 8..11 (left/right halves, like the A/B convention).
 local OP_RATIO_COL0 = 0
@@ -126,8 +130,8 @@ local KB_BLACK_COL = {[0] = 1, [1] = 3, [3] = 6, [4] = 8, [5] = 10}
 local SCALE_PRESET_ROW = 0
 local DEG_BLACK_ROW, DEG_WHITE_ROW = 1, 2
 local ROOT_BLACK_ROW, ROOT_WHITE_ROW = 4, 5
--- Quantize block: 8 cols x 4 rows on the right side.
-local QNT_COL0, QNT_ROW0, QNT_W, QNT_H = 8, 1, 8, 4
+-- (the scale picker no longer hosts a quantize block — quantize is per-channel on
+-- its own QNT page; the right side of the scale picker is now unused.)
 local RESET_INTERVALS = {0, 1, 2, 4}
 local RESET_COLS      = {0, 1, 2, 3}
 local OCTAVE_VALUES = {-2, -1, 0, 1, 2}
@@ -195,7 +199,10 @@ local STEP_PICKER_VALUES = {
 -- OP-page op-level picker: 0..1 in 1/31 steps (same layout the old op sequins
 -- used), so every operator level stays grid-reachable.
 local OP_LEVEL_VALUES = range(32, function(i) return i / 31 end)
-local QUANTIZE_VALUES = range(32, function(i) return i + 1 end)
+-- Curated per-channel quantize grids (events per whole note). Mirrors
+-- Burst.QUANTIZE_VALUES — keep in sync. Edited on the per-channel QNT page.
+local QUANTIZE_VALUES = {3, 4, 6, 8, 12, 16, 24, 32}
+local QUANTIZE_COLS   = {0, 1, 2, 3, 4, 5, 6, 7}
 
 local function round(x) return math.floor(x + 0.5) end
 local function clamp(v, lo, hi) return math.max(lo, math.min(hi, v)) end
@@ -278,6 +285,7 @@ GridUI.ALGO_NAMES = ALGO_NAMES
 GridUI.RESET_INTERVALS = RESET_INTERVALS
 GridUI.OCTAVE_VALUES = OCTAVE_VALUES
 GridUI.RATE_VALUES = RATE_VALUES
+GridUI.QUANTIZE_VALUES = QUANTIZE_VALUES
 GridUI.PROB_VALUES = PROB_VALUES
 GridUI.ALT_TRIG_MODE_NAMES = ALT_TRIG_MODE_NAMES
 GridUI.RATIO_VALUES = RATIO_VALUES
@@ -309,6 +317,7 @@ function GridUI.new(engine, grid, opts)
   self.picker = nil            -- {kind='step'|'scalar'|'scale', ...} | nil
   self.probMode = false
   self.perfMode = false
+  self.qntMode = false         -- QNT page: per-channel event snap grid (curated set)
   self.opMode = false          -- OP page: per-channel per-op ratio + level statics
   self.actionMode = nil        -- 'randomize'|'mutate'|'clear'|'copy'|'paste'|nil
   self.clipboard = nil         -- {param = {vals...}} snapshot of a channel's A layer
@@ -327,7 +336,7 @@ function GridUI.new(engine, grid, opts)
 
   engine:on(function(ev)
     if ev.type == 'fire' then
-      if self.kbMode or self.probMode or self.perfMode or self.opMode then return end
+      if self.kbMode or self.probMode or self.perfMode or self.qntMode or self.opMode then return end
       -- the scale picker repurposes the channel rows; a step picker does not
       -- (it lives on rows 6-7), so let its channel-row playheads keep animating
       if self.picker and self.picker.kind == 'scale' then return end
@@ -388,6 +397,14 @@ end
 function GridUI:handle_normal_press(x, y)
   if y < 6 then
     self:_focus(y)
+    if self.qntMode then
+      local qi = index_of(QUANTIZE_COLS, x)
+      if qi ~= -1 then
+        self:set_scalar(y, 'quantize', QUANTIZE_VALUES[qi + 1])
+        self:render_channel_row(y); self.g:refresh()
+      end
+      return
+    end
     if self.perfMode then
       local rate_idx = index_of(RATE_COLS, x)
       if rate_idx ~= -1 then
@@ -446,7 +463,7 @@ function GridUI:handle_picker_press(x, y)
   local p = self.picker
   if p.kind == 'scale' then
     if y < 6 then self:apply_picker_value(p, x, y); return end
-    if y == 6 and x == ROW6_QNT_COL then self:close_picker(); return end
+    if y == 6 and x == ROW6_SCALE_COL then self:close_picker(); return end
     self:close_picker()
     self:handle_normal_press(x, y)
     return
@@ -498,11 +515,7 @@ function GridUI:apply_picker_value(p, x, y)
     self:set_scalar(p.ch, p.field, v)  -- single edit path: fires on_edit{scalar}
     self:close_picker()
   elseif p.kind == 'scale' then
-    -- quantize block (right side): 8x4 grid, cols 8..15, rows 1..4
-    if x >= QNT_COL0 and y >= QNT_ROW0 and y < QNT_ROW0 + QNT_H then
-      local idx = (y - QNT_ROW0) * QNT_W + (x - QNT_COL0) + 1
-      self.engine.quantize = QUANTIZE_VALUES[idx]
-    elseif y == SCALE_PRESET_ROW then
+    if y == SCALE_PRESET_ROW then
       local name = scales.picker_names[x + 1]
       if not name then return end
       self.selectedScaleName = name
@@ -577,16 +590,12 @@ function GridUI:set_mask(semitones)
   self.on_edit{ type = 'global' }
 end
 
--- Global musical scalars (root tonic / quantize grid). Like set_mask these are
--- the single mutation path so on_edit{global} fires and the params/screen
--- reflect; the screen scale page edits through them.
+-- Global musical scalars (root tonic). Like set_mask this is the single mutation
+-- path so on_edit{global} fires and the params/screen reflect; the screen scale
+-- page edits through it. (quantize is per-channel now — edited via set_scalar on
+-- the QNT page / chN_quantize param, not here.)
 function GridUI:set_root(semitone)
   self.engine.root = semitone % 12
-  self.on_edit{ type = 'global' }
-end
-
-function GridUI:set_quantize(q)
-  self.engine.quantize = clamp(round(q), 1, 32)
   self.on_edit{ type = 'global' }
 end
 
@@ -720,7 +729,7 @@ end
 -- clear every row-6 latch mode + action mode (so only one page is ever active).
 function GridUI:_clear_latches()
   self.probMode = false; self.perfMode = false
-  self.opMode = false; self.actionMode = nil
+  self.qntMode = false; self.opMode = false; self.actionMode = nil
 end
 
 function GridUI:handle_row6(x)
@@ -728,14 +737,14 @@ function GridUI:handle_row6(x)
   -- FM algorithm is a global param, no longer a grid page).
   -- if x == ROW6_KB_COL then self:enter_kb_mode(); return end
   local LATCH = {[ROW6_PERF_COL] = 'perfMode', [ROW6_PROB_COL] = 'probMode',
-                 [ROW6_OP_COL] = 'opMode'}
+                 [ROW6_QNT_COL] = 'qntMode', [ROW6_OP_COL] = 'opMode'}
   if LATCH[x] then
     local was = self[LATCH[x]]
     self:_clear_latches()
     self[LATCH[x]] = not was
     self:render_all(); return
   end
-  if x == ROW6_QNT_COL then self:open_scale_picker(); return end
+  if x == ROW6_SCALE_COL then self:open_scale_picker(); return end
 
   if self.actionMode and x < 6 then
     self:_focus(x)
@@ -876,20 +885,12 @@ function GridUI:render_scale_picker()
   for x, semi in pairs(KB_WHITE_COL) do
     self.g:set_led(x, ROOT_WHITE_ROW, semi == root and 15 or 3)
   end
-
-  -- quantize: 8x4 block on the right
-  local curq = self.engine.quantize
-  for r = 0, QNT_H - 1 do
-    for c = 0, QNT_W - 1 do
-      local idx = r * QNT_W + c + 1
-      self.g:set_led(QNT_COL0 + c, QNT_ROW0 + r, QUANTIZE_VALUES[idx] == curq and 15 or 3)
-    end
-  end
 end
 
 function GridUI:render_channel_row(ch)
   if self.probMode then self:render_prob_row(ch); return end
   if self.perfMode then self:render_perf_row(ch); return end
+  if self.qntMode then self:render_qnt_row(ch); return end
   if self.opMode then self:render_op_row(ch); return end
   local running = self.engine:is_running(ch + 1)
   -- two lanes side by side: left half (cols 0..SEQ_LEN-1) then right half
@@ -967,13 +968,32 @@ function GridUI:render_perf_row(ch)
   for i = 1, #RESET_INTERVALS do
     self.g:set_led(RESET_COLS[i], ch, RESET_INTERVALS[i] == c.resetInterval and 15 or 3)
   end
-  for i = 1, #OCTAVE_VALUES do
-    -- center (0) sits a touch brighter so the no-shift column reads as home
-    local base = OCTAVE_VALUES[i] == 0 and 5 or 3
-    self.g:set_led(OCTAVE_COLS[i], ch, OCTAVE_VALUES[i] == c.octave and 15 or base)
+  self:render_scaled_row(ch, OCTAVE_VALUES, OCTAVE_COLS, c.octave)
+  self:render_scaled_row(ch, RATE_VALUES, RATE_COLS, c.rate)
+end
+
+-- QNT page: the channel's quantize grid as one selector across cols 0..7
+-- (the curated 1/3..1/32 set). Brightness scales with the value's index so the
+-- coarse-to-fine ordering reads at a glance; selected cell is full-bright.
+function GridUI:render_qnt_row(ch)
+  local c = self:chan(ch)
+  for x = 0, GRID_W - 1 do self.g:set_led(x, ch, 0); self.g:set_strobe(x, ch, 'off') end
+  local sel = nearest_index(QUANTIZE_VALUES, c.quantize)
+  for i = 1, #QUANTIZE_VALUES do
+    self.g:set_led(QUANTIZE_COLS[i], ch, i == sel and 15 or 3)
   end
-  for i = 1, #RATE_VALUES do
-    self.g:set_led(RATE_COLS[i], ch, RATE_VALUES[i] == c.rate and 15 or 3)
+end
+
+-- Light a 5-cell selector where the lit cell's brightness scales with its
+-- distance from the centre (default) value: the home column reads dim and the
+-- selection brightens as it moves toward either extreme, so the offset amount
+-- shows at a glance. Unselected cells stay at a low base.
+function GridUI:render_scaled_row(ch, values, cols, cur)
+  local center = math.ceil(#values / 2)
+  for i = 1, #values do
+    local b = 3
+    if values[i] == cur then b = clamp(4 + math.abs(i - center) * 5, 4, 14) end
+    self.g:set_led(cols[i], ch, b)
   end
 end
 
@@ -983,12 +1003,12 @@ function GridUI:render_action_mode()
     self.g:set_led(x, 6, 10)
     self.g:set_strobe(x, 6, (mark_running and self.engine:is_running(x + 1)) and 'slow' or 'off')
   end
-  for x = 6, 11 do self.g:set_led(x, 6, 0) end
+  for x = 6, 10 do self.g:set_led(x, 6, 0) end
   self.g:set_led(ROW6_OP_COL, 6, 8)
   self.g:set_led(ROW6_PERF_COL, 6, 8)
   self.g:set_led(ROW6_PROB_COL, 6, 8)
+  self.g:set_led(ROW6_SCALE_COL, 6, 8)
   self.g:set_led(ROW6_QNT_COL, 6, 8)
-  self.g:set_led(15, 6, 0)  -- reclaimed SND slot stays dark
 end
 
 function GridUI:render_row6()
@@ -999,17 +1019,17 @@ function GridUI:render_row6()
       self.g:set_led(x, 6, self.engine:is_running(x + 1) and 15 or 4)
       self.g:set_strobe(x, 6, 'off')
     end
-    for x = 6, 11 do self.g:set_led(x, 6, 0) end
+    for x = 6, 10 do self.g:set_led(x, 6, 0) end
   end
   self.g:set_led(ROW6_PERF_COL, 6, self.perfMode and 15 or 8)
   self.g:set_strobe(ROW6_PERF_COL, 6, self.perfMode and 'fast' or 'off')
   self.g:set_led(ROW6_PROB_COL, 6, self.probMode and 15 or 8)
   self.g:set_strobe(ROW6_PROB_COL, 6, self.probMode and 'fast' or 'off')
   local scale_open = self.picker and self.picker.kind == 'scale'
-  self.g:set_led(ROW6_QNT_COL, 6, scale_open and 15 or 8)
-  self.g:set_strobe(ROW6_QNT_COL, 6, scale_open and 'fast' or 'off')
-  self.g:set_led(15, 6, 0)  -- reclaimed SND slot stays dark
-  self.g:set_strobe(15, 6, 'off')
+  self.g:set_led(ROW6_SCALE_COL, 6, scale_open and 15 or 8)
+  self.g:set_strobe(ROW6_SCALE_COL, 6, scale_open and 'fast' or 'off')
+  self.g:set_led(ROW6_QNT_COL, 6, self.qntMode and 15 or 8)
+  self.g:set_strobe(ROW6_QNT_COL, 6, self.qntMode and 'fast' or 'off')
   self.g:set_led(ROW6_OP_COL, 6, self.opMode and 15 or 8)
   self.g:set_strobe(ROW6_OP_COL, 6, self.opMode and 'fast' or 'off')
 end
@@ -1200,6 +1220,7 @@ function GridUI:current_page()
   if self.picker and self.picker.kind == 'scalar' then return 'OP' end
   if self.perfMode then return 'PERF' end
   if self.probMode then return 'PROB' end
+  if self.qntMode then return 'QNT' end
   if self.opMode then return 'OP' end
   if self.actionMode then return string.upper(self.actionMode) end
   return 'MAIN'
@@ -1215,6 +1236,8 @@ function GridUI:_status()
     s = 'PERF — cols0-3 reset, cols5-9 oct, cols11-15 rate'
   elseif self.probMode then
     s = 'PROB — cols0-1 note trig, 11-14 prob%, 15 burst/hit'
+  elseif self.qntMode then
+    s = 'QNT — cols0-7 per-channel quantize (1/3..1/32)'
   elseif self.opMode then
     s = 'OP — cols0-3 op ratio, cols8-11 op level'
   elseif self.actionMode then
@@ -1231,7 +1254,7 @@ function GridUI:_status()
     s = 'edit ch' .. (self.picker.ch + 1) .. ' step ' .. self.picker.col .. ' ' ..
         pp .. (self.picker.layer == 'B' and 'B' or '') .. '=' .. tostring(v)
   elseif self.picker and self.picker.kind == 'scale' then
-    s = 'scale: row0 preset, rows1-2 keys, rows3-4 qnt (' .. self.engine.quantize .. ')'
+    s = 'scale: row0 preset, rows1-2 keys, rows4-5 root'
   else
     local pr = PAIR_OF[self.selectedParam]
     s = pr and ('edit ' .. pr[1] .. ' | ' .. pr[2])

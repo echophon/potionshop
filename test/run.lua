@@ -65,6 +65,10 @@ check('as_seq passes sequins through', seqx.as_seq(s) == s)
 
 -- ---- burst: geode math ------------------------------------------------
 local Burst = require 'burst'
+-- quantize is per-channel now; set every channel's grid at once (tests that want
+-- deterministic timing use q=0 to disable snapping, which the curated picker set
+-- never exposes but the snap math still honours).
+local function set_quant(e, val) for i = 1, Burst.NUM_CHANNELS do e.channels[i].quantize = val end end
 print('burst geode math:')
 check('geode_mod neutral run=0.5 -> 1.0', approx(Burst.geode_mod(1, 0.5, 0, 8), 1.0))
 check('geode_mod transient r=1 i=0 -> 1.0', approx(Burst.geode_mod(1, 1.0, 0, 10), 1.0))
@@ -187,7 +191,7 @@ check('stop halts the channel', eng3:is_running(2) == false)
 -- one beat per step, so fires land two beats apart (hit, rest, hit, ...).
 clock._reset()
 local erst = Burst.new()
-erst.quantize = 0
+set_quant(erst, 0)
 erst.channels[1].div  = seqx.new{4}
 erst.channels[1].reps = seqx.new{1, 0}
 erst.channels[1].note = seqx.new{0}
@@ -208,7 +212,7 @@ erst:stop(1)
 local function alt_trig_freqs(mode)
   clock._reset()
   local e = Burst.new()
-  e.quantize = 0
+  set_quant(e, 0)
   local f = {}
   e:on(function(ev) if ev.type == 'fire' then f[#f + 1] = ev.freq end end)
   e.channels[1].div   = seqx.new{4}
@@ -239,7 +243,7 @@ local function first_trig()
   local cap
   engine = { trig = function(...) cap = cap or {...} end }
   local e = Burst.new()
-  e.quantize = 0
+  set_quant(e, 0)
   e.channels[1].div = seqx.new{4}
   e.channels[1].reps = seqx.new{1}
   e.channels[1].opRatio1 = 0.5
@@ -266,7 +270,7 @@ local function env_trig(attack_n, decay_n)
   local cap
   engine = { trig = function(...) cap = cap or {...} end }
   local e = Burst.new()
-  e.quantize = 0
+  set_quant(e, 0)
   e.channels[1].div = seqx.new{4}
   e.channels[1].reps = seqx.new{1}
   e.channels[1].attack = seqx.new{attack_n}
@@ -291,7 +295,7 @@ local function mod_env_trig(modatk_n, moddec_n)
   local cap
   engine = { trig = function(...) cap = cap or {...} end }
   local e = Burst.new()
-  e.quantize = 0
+  set_quant(e, 0)
   e.channels[1].div = seqx.new{4}
   e.channels[1].reps = seqx.new{1}
   e.channels[1].modatk = seqx.new{modatk_n}
@@ -319,7 +323,7 @@ local function amp_decay_for_div(divv)
   local cap
   engine = { trig = function(...) cap = cap or {...} end }
   local e = Burst.new()
-  e.quantize = 0
+  set_quant(e, 0)
   e.channels[1].div = seqx.new{divv}
   e.channels[1].reps = seqx.new{1}
   e:launch(1)
@@ -338,7 +342,7 @@ local function algo_trig(algo)
   local cap
   engine = { trig = function(...) cap = cap or {...} end }
   local e = Burst.new()
-  e.quantize = 0
+  set_quant(e, 0)
   e.channels[1].div = seqx.new{4}
   e.channels[1].reps = seqx.new{1}
   e.algo = algo
@@ -357,7 +361,7 @@ local function chan_arg(ch)
   local cap
   engine = { trig = function(...) cap = cap or {...} end }
   local e = Burst.new()
-  e.quantize = 0
+  set_quant(e, 0)
   e.channels[ch].div = seqx.new{4}
   e.channels[ch].reps = seqx.new{1}
   e:launch(ch)
@@ -377,7 +381,7 @@ local function macro_trig(setup)
   local cap
   engine = { trig = function(...) cap = cap or {...} end }
   local e = Burst.new()
-  e.quantize = 0
+  set_quant(e, 0)
   e.channels[1].div = seqx.new{4}
   e.channels[1].reps = seqx.new{1}
   if setup then setup(e) end
@@ -414,7 +418,7 @@ check('per-channel op levels feed trig args 15-18',
 -- clock.get_beats() inside the listener = the actual (snapped) firing instant.
 clock._reset()
 local eqn = Burst.new()
-eqn.quantize = 4
+set_quant(eqn, 4)
 eqn.channels[1].div  = seqx.new{3}    -- natural spacing 4/3 ≈ 1.333 beats
 eqn.channels[1].reps = seqx.new{1, 1} -- loops (2+ steps): one hit per burst
 eqn.channels[1].note = seqx.new{0}
@@ -431,7 +435,7 @@ eqn:stop(1)
 -- and with quantize disabled, the same triplet fires at its natural 4/3 spacing
 clock._reset()
 local eqd = Burst.new()
-eqd.quantize = 0
+set_quant(eqd, 0)
 eqd.channels[1].div  = seqx.new{3}
 eqd.channels[1].reps = seqx.new{1, 1}
 eqd.channels[1].note = seqx.new{0}
@@ -448,7 +452,7 @@ eqd:stop(1)
 -- paste + reset-to-1-bar use case.
 clock._reset()
 local erb = Burst.new()
-erb.quantize = 0
+set_quant(erb, 0)
 for _, ch in ipairs({1, 2}) do
   erb.channels[ch].div  = seqx.new{3}    -- 4/3-beat spacing: won't self-align
   erb.channels[ch].reps = seqx.new{1, 1}
@@ -830,7 +834,8 @@ sui.sel_line[3] = 3
 sui:enc(3, 1)
 check('rate E3 lands in RATE_VALUES', in_set(seng.channels[1].rate, GridUI.RATE_VALUES))
 
--- scale page: E2 walks root -> 12 keys -> quantize; E3 edits each
+-- scale page: E2 walks root -> 12 keys; E3 edits each (quantize is per-channel
+-- now, on the perf page below — no longer a scale-page stop)
 sui:set_page(5)
 seng.root = 0
 sui.sel_line[5] = 1            -- root
@@ -844,14 +849,19 @@ sui:enc(3, 1)
 check('scale E3 right adds a key to the mask', in_set(2, seng.scale) and #seng.scale == 4)
 sui:enc(3, -1)
 check('scale E3 left removes the key', not in_set(2, seng.scale) and #seng.scale == 3)
-sui.sel_line[5] = 14  -- quantize stop (last line: root + 12 keys + quantize)
-seng.quantize = 8
-sui:enc(3, 4)
-check('scale E3 steps quantize, clamped 1..32', seng.quantize == 12)
+
+-- perf page: per-channel quantize on line 4, stepping the curated set
+sui:set_page(3)
+seng.channels[1].quantize = 8
+sui.sel_line[3] = 4
+sui:enc(3, 1)
+check('perf E3 steps quantize up the curated set', seng.channels[1].quantize == 12)
+check('perf quantize lands in QUANTIZE_VALUES', in_set(seng.channels[1].quantize, GridUI.QUANTIZE_VALUES))
+
 -- restore musical state the fire tests below assume (unshifted c1, major)
 seng.root = 0
 seng.scale = scales.by_name.major
-seng.quantize = 32
+set_quant(seng, 32)
 
 -- fire reactivity: ghost note recorded, dirty set, tick repaints + clears
 sui:set_page(1)
@@ -1199,11 +1209,13 @@ for _, p in ipairs(GridUI.PARAMS) do
 end
 check('randomize trigger reflects all sequences exactly', rt_ok)
 
--- grid quantize edit reflects into the global param
-pctl:press(14, 6)  -- scale picker
-pctl:press(15, 1)  -- quantize block row 0, col 7 -> QUANTIZE_VALUES[8] = 8
-check('grid quantize edit reflects to param', fake:get('quantize') == 8)
-pctl:press(14, 6)  -- close picker
+-- grid QNT page edit reflects into the per-channel param
+pctl:press(15, 6)  -- enter the per-channel QNT page
+pctl:press(5, 0)   -- ch1 row, col 5 -> QUANTIZE_VALUES[6] = 16
+check('grid quantize edit sets the channel value', peng.channels[1].quantize == 16)
+check('grid quantize edit reflects to chN_quantize param',
+  fake:get('ch1_quantize') == GridUI.nearest_index(GridUI.QUANTIZE_VALUES, 16))
+pctl:press(15, 6)  -- leave the QNT page
 
 -- keymask: the note mask is viewed/edited/stored like a sequence string
 check('mask_to_text renders pitch-class names',

@@ -3,12 +3,12 @@
 -- PSETs, MIDI mapping) and keeps them bidirectionally in sync with the grid
 -- and screen surfaces.
 --
--- Layout: a global block (scale / root / quantize), a VOICE group of engine-wide
+-- Layout: a global block (scale / root), a VOICE group of engine-wide
 -- FM timbre macros (FM algorithm / env mode / geode / mod index / amp punch /
 -- fm feedback / fm drive),
 -- the OUTPUTS group (lib/outputs.lua), plus one group per
 -- channel ("CHANNEL 1".."CHANNEL 6"). Each group holds the channel scalars
--- (run, rate, prob, alt trig, reset, per-op ratios/levels, clear/copy/paste + action
+-- (run, rate, quantize, prob, alt trig, reset, per-op ratios/levels, clear/copy/paste + action
 -- triggers) and, per sequence parameter x layer (div/reps/note/level/attack/decay/
 -- modatk/moddec x A/B, where div/reps, attack/decay and modatk/moddec are A-only),
 -- a 3-param block:
@@ -47,6 +47,10 @@ local SPV        = GridUI.STEP_PICKER_VALUES
 local MAX_STEPS  = GridUI.SEQ_LEN  -- 8-step cap, shared with grid/screen
 
 local RATE_NAMES = {'0.25x', '0.5x', '1x', '2x', '4x'}
+-- curated per-channel quantize labels (mirror GridUI.QUANTIZE_VALUES order),
+-- shown as "1/N" since the value is events per whole note
+local QUANTIZE_NAMES = {}
+for i, q in ipairs(GridUI.QUANTIZE_VALUES) do QUANTIZE_NAMES[i] = '1/' .. q end
 local RESET_NAMES = {}
 for i, v in ipairs(GridUI.RESET_INTERVALS) do
   RESET_NAMES[i] = (v == 0) and 'off' or (v .. (v == 1 and ' bar' or ' bars'))
@@ -246,8 +250,8 @@ function M:add_globals()
     self:request_render()
   end)
 
-  params:add_number('quantize', 'quantize (per whole note)', 1, 32, clamp(eng.quantize, 1, 32))
-  params:set_action('quantize', function(v) eng.quantize = v; self:request_render() end)
+  -- quantize is per-channel now (chN_quantize, added in the channel loop below) —
+  -- the old global 'quantize' param is gone.
 
   -- VOICE: engine-wide FM timbre macros. Global (not per-channel) since the
   -- non-audio output types can't render them; these are the actual values the SC
@@ -314,6 +318,14 @@ function M:_add_channel_params(n)
       GridUI.nearest_index(GridUI.RATE_VALUES, c.rate))
     params:set_action(id('rate'), function(i)
       c.rate = GridUI.RATE_VALUES[i]
+      self:request_render()
+    end)
+  end)
+  def(1, function()
+    params:add_option(id('quantize'), 'quantize', QUANTIZE_NAMES,
+      GridUI.nearest_index(GridUI.QUANTIZE_VALUES, c.quantize))
+    params:set_action(id('quantize'), function(i)
+      c.quantize = GridUI.QUANTIZE_VALUES[i]
       self:request_render()
     end)
   end)
@@ -530,6 +542,7 @@ function M:reflect_scalars(n)
   if not params:lookup_param(id('run')) then return end
   params:set(id('run'), self.engine:is_running(n) and 1 or 0, true)
   params:set(id('rate'), GridUI.nearest_index(GridUI.RATE_VALUES, c.rate), true)
+  params:set(id('quantize'), GridUI.nearest_index(GridUI.QUANTIZE_VALUES, c.quantize), true)
   params:set(id('prob'), GridUI.nearest_index(GridUI.PROB_VALUES, c.burstProb), true)
   params:set(id('prob_mode'), c.probHit and 2 or 1, true)
   params:set(id('alt_trig'), c.altTrig + 1, true)
@@ -552,7 +565,6 @@ function M:reflect_globals()
   params:set('algorithm', clamp(self.engine.algo, 1, #GridUI.ALGO_NAMES), true)
   params:set('env_mode', clamp(self.engine.envMode + 1, 1, #GridUI.ENV_MODE_NAMES), true)
   params:set('geode', clamp(self.engine.geodeMode + 1, 1, #GridUI.GEODE_MODE_NAMES), true)
-  params:set('quantize', clamp(self.engine.quantize, 1, 32), true)
   params:set('root', clamp((self.engine.root or 0) + 1, 1, 12), true)
   if params:lookup_param('keymask') then
     params:set('keymask', M.mask_to_text(self.engine.scale), true)

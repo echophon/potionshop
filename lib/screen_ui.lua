@@ -27,12 +27,13 @@
 -- offset) layer, snapping to the same extended value set params_sync uses
 -- (literal 0 = no offset, plus the picker grid); `perf` / `prob` edit
 -- the selected channel's mode fields — the same fields the grid's perfMode/
--- probMode presses set, picking only from GridUI's shared value
--- tables; `scale` edits the global musical state (root, key mask, quantize)
--- the grid's scale picker drives — its E2 cursor walks root, the twelve
--- chromatic keys, then quantize, and E3 sets/toggles via the controller's
--- set_root / set_mask / set_quantize. The grid's PERF/PROB/QNT buttons
--- still switch the matching pages (QNT opens the shared scale picker); the
+-- probMode presses set, picking only from GridUI's shared value tables. The
+-- screen's perf page also carries the per-channel quantize (the grid keeps that
+-- on its own QNT page). `scale` edits the global musical state (root, key mask)
+-- the grid's scale picker drives — its E2 cursor walks root and the twelve
+-- chromatic keys, and E3 sets/toggles via the controller's set_root / set_mask.
+-- The grid's PERF/PROB/SCALE/QNT buttons switch the matching pages (SCALE opens
+-- the shared scale picker; the grid QNT page maps to the screen's perf tab); the
 -- screen tab follows, and main/alt drive the grid's paramLayer.
 --
 -- Redraw model: state changes set `dirty`; the host calls tick() at ~15 Hz
@@ -53,8 +54,10 @@ for _, p in ipairs(PARAMS) do if GridUI.has_b(p) then B_PARAMS[#B_PARAMS + 1] = 
 -- map onto the same pages (see _sync_page_from_grid).
 local PAGES  = {'main', 'alt', 'perf', 'prob', 'scale', 'op'}
 -- main line 1 = run + all params; alt line 1 = run + the B-capable params.
--- scale = root + 12 chromatic keys + quantize = 14 stops. op = r1..r4 + 4 levels.
-local LINES_PER_PAGE = {1 + #PARAMS, 1 + #B_PARAMS, 3, 3, 14, 8}
+-- scale = root + 12 chromatic keys = 13 stops. op = r1..r4 + 4 levels.
+-- PERF now carries 4 lines (reset/oct/rate/quantize); the scale page dropped its
+-- quantize line (now per-channel) so it's root + 12 keys = 13.
+local LINES_PER_PAGE = {1 + #PARAMS, 1 + #B_PARAMS, 4, 3, 13, 8}
 local PAGE_PERF, PAGE_PROB, PAGE_SCALE, PAGE_OP = 3, 4, 5, 6
 
 local NOTE_NAMES = {'c','c#','d','d#','e','f','f#','g','g#','a','a#','b'}
@@ -242,6 +245,9 @@ function Screen:set_page(p)
   self.page = ((p - 1) % #PAGES) + 1
   local c = self.ctl
   c.kbMode = false; c.actionMode = nil
+  -- the screen has no QNT tab (quantize sits on its PERF page); always clear the
+  -- grid's qntMode here so only one grid page is ever latched.
+  c.qntMode   = false
   c.perfMode  = (self.page == PAGE_PERF)
   c.probMode  = (self.page == PAGE_PROB)
   c.opMode    = (self.page == PAGE_OP)
@@ -269,6 +275,9 @@ function Screen:_sync_page_from_grid()
   local c = self.ctl
   self.page = (c.picker and c.picker.kind == 'scale') and PAGE_SCALE
     or c.perfMode and PAGE_PERF or c.probMode and PAGE_PROB
+    -- grid QNT page has no screen tab of its own; quantize lives on the screen's
+    -- PERF page, so follow the grid there.
+    or c.qntMode and PAGE_PERF
     or c.opMode and PAGE_OP
     or ((c.paramLayer == 'B') and 2 or 1)
 end
@@ -322,17 +331,16 @@ function Screen:_edit_value(d)
 end
 
 -- Scale page cursor: line 1 = root, lines 2..13 = the twelve chromatic keys
--- (pitch class = line - 2), line 14 = quantize. E3 turns right/left to raise or
--- lower root/quantize; on a key, right adds it to the mask, left removes it
--- (mirroring the run line's right=on / left=off feel). All edits route through
--- the controller's global setters so on_edit reflects them into the params.
+-- (pitch class = line - 2). E3 turns right/left to raise or lower the root; on a
+-- key, right adds it to the mask, left removes it (mirroring the run line's
+-- right=on / left=off feel). All edits route through the controller's global
+-- setters so on_edit reflects them into the params. (quantize is per-channel now
+-- — it lives on the perf page, not here.)
 function Screen:_edit_scale(d)
   local c = self.ctl
   local line = self.sel_line[PAGE_SCALE]
   if line == 1 then
     c:set_root(((self.engine.root or 0) + d) % 12)
-  elseif line == LINES_PER_PAGE[PAGE_SCALE] then
-    c:set_quantize(self.engine.quantize + d)
   else
     local pc = line - 2
     local cur, has = {}, false
@@ -438,8 +446,10 @@ function Screen:_edit_perf(d)
     self.ctl:set_scalar(ch, 'resetInterval', step_table(c.resetInterval, GridUI.RESET_INTERVALS, d))
   elseif line == 2 then
     self.ctl:set_scalar(ch, 'octave', step_table(c.octave, GridUI.OCTAVE_VALUES, d))
-  else
+  elseif line == 3 then
     self.ctl:set_scalar(ch, 'rate', step_table(c.rate, GridUI.RATE_VALUES, d))
+  else
+    self.ctl:set_scalar(ch, 'quantize', step_table(c.quantize, GridUI.QUANTIZE_VALUES, d))
   end
 end
 
@@ -610,6 +620,7 @@ function Screen:page_lines()
       {'reset', iv == 0 and 'off' or (iv .. (iv == 1 and ' bar' or ' bars'))},
       {'oct',   (c.octave > 0 and '+' or '') .. c.octave},
       {'rate',  fmt_rate(c.rate)},
+      {'qnt',   '1/' .. c.quantize},
     }
   end
   -- single-value lines: the whole value is the focused token
@@ -717,10 +728,10 @@ function Screen:_draw_mini_kb(yb, lit, cursor_pc)
 end
 
 -- Scale page: shown while the grid's scale picker is open. Displays — and, via
--- E2/E3, edits — the three global musical params the picker drives: root (its
--- own single-select keyboard, mirroring the grid), key mask (a membership
--- keyboard), and quantize. The E2 cursor ticks above the focused key dot, or
--- underlines the root/quantize labels.
+-- E2/E3, edits — the two global musical params the picker drives: root (its own
+-- single-select keyboard, mirroring the grid) and key mask (a membership
+-- keyboard). The E2 cursor ticks above the focused key dot, or underlines the
+-- root label. (quantize moved to the per-channel perf page.)
 function Screen:draw_scale_lines()
   local root = (self.engine.root or 0) % 12
   local cursor = self.sel_line[PAGE_SCALE]
@@ -742,8 +753,6 @@ function Screen:draw_scale_lines()
   self:_draw_mini_kb(31, function(pc) return on[pc] end,
     (cursor >= 2 and cursor <= 13) and (cursor - 2) or nil)
   label(35, false, 'keys')
-
-  label(47, cursor == LINES_PER_PAGE[PAGE_SCALE], 'qnt ' .. tostring(self.engine.quantize))
 end
 
 function Screen:draw_status()

@@ -5,10 +5,12 @@
 -- a `clock.run` coroutine that pulls the next value from each sequins per burst,
 -- waits until the (quantized) target beat via `clock.sleep`, fires, and advances.
 --
--- Quantization: every event's target beat is snapped FORWARD to the global
--- quantize grid (`quantize.snap_beat`) before sleeping, so all channels lock to
--- a shared sub-beat grid regardless of each channel's division — exactly the web
--- behaviour. quantize = 0 disables snapping.
+-- Quantization: every event's target beat is snapped FORWARD to that channel's
+-- own quantize grid (`quantize.snap_beat`, channels[ch].quantize from
+-- QUANTIZE_VALUES) before sleeping, so each channel locks to its chosen sub-beat
+-- grid regardless of its division. (This was a single global grid in the web app;
+-- it is now per-channel.) quantize = 0 would disable snapping, but the curated
+-- set has no 0 — every channel always snaps.
 --
 -- Cancellation uses a per-channel token (bumped on launch/stop) AND
 -- clock.cancel, mirroring the web's token check so a stale coroutine exits at
@@ -27,6 +29,13 @@ Burst.NUM_CHANNELS = NUM_CHANNELS
 -- Rhythmically meaningful divisors for randomize/mutate (matches src/burst.ts).
 local MUSICAL_DIVS = {2, 3, 4, 6, 8, 12, 16}
 Burst.MUSICAL_DIVS = MUSICAL_DIVS
+
+-- Curated per-channel quantize grids (events per whole note): the firing instant
+-- snaps forward to the next 1/N point before each hit (see wait_until_beat). A
+-- small musical set rather than the old continuous 1..32, so it fits a per-channel
+-- grid page and reads cleanly. Mirrors GridUI.QUANTIZE_VALUES — keep in sync.
+local QUANTIZE_VALUES = {3, 4, 6, 8, 12, 16, 24, 32}
+Burst.QUANTIZE_VALUES = QUANTIZE_VALUES
 
 -- Curated per-operator FM ratios (op1 default 1.0 = fundamental, now editable
 -- like op2/3/4 — randomize/mutate still leave op1 at 1.0 as a pitch anchor), 32 values.
@@ -160,6 +169,7 @@ local function default_channel()
     probHit = false,
     resetInterval = 0,
     rate = 1,
+    quantize = 16,  -- per-channel event snap grid (events per whole note), from QUANTIZE_VALUES
     octave = 0,     -- -2..2, whole-octave pitch shift (perf page)
     altTrig = 0,    -- alt(B) note layering: 0=hold (add&hold) 1=step (per-hit)
   }
@@ -168,7 +178,7 @@ end
 function Burst.new()
   local self = setmetatable({}, Burst)
   self.launchGrid = 4   -- launches snap to the next quarter-note boundary
-  self.quantize = 16    -- global event snap grid (events per whole note); 0 = off
+  -- (event snap grid is per-channel now: channels[ch].quantize, from QUANTIZE_VALUES)
   self.scale = scales.by_name.major
   self.root = 0         -- tonic transposition in semitones (0..11; 0 = C)
   self.channels = {}
@@ -295,10 +305,11 @@ end
 -- ---- scheduling (clock coroutines) -------------------------------------
 
 -- Wait until absolute beat `target`, snapping forward to the next quantize
--- grid point. Tempo is preserved: target progresses at the natural rate; the
--- snap only nudges the firing instant. (Direct port of clock.ts waitUntilBeat.)
-function Burst:wait_until_beat(target)
-  local fire = quantize.snap_beat(target, self.quantize)
+-- grid point. `q` is the firing channel's per-channel quantize (events per whole
+-- note); tempo is preserved — target progresses at the natural rate, the snap
+-- only nudges the firing instant. (Direct port of clock.ts waitUntilBeat.)
+function Burst:wait_until_beat(target, q)
+  local fire = quantize.snap_beat(target, q)
   local wait_secs = (fire - get_beats()) * (60 / get_tempo())
   if wait_secs > 0 then clock.sleep(wait_secs) end
 end
@@ -356,7 +367,7 @@ function Burst:run_burst(ch, token, target_in)
     -- probability (random). Not subject to the probability gate below.
     if Burst.reps_is_rest(reps) then
       target = target + Burst.reps_rest_len(reps) * (4 / div) / c.rate
-      self:wait_until_beat(target)
+      self:wait_until_beat(target, c.quantize)
       if self.tokens[ch] ~= token then return nil end
       return { reps = reps, div = div, target = target }
     end
@@ -366,7 +377,7 @@ function Burst:run_burst(ch, token, target_in)
     -- burst-mode probability gate: skip the whole burst, advance time once.
     if (not c.probHit) and math.random() > c.burstProb then
       target = target + total * (4 / div) / c.rate
-      self:wait_until_beat(target)
+      self:wait_until_beat(target, c.quantize)
       if self.tokens[ch] ~= token then return nil end
       return { reps = reps, div = div, target = target }
     end
@@ -381,7 +392,7 @@ function Burst:run_burst(ch, token, target_in)
         restarted = true
         break
       end
-      self:wait_until_beat(target)
+      self:wait_until_beat(target, c.quantize)
       if self.tokens[ch] ~= token then return nil end
 
       -- ALT-TRIG STEP MODE: when c.altTrig == 1 the alt (B) pitch layer
