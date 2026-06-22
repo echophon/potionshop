@@ -73,6 +73,12 @@ check('geode_mod cycle neutral -> 1.0', approx(Burst.geode_mod(3, 0.5, 3, 8), 1.
 check('level_for_hit no geode passes level through', approx(Burst.burst_level_for_hit(0.5, 0, 0, 0, 8), 0.5))
 check('level_for_hit geode clamps to 0.7', approx(Burst.burst_level_for_hit(1.0, 1, 0, 0, 10), 0.7))
 
+-- reps rest encoding: positive = hits, <=0 = rest of (1-reps) div-steps
+check('reps 3 is not a rest', Burst.reps_is_rest(3) == false)
+check('reps 0 is a rest of 1 step', Burst.reps_is_rest(0) and Burst.reps_rest_len(0) == 1)
+check('reps -1 is a rest of 2 steps', Burst.reps_is_rest(-1) and Burst.reps_rest_len(-1) == 2)
+check('reps -3 is a rest of 4 steps', Burst.reps_is_rest(-3) and Burst.reps_rest_len(-3) == 4)
+
 -- ---- burst: randomize grid-alignment ----------------------------------
 print('burst randomize (grid-reachable values):')
 math.randomseed(1)
@@ -175,6 +181,25 @@ check('looping kept firing across bursts', n > 6)
 check('looping still running', eng3:is_running(2) == true)
 eng3:stop(2)
 check('stop halts the channel', eng3:is_running(2) == false)
+
+-- rest: reps <= 0 fires nothing but still consumes its slot, so the rhythm holds.
+-- reps {1, 0} = hit then a one-step rest, looping (2 steps). div 4 + rate 1 =>
+-- one beat per step, so fires land two beats apart (hit, rest, hit, ...).
+clock._reset()
+local erst = Burst.new()
+erst.quantize = 0
+erst.channels[1].div  = seqx.new{4}
+erst.channels[1].reps = seqx.new{1, 0}
+erst.channels[1].note = seqx.new{0}
+local rbeats = {}
+erst:on(function(ev) if ev.type == 'fire' then rbeats[#rbeats + 1] = clock.get_beats() end end)
+erst:launch(1)
+clock._run_until(8)
+check('rest channel keeps looping (2-step reps)', erst:is_running(1) == true)
+check('rest fired the hit steps only', #rbeats >= 4 and #rbeats <= 5)
+check('rest spaces fires two beats apart', approx(rbeats[2] - rbeats[1], 2)
+  and approx(rbeats[3] - rbeats[2], 2))
+erst:stop(1)
 
 -- alt-trig: 'hold' draws the B note once per burst (every hit shares it);
 -- 'step' advances the B note sequins per hit so the alt layer arpeggiates.
@@ -391,7 +416,7 @@ clock._reset()
 local eqn = Burst.new()
 eqn.quantize = 4
 eqn.channels[1].div  = seqx.new{3}    -- natural spacing 4/3 ≈ 1.333 beats
-eqn.channels[1].reps = seqx.new{-1}   -- infinite
+eqn.channels[1].reps = seqx.new{1, 1} -- loops (2+ steps): one hit per burst
 eqn.channels[1].note = seqx.new{0}
 local fired_at = {}
 eqn:on(function(ev) if ev.type == 'fire' then fired_at[#fired_at + 1] = clock.get_beats() end end)
@@ -408,7 +433,7 @@ clock._reset()
 local eqd = Burst.new()
 eqd.quantize = 0
 eqd.channels[1].div  = seqx.new{3}
-eqd.channels[1].reps = seqx.new{-1}
+eqd.channels[1].reps = seqx.new{1, 1}
 eqd.channels[1].note = seqx.new{0}
 local nat = {}
 eqd:on(function(ev) if ev.type == 'fire' then nat[#nat + 1] = clock.get_beats() end end)
@@ -426,7 +451,7 @@ local erb = Burst.new()
 erb.quantize = 0
 for _, ch in ipairs({1, 2}) do
   erb.channels[ch].div  = seqx.new{3}    -- 4/3-beat spacing: won't self-align
-  erb.channels[ch].reps = seqx.new{-1}
+  erb.channels[ch].reps = seqx.new{1, 1}
   erb.channels[ch].note = seqx.new{0}
 end
 local efb = {{}, {}}
@@ -474,9 +499,10 @@ print('grid_ui controller:')
 local function mock_grid()
   return {
     leds = {},
+    strobes = {},
     set_led = function(self, x, y, b) self.leds[y * 16 + x] = b end,
-    set_strobe = function() end,
-    clear = function(self) self.leds = {} end,
+    set_strobe = function(self, x, y, s) self.strobes[y * 16 + x] = (s ~= 'off') and s or nil end,
+    clear = function(self) self.leds = {}; self.strobes = {} end,
     refresh = function() end,
   }
 end
@@ -572,6 +598,17 @@ check('right half targets reps (A)', ctl.picker.param == 'reps' and ctl.picker.l
 ctl:press(5, 6)  -- pick a reps value (reps layout index 6 -> 6)
 check('right-half pick edits reps',
   seqx.values(geng.channels[1].reps)[1] == GridUI.STEP_PICKER_VALUES.reps[6])
+ctl:close_picker()
+
+-- rest cells (reps <= 0) strobe in the picker so they read apart from hit counts.
+-- layout indices 29..32 (values 0,-1,-2,-3) land on picker row 7, cols 12..15.
+geng.channels[1].reps = seqx.new{2}
+ctl:press(8, 0)  -- open the reps A picker
+ctl:render_all()
+check('rest cells strobe in reps picker',
+  mg.strobes[7 * 16 + 12] == 'slow' and mg.strobes[7 * 16 + 15] == 'slow')
+check('hit-count cells do not strobe',
+  mg.strobes[6 * 16 + 0] == nil and mg.strobes[7 * 16 + 0] == nil)
 ctl:close_picker()
 
 -- attack/decay is a second paired page on a SINGLE button (col 3); selecting it
@@ -1095,10 +1132,11 @@ check('op level 0 -> 0.0', approx(peng.channels[1].opLevel3, 0))
 fake:set('ch1_level3', 31)
 check('op level 31 -> 1.0', approx(peng.channels[1].opLevel3, 1))
 
--- reps: 'inf' token <-> -1
-fake:set('ch1_reps_a', '2 inf')
-check('reps inf token parses to -1', seqx.values(peng.channels[1].reps)[2] == -1)
-check('reps -1 formats back to inf', fake:get('ch1_reps_a') == '2 inf')
+-- reps rest tokens: rN <-> reps (1-N), so r1=0, r2=-1, r4=-3
+fake:set('ch1_reps_a', '2 r1 r4')
+check('reps rest tokens parse: r1->0, r4->-3',
+  seqx.values(peng.channels[1].reps)[2] == 0 and seqx.values(peng.channels[1].reps)[3] == -3)
+check('reps rests format back to rN', fake:get('ch1_reps_a') == '2 r1 r4')
 
 -- level/env tokens are 0..31 grid units
 fake:set('ch1_level_a', '31 0')

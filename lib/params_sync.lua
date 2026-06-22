@@ -20,7 +20,7 @@
 -- chN_level1..4 (0..31 grid) are plain per-channel scalars.
 --
 -- String tokens use the display units the grid/screen use: div/note/reps as
--- integers ('inf' for infinite reps), level/attack/decay on the 0..31 grid scale
+-- integers ('rN' for an N-step rest, reps <= 0), level/attack/decay on the 0..31 grid scale
 -- (value = n/31). Parsing snaps
 -- every token to the nearest picker value (the same nearest-index rule
 -- screen_ui edits use), so any menu edit stays grid-reachable.
@@ -99,7 +99,7 @@ end
 
 -- engine value -> display token (the units the grid/screen show).
 function M.fmt_value(p, v)
-  if p == 'reps' and v == -1 then return 'inf' end
+  if p == 'reps' and v <= 0 then return 'r' .. (1 - v) end  -- rest: r1..r4 = 1..4 steps
   if is_level_like(p) then return tostring(round(v * 31)) end
   if p == 'harm' then
     local s = string.format('%.2f', v)
@@ -111,7 +111,10 @@ end
 
 -- display token -> engine value, snapped to the picker grid; nil = invalid.
 function M.parse_token(p, layer, tok)
-  if p == 'reps' and tok == 'inf' then return -1 end
+  if p == 'reps' then
+    local rn = tok:match('^r(%d+)$')  -- rest token r1..rN -> reps 1-N (0,-1,-2,..)
+    if rn then return SPV[p][GridUI.nearest_index(SPV[p], 1 - tonumber(rn))] end
+  end
   local n = tonumber(tok)
   if n == nil then return nil end
   if layer == 'B' and n == 0 then return 0 end

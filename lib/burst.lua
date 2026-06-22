@@ -19,7 +19,6 @@ local scales   = require 'scales'
 local seqx     = require 'seqx'
 
 local NUM_CHANNELS = 6
-local INF = math.huge
 
 local Burst = {}
 Burst.__index = Burst
@@ -90,8 +89,8 @@ function Burst.geode_mod(mode, run, i, total)
   end
 
   if mode == 2 then  -- Sustain: decay with triangle fold/reflect
-    local period = (total == INF) and 8 or math.max(2, total)
-    local idx = (total == INF) and (i % period) or i
+    local period = math.max(2, total)
+    local idx = i
     local t = idx / (period - 1)
     local rate = (r >= 0) and (1 + r * 4) or math.max(0.05, 1 + r)
     local raw = t * rate
@@ -116,6 +115,14 @@ function Burst.burst_level_for_hit(level, geode_mode, env_shape, hit_idx, total)
   if geode_mode ~= 0 or env_shape > 0 then return math.min(0.7, raw) end
   return raw
 end
+
+-- reps encoding: a positive value is that many hits; a value <= 0 is a REST that
+-- fires nothing but still consumes time. The rest spans (1 - reps) div-steps, so
+-- 0 = a one-step rest, -1 = two steps, -2 = three, and so on. Unlike level=0 (a
+-- silent but still-triggered voice) or probability (nondeterministic), a rest is a
+-- deterministic absence of any trigger.
+function Burst.reps_is_rest(reps) return reps <= 0 end
+function Burst.reps_rest_len(reps) return 1 - reps end
 
 -- ---- channel state -----------------------------------------------------
 
@@ -305,8 +312,10 @@ function Burst:run_channel(ch, token, start_beat)
     if r == nil then return end
     target = r.target
     local c = self.channels[ch]
+    -- a single-step reps sequence is one-shot (play once, stop); two or more
+    -- steps loop forever, cycling the sequence. (A rest step is just another step.)
     local reps_len = seqx.len(c.reps)
-    if r.reps ~= -1 and reps_len <= 1 then
+    if reps_len <= 1 then
       if self.tokens[ch] == token then
         self.running[ch] = false
         self.clocks[ch] = nil
@@ -339,11 +348,23 @@ function Burst:run_burst(ch, token, target_in)
     local modatk_n = c.modatk()  -- normalized modulator-env shape (paired, A-only)
     local moddec_n = c.moddec()
     local freq = scales.degree_to_freq(degreeA + degreeB, self.scale, self.root)
-    -- finite bursts clamp to >=1 hit so a 0/negative reps value can't tight-loop.
-    local total = (reps == -1) and INF or math.max(1, reps)
+
+    -- REST: reps <= 0 fires nothing but still consumes (1 - reps) div-steps of
+    -- time so the rhythm holds. We drew all the sequins above (so they advance
+    -- like any burst step), then just wait out the slot and advance. Deterministic
+    -- silence, distinct from level=0 (a triggered-but-silent voice) and from
+    -- probability (random). Not subject to the probability gate below.
+    if Burst.reps_is_rest(reps) then
+      target = target + Burst.reps_rest_len(reps) * (4 / div) / c.rate
+      self:wait_until_beat(target)
+      if self.tokens[ch] ~= token then return nil end
+      return { reps = reps, div = div, target = target }
+    end
+
+    local total = math.max(1, reps)
 
     -- burst-mode probability gate: skip the whole burst, advance time once.
-    if (not c.probHit) and reps ~= -1 and math.random() > c.burstProb then
+    if (not c.probHit) and math.random() > c.burstProb then
       target = target + total * (4 / div) / c.rate
       self:wait_until_beat(target)
       if self.tokens[ch] ~= token then return nil end
@@ -352,7 +373,7 @@ function Burst:run_burst(ch, token, target_in)
 
     local restarted = false
     local i = 0
-    while (total == INF or i < total) and self.tokens[ch] == token do
+    while i < total and self.tokens[ch] == token do
       -- identity check: a live grid edit / relaunch replaced a timing or
       -- position sequins, so restart this burst with the new values now.
       if c.div ~= div_seq or c.reps ~= reps_seq or c.note ~= note_seq
@@ -392,9 +413,9 @@ end
 
 function Burst:fire(ch, beat, freq, level, attack_n, decay_n, modatk_n, moddec_n, div, total, hit_idx)
   local c = self.channels[ch]
-  -- octave shift is applied per hit, not per burst: looping channels
-  -- (reps = -1) never redraw freq, so a burst-start shift would be inaudible
-  -- on them. Shifting here also feeds the final freq to external outputs.
+  -- octave shift is applied per hit, not per burst: a single long burst never
+  -- redraws freq mid-burst, so a burst-start shift would be inaudible across its
+  -- hits. Shifting here also feeds the final freq to external outputs.
   freq = freq * (2 ^ c.octave)
   -- geodeMode is 0-based {transient,sustain,cycle}; geode_mod wants 1/2/3, so +1
   -- at the call site. The amp geode is always on (no 'off'). decay_n gates the
@@ -422,7 +443,7 @@ function Burst:fire(ch, beat, freq, level, attack_n, decay_n, modatk_n, moddec_n
   -- amp decaySec from envMode (1=burst-length, 2=per-hit).
   local decay_sec = nil
   if c.envMode ~= 0 then
-    if c.envMode == 1 and total ~= INF then
+    if c.envMode == 1 then
       decay_sec = total * interval_sec
     else
       decay_sec = interval_sec
@@ -545,7 +566,7 @@ function Burst:mutate(ch, amount)
   end
   c.div  = map(c.div,  function(v) return nearest_musical_div(v * (1 + jitter(amount))) end)
   c.reps = map(c.reps, function(v)
-    if v == -1 then return -1 end
+    if Burst.reps_is_rest(v) then return v end  -- leave rests intact (like level)
     return clamp(round(v + jitter(amount * 4)), 1, 8)
   end)
   c.note  = map(c.note,  function(v) return round(v + jitter(amount * 4)) end)

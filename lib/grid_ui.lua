@@ -176,7 +176,13 @@ local DEFAULT_VALUE_B = {div = 0, reps = 0, note = 0, level = 0, attack = 0, dec
 local function range(n, f) local t = {} for i = 0, n - 1 do t[i + 1] = f(i) end return t end
 local STEP_PICKER_VALUES = {
   div  = range(32, function(i) return i + 1 end),
-  reps = (function() local t = range(31, function(i) return i + 1 end); t[32] = -1; return t end)(),
+  -- cells 1..28 = reps 1..28 (hit counts); cells 29..32 = rests of 1..4 steps
+  -- (values 0,-1,-2,-3 -> rest length 1-reps). No infinite sentinel: 2+ steps loop.
+  reps = (function()
+    local t = range(28, function(i) return i + 1 end)
+    t[29], t[30], t[31], t[32] = 0, -1, -2, -3
+    return t
+  end)(),
   note = range(32, function(i) return i end),
   level = range(32, function(i) return i / 31 end),
   attack = range(32, function(i) return i / 31 end),
@@ -834,6 +840,10 @@ function GridUI:render_step_picker(p)
         b = present and 5 or 1
       end
       self.g:set_led(x, PICKER_ROW0 + y, b)
+      -- rests (reps <= 0) pulse to set them apart from the hit-count cells.
+      if p.param == 'reps' and v <= 0 then
+        self.g:set_strobe(x, PICKER_ROW0 + y, 'slow')
+      end
     end
   end
 end

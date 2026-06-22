@@ -91,6 +91,7 @@ local function fmt(param, v)
   end
   if param == 'level' then return string.format('%.2f', v) end
   if param == 'harm' then return string.format('%.1f', v) end
+  if param == 'reps' and v <= 0 then return 'r' .. (1 - v) end  -- rest of 1-v steps
   return tostring(v)
 end
 
