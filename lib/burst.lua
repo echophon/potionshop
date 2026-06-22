@@ -160,7 +160,6 @@ local function default_channel()
     probHit = false,
     envMode = 0,      -- amp decay timing:  0=shape 1=burst 2=hit
     geodeMode = 0,    -- amp per-hit geode: 0=transient 1=sustain 2=cycle (always on)
-    algo = 1,         -- FM algorithm (1..8): DX-style operator routing for this channel
     resetInterval = 0,
     rate = 1,
     octave = 0,     -- -2..2, whole-octave pitch shift (perf page)
@@ -187,6 +186,7 @@ function Burst.new()
   -- engine-wide voice timbre macros (lib/params_sync.lua 'VOICE' group). Global,
   -- not per-channel: the non-audio output types can't render them. Read straight
   -- at fire time; these ARE the values handed to the SC voice.
+  self.algo = 1         -- FM algorithm (1..16): DX-style operator routing, engine-wide
   self.modIndex = 2     -- FM modulation index (low default = clean, ~2-op tone; up to 24 = bright)
   -- (FM body length is no longer a global macro: the per-channel modatk/moddec
   -- sequences own the modulator envelope; the old self.fmDecay was retired.)
@@ -431,7 +431,7 @@ function Burst:fire(ch, beat, freq, level, attack_n, decay_n, modatk_n, moddec_n
   -- stand-in for the old harm.
   local ratios = {c.opRatio1, c.opRatio2, c.opRatio3, c.opRatio4}
   local bright_ratio = 0
-  for _, op in ipairs(ALGO_MODULATORS[c.algo] or {}) do
+  for _, op in ipairs(ALGO_MODULATORS[self.algo] or {}) do
     if ratios[op] > bright_ratio then bright_ratio = ratios[op] end
   end
   if bright_ratio == 0 then bright_ratio = ratios[1] end  -- additive: no modulators
@@ -487,12 +487,12 @@ function Burst:fire(ch, beat, freq, level, attack_n, decay_n, modatk_n, moddec_n
   local ol = {c.opLevel1, c.opLevel2, c.opLevel3, c.opLevel4}
   local out = self.outputs
   if engine and engine.trig and ((not out) or out:wants_audio(ch)) then
-    -- 4-op FM (lib/Engine_Potionshop.sc): per-channel algorithm selects the
+    -- 4-op FM (lib/Engine_Potionshop.sc): the engine-wide algorithm selects the
     -- operator routing; opRatio1..4 are the static per-op FM ratios (op1 default
     -- 1.0, now editable); the rest are the final hit envelope; ol[1..4] are this
     -- channel's static operator levels, geode-shaped per hit above. opRatio1 rides
     -- as r1 (arg 20, appended) so the older positional args keep their indices.
-    engine.trig(geo_freq, actual_level, c.algo,
+    engine.trig(geo_freq, actual_level, self.algo,
                 c.opRatio2, c.opRatio3, c.opRatio4, mod_index,
                 attack, amp_dec, amp_curve, mod_dec, feedback, drive, ch,
                 ol[1], ol[2], ol[3], ol[4], mod_attack, c.opRatio1)

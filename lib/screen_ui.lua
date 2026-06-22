@@ -54,7 +54,7 @@ for _, p in ipairs(PARAMS) do if GridUI.has_b(p) then B_PARAMS[#B_PARAMS + 1] = 
 local PAGES  = {'main', 'alt', 'perf', 'prob', 'scale', 'snd', 'op'}
 -- main line 1 = run + all params; alt line 1 = run + the B-capable params.
 -- scale = root + 12 chromatic keys + quantize = 14 stops. op = r1..r4 + 4 levels.
-local LINES_PER_PAGE = {1 + #PARAMS, 1 + #B_PARAMS, 3, 3, 14, 3, 8}
+local LINES_PER_PAGE = {1 + #PARAMS, 1 + #B_PARAMS, 3, 3, 14, 2, 8}
 local PAGE_PERF, PAGE_PROB, PAGE_SCALE, PAGE_SND, PAGE_OP = 3, 4, 5, 6, 7
 
 local NOTE_NAMES = {'c','c#','d','d#','e','f','f#','g','g#','a','a#','b'}
@@ -424,7 +424,6 @@ function Screen:_edit_snd(d)
   local line = self.sel_line[PAGE_SND]
   if line == 1 then self.ctl:set_scalar(ch, 'envMode', clamp(c.envMode + d, 0, #GridUI.ENV_MODE_NAMES - 1))
   elseif line == 2 then self.ctl:set_scalar(ch, 'geodeMode', clamp(c.geodeMode + d, 0, #GridUI.GEODE_MODE_NAMES - 1))
-  elseif line == 3 then self.ctl:set_scalar(ch, 'algo', clamp(c.algo + d, 1, #GridUI.ALGO_NAMES))
   end
 end
 
@@ -605,7 +604,6 @@ function Screen:page_lines()
     lines = {
       {'env',   GridUI.ENV_MODE_NAMES[c.envMode + 1]},
       {'geode', GridUI.GEODE_MODE_NAMES[c.geodeMode + 1]},
-      {'algo',   GridUI.ALGO_NAMES[c.algo]},
     }
   elseif self.page == PAGE_OP then
     local function r(v) return (v % 1 == 0) and tostring(math.floor(v)) or tostring(v) end

@@ -19,8 +19,8 @@
 --               div/reps the halves are div (left) and reps (right), both A
 --               (div/reps have no B layer). The lane you edit is the half you
 --               press; there is no A/B flip (no double-press). See row_lanes.
---   row 6     = 0..5 launch · 6..9 dark · 10 OP · 11 ALG · 12 PERF · 13 PROB · 14 QNT · 15 SND
---               (KB page disabled)
+--   row 6     = 0..5 launch · 6..10 dark · 11 OP · 12 PERF · 13 PROB · 14 QNT · 15 SND
+--               (KB page disabled; FM algorithm is a global param, not a grid page)
 --   row 7     = 0 div/reps · 1 note · 2 level · 3 attack/decay · 4 modatk/moddec
 --             · 5..10 dark · 11 CLR · 12 COPY · 13 PASTE · 14 RANDOMIZE · 15 MUTATE
 --             (one page-select button each; div/reps, attack/decay and
@@ -38,7 +38,6 @@
 --   PERF:  rows 0-5 = reset off/1/2/4 bars (cols 0..3) · octave -2..+2 (cols 5..9)
 --          · rate (cols 11..15)
 --   SND:   rows 0-5 = env(0-2) · geode(4-6)
---   ALG:   rows 0-5 = FM algorithm 1-16 (cols 0-15), the channel's selection bright
 --   scale picker: row 0 cols 0-6 scale presets (7)
 --                 rows 1-2 cols 0-6 degree (note-mask) keyboard: black row 1 / white row 2
 --                 rows 4-5 cols 0-6 root keyboard: black row 4 / white row 5
@@ -93,11 +92,11 @@ local PASTE_BUTTON_COL = 13
 local RANDOMIZE_BUTTON_COL = 14
 local MUTATE_BUTTON_COL = 15
 -- row 6 right side
-local ROW6_ALG_COL = 11   -- FM algorithm page (took KB's old slot; cols 6..10 dark)
--- KB mode is disabled — its entry button is commented out below, which makes the
--- whole mode unreachable. Left in place so it can be restored by un-commenting.
+-- KB mode is disabled and the FM algorithm is now a global param (no grid page),
+-- so cols 6..10 on row 6 are dark. The KB entry is commented out below; left in
+-- place so the mode can be restored by un-commenting.
 -- local ROW6_KB_COL = 11
-local ROW6_OP_COL = 10    -- per-channel OP page (per-op ratio + level statics)
+local ROW6_OP_COL = 11    -- per-channel OP page (took the old ALG slot; per-op ratio + level statics)
 local ROW6_PERF_COL = 12
 local ROW6_PROB_COL = 13
 local ROW6_QNT_COL = 14
@@ -305,7 +304,6 @@ function GridUI.new(engine, grid, opts)
   self.probMode = false
   self.perfMode = false
   self.soundMode = false
-  self.algoMode = false        -- FM algorithm page (per-channel routing selector)
   self.opMode = false          -- OP page: per-channel per-op ratio + level statics
   self.actionMode = nil        -- 'randomize'|'mutate'|'clear'|'copy'|'paste'|nil
   self.clipboard = nil         -- {param = {vals...}} snapshot of a channel's A layer
@@ -324,7 +322,7 @@ function GridUI.new(engine, grid, opts)
 
   engine:on(function(ev)
     if ev.type == 'fire' then
-      if self.kbMode or self.probMode or self.perfMode or self.soundMode or self.algoMode or self.opMode then return end
+      if self.kbMode or self.probMode or self.perfMode or self.soundMode or self.opMode then return end
       -- the scale picker repurposes the channel rows; a step picker does not
       -- (it lives on rows 6-7), so let its channel-row playheads keep animating
       if self.picker and self.picker.kind == 'scale' then return end
@@ -432,11 +430,6 @@ function GridUI:handle_normal_press(x, y)
     if self.soundMode then
       if x <= 2 then self:set_scalar(y, 'envMode', x)
       elseif x >= 4 and x <= 6 then self:set_scalar(y, 'geodeMode', x - 4) end
-      self:render_channel_row(y); self.g:refresh()
-      return
-    end
-    if self.algoMode then
-      if x <= #ALGO_NAMES - 1 then self:set_scalar(y, 'algo', x + 1) end  -- cols 0..15 -> algo 1..16
       self:render_channel_row(y); self.g:refresh()
       return
     end
@@ -728,14 +721,15 @@ end
 -- clear every row-6 latch mode + action mode (so only one page is ever active).
 function GridUI:_clear_latches()
   self.probMode = false; self.perfMode = false; self.soundMode = false
-  self.algoMode = false; self.opMode = false; self.actionMode = nil
+  self.opMode = false; self.actionMode = nil
 end
 
 function GridUI:handle_row6(x)
-  -- KB mode disabled: entry commented out (col 11 now drives the ALG page).
+  -- KB mode disabled: entry commented out (its old col 11 slot is now dark; the
+  -- FM algorithm is a global param, no longer a grid page).
   -- if x == ROW6_KB_COL then self:enter_kb_mode(); return end
   local LATCH = {[ROW6_PERF_COL] = 'perfMode', [ROW6_PROB_COL] = 'probMode',
-                 [ROW6_SND_COL] = 'soundMode', [ROW6_ALG_COL] = 'algoMode',
+                 [ROW6_SND_COL] = 'soundMode',
                  [ROW6_OP_COL] = 'opMode'}
   if LATCH[x] then
     local was = self[LATCH[x]]
@@ -899,7 +893,6 @@ function GridUI:render_channel_row(ch)
   if self.probMode then self:render_prob_row(ch); return end
   if self.perfMode then self:render_perf_row(ch); return end
   if self.soundMode then self:render_sound_row(ch); return end
-  if self.algoMode then self:render_algo_row(ch); return end
   if self.opMode then self:render_op_row(ch); return end
   local running = self.engine:is_running(ch + 1)
   -- two lanes side by side: left half (cols 0..SEQ_LEN-1) then right half
@@ -994,13 +987,6 @@ function GridUI:render_sound_row(ch)
   for m = 0, 2 do self.g:set_led(m + 4, ch, c.geodeMode == m and 15 or 4) end
 end
 
--- FM algorithm page: cols 0..15 = algorithm 1..16, the channel's selection bright.
-function GridUI:render_algo_row(ch)
-  local c = self:chan(ch)
-  for x = 0, GRID_W - 1 do self.g:set_led(x, ch, 0); self.g:set_strobe(x, ch, 'off') end
-  for a = 1, #ALGO_NAMES do self.g:set_led(a - 1, ch, c.algo == a and 15 or 4) end
-end
-
 function GridUI:render_action_mode()
   local mark_running = self.actionMode == 'randomize' or self.actionMode == 'mutate'
   for x = 0, 5 do
@@ -1009,7 +995,6 @@ function GridUI:render_action_mode()
   end
   for x = 6, 11 do self.g:set_led(x, 6, 0) end
   self.g:set_led(ROW6_OP_COL, 6, 8)
-  self.g:set_led(ROW6_ALG_COL, 6, 8)
   self.g:set_led(ROW6_PERF_COL, 6, 8)
   self.g:set_led(ROW6_PROB_COL, 6, 8)
   self.g:set_led(ROW6_QNT_COL, 6, 8)
@@ -1035,8 +1020,6 @@ function GridUI:render_row6()
   self.g:set_strobe(ROW6_QNT_COL, 6, scale_open and 'fast' or 'off')
   self.g:set_led(ROW6_SND_COL, 6, self.soundMode and 15 or 8)
   self.g:set_strobe(ROW6_SND_COL, 6, self.soundMode and 'fast' or 'off')
-  self.g:set_led(ROW6_ALG_COL, 6, self.algoMode and 15 or 8)
-  self.g:set_strobe(ROW6_ALG_COL, 6, self.algoMode and 'fast' or 'off')
   self.g:set_led(ROW6_OP_COL, 6, self.opMode and 15 or 8)
   self.g:set_strobe(ROW6_OP_COL, 6, self.opMode and 'fast' or 'off')
 end
@@ -1228,7 +1211,6 @@ function GridUI:current_page()
   if self.perfMode then return 'PERF' end
   if self.probMode then return 'PROB' end
   if self.soundMode then return 'SND' end
-  if self.algoMode then return 'ALG' end
   if self.opMode then return 'OP' end
   if self.actionMode then return string.upper(self.actionMode) end
   return 'MAIN'
@@ -1246,8 +1228,6 @@ function GridUI:_status()
     s = 'PROB — cols0-1 note trig, 11-14 prob%, 15 burst/hit'
   elseif self.soundMode then
     s = 'SOUND — env(0-2) / geode(4-6)'
-  elseif self.algoMode then
-    s = 'ALG — cols0-15 FM algorithm (1-16)'
   elseif self.opMode then
     s = 'OP — cols0-3 op ratio, cols8-11 op level'
   elseif self.actionMode then

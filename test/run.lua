@@ -331,7 +331,7 @@ local slow, fast = amp_decay_for_div(2), amp_decay_for_div(8)
 check('amp decay scales with division (4x faster ~= 1/4 the hit)',
   slow and fast and approx(fast, slow / 4))
 
--- per-channel FM algorithm reaches trig arg 3 (4-op engine routing selector).
+-- the global FM algorithm reaches trig arg 3 (4-op engine routing selector).
 local function algo_trig(algo)
   clock._reset()
   local saved = engine
@@ -341,13 +341,13 @@ local function algo_trig(algo)
   e.quantize = 0
   e.channels[1].div = seqx.new{4}
   e.channels[1].reps = seqx.new{1}
-  e.channels[1].algo = algo
+  e.algo = algo
   e:launch(1)
   clock._run_until(2)
   engine = saved
   return cap and cap[3]
 end
-check('per-channel algo feeds trig arg 3', algo_trig(5) == 5)
+check('global algo feeds trig arg 3', algo_trig(5) == 5)
 
 -- the channel index rides along as trig arg 14 so the SC engine can keep each
 -- channel monophonic (a new hit releases the previous voice, no droning overlap).
@@ -690,8 +690,8 @@ check('alt-trig key sets altTrig to hold', geng.channels[1].altTrig == 0)
 ctl:press(13, 6)
 check('PROB mode exited', ctl.probMode == false)
 
--- OP page (row6 col 10): per-op ratio (cols 0-3) + per-op level (cols 8-11)
-ctl:press(10, 6)
+-- OP page (row6 col 11, the old ALG slot): per-op ratio (cols 0-3) + per-op level (cols 8-11)
+ctl:press(11, 6)
 check('OP mode entered', ctl.opMode == true)
 ctl:press(1, 0)   -- col1 -> op2 ratio picker on channel 0
 check('OP ratio cell opens a scalar picker',
@@ -717,7 +717,7 @@ check('OP level cell opens a scalar picker',
   ctl.picker and ctl.picker.field == 'opLevel1')
 ctl:press(15, 7)  -- value grid row 7 col 15 -> OP_LEVEL_VALUES[32] = 1.0
 check('OP level picker sets opLevel1', approx(geng.channels[1].opLevel1, 1.0))
-ctl:press(10, 6)
+ctl:press(11, 6)
 check('OP mode exited', ctl.opMode == false)
 
 -- SND mode geode set
@@ -742,19 +742,9 @@ check('PERF rate col14 sets 2x', geng.channels[1].rate == 2)
 ctl:press(12, 6)
 check('PERF mode exited', ctl.perfMode == false)
 
--- ALG page now enters/exits on row6 col 11 (KB mode disabled; ALG took its slot)
-geng.channels[1].algo = 1
-ctl:press(11, 6)
-check('ALG mode entered on col 11', ctl.algoMode == true)
-ctl:press(5, 0)  -- col 5 -> algorithm 6 on channel 0
-check('ALG page sets channel algo (col -> algo n+1)', geng.channels[1].algo == 6)
-ctl:press(15, 0)  -- col 15 -> algorithm 16 (extended routings now fill the row)
-check('ALG page reaches algo 16 (col 15)', geng.channels[1].algo == 16)
-geng.channels[1].algo = 16
-ctl:press(0, 0)   -- col 0 -> algorithm 1
-check('ALG page sets algo 1 (col 0)', geng.channels[1].algo == 1)
-ctl:press(11, 6)
-check('ALG mode exited on col 11', ctl.algoMode == false)
+-- FM algorithm is now a global engine scalar, not a per-channel field or grid page.
+check('algo is a global engine field, not per-channel', geng.algo ~= nil and geng.channels[1].algo == nil)
+check('no ALG grid mode exists', ctl.algoMode == nil)
 
 -- ---- screen_ui: pages, edits, fire reactivity --------------------------
 screen = require 'screen'  -- global drawing API stub, like norns

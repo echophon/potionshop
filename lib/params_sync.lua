@@ -4,7 +4,7 @@
 -- and screen surfaces.
 --
 -- Layout: a global block (scale / root / quantize), a VOICE group of engine-wide
--- FM timbre macros (mod index / amp punch / fm feedback / fm drive),
+-- FM timbre macros (FM algorithm / mod index / amp punch / fm feedback / fm drive),
 -- the OUTPUTS group (lib/outputs.lua), plus one group per
 -- channel ("CHANNEL 1".."CHANNEL 6"). Each group holds the channel scalars
 -- (run, rate, prob, modes, reset, per-op ratios/levels, clear/copy/paste + action
@@ -254,7 +254,11 @@ function M:add_globals()
   local function pct() return function(p) return p:get() .. '%' end end
   -- (FM decay retired: the modulator-envelope decay is now per-channel sequenced
   -- via the chN_moddec_a block, not a global macro.)
-  params:add_group('voice', 'VOICE', 4)
+  params:add_group('voice', 'VOICE', 5)
+  -- FM algorithm (1..16, 1-based): engine-wide operator routing. Was per-channel
+  -- (chN_algorithm + grid ALG page); now a single global timbre macro.
+  params:add_option('algorithm', 'FM algorithm', GridUI.ALGO_NAMES, eng.algo)
+  params:set_action('algorithm', function(i) eng.algo = i end)
   params:add_number('mod_index', 'FM mod index', 1, 24, round(eng.modIndex))
   params:set_action('mod_index', function(v) eng.modIndex = v end)
   params:add_number('amp_punch', 'amp punch', 0, 12, round(eng.ampPunch))
@@ -363,14 +367,6 @@ function M:_add_channel_params(n)
       end)
     end)
   end
-  -- FM algorithm (1..16, 1-based unlike the 0-based modes above).
-  def(1, function()
-    params:add_option(id('algorithm'), 'algorithm', GridUI.ALGO_NAMES, c.algo)
-    params:set_action(id('algorithm'), function(i)
-      c.algo = i
-      self:request_render()
-    end)
-  end)
   def(1, function()
     params:add_option(id('reset'), 'reset', RESET_NAMES,
       GridUI.nearest_index(GridUI.RESET_INTERVALS, c.resetInterval))
@@ -544,7 +540,6 @@ function M:reflect_scalars(n)
   params:set(id('alt_trig'), c.altTrig + 1, true)
   params:set(id('env_mode'), c.envMode + 1, true)
   params:set(id('geode'), c.geodeMode + 1, true)
-  params:set(id('algorithm'), c.algo, true)
   params:set(id('reset'), GridUI.nearest_index(GridUI.RESET_INTERVALS, c.resetInterval), true)
   params:set(id('octave'), c.octave, true)
   for op = 1, 4 do params:set(id('ratio' .. op), ratio_index(c['opRatio' .. op]), true) end
@@ -561,6 +556,7 @@ end
 
 function M:reflect_globals()
   local params = self.params
+  params:set('algorithm', clamp(self.engine.algo, 1, #GridUI.ALGO_NAMES), true)
   params:set('quantize', clamp(self.engine.quantize, 1, 32), true)
   params:set('root', clamp((self.engine.root or 0) + 1, 1, 12), true)
   if params:lookup_param('keymask') then
