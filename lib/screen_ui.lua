@@ -21,7 +21,7 @@
 --        clamped; order mirrors the grid's row-6 button layout)
 --   K1 = untouched — left to the norns system menus
 --
--- Pages: `main` edits launch + the eleven A-layer param sequences (via the same
+-- Pages: `main` edits launch + the twelve A-layer param sequences (via the same
 -- commit_step path the grid uses; the list scrolls in a window since it exceeds
 -- the visible rows); `alt` is its clone for the B (additive
 -- offset) layer, snapping to the same extended value set params_sync uses
@@ -45,11 +45,11 @@ local GridUI = require 'grid_ui'
 
 local SEQ_LEN = GridUI.SEQ_LEN  -- max steps per sequence (shared cap with the grid)
 -- the full sequenced-param list (shared with the grid/params so it can't drift):
--- div/reps/note/level/attack/decay/modatk/moddec + the sequenced op2/3/4 ratios.
+-- div/reps/note/level/attack/decay/modatk/moddec + the sequenced op1/2/3/4 ratios.
 local PARAMS = GridUI.PARAMS
 -- alt (B-layer) page: div/reps, attack/decay and modatk/moddec have no B layer
 -- (see GridUI.has_b), so it carries only the params that take an additive offset
--- (note, level, opRatio2/3/4).
+-- (note, level, opRatio1/2/3/4).
 local B_PARAMS = {}
 for _, p in ipairs(PARAMS) do if GridUI.has_b(p) then B_PARAMS[#B_PARAMS + 1] = p end end
 -- Page order mirrors the grid's row-6 button layout (op · perf · prob · scale),
@@ -57,11 +57,11 @@ for _, p in ipairs(PARAMS) do if GridUI.has_b(p) then B_PARAMS[#B_PARAMS + 1] = 
 -- map onto the same pages (see _sync_page_from_grid).
 local PAGES  = {'main', 'alt', 'perf', 'prob', 'scale', 'op'}
 -- main line 1 = run + all params; alt line 1 = run + the B-capable params.
--- scale = root + 12 chromatic keys = 13 stops. op = op1 ratio + 4 levels = 5
--- (op2/3/4 ratios are sequenced, edited on the main/alt seq pages).
--- PERF now carries 4 lines (reset/oct/rate/quantize); the scale page dropped its
--- quantize line (now per-channel) so it's root + 12 keys = 13.
-local LINES_PER_PAGE = {1 + #PARAMS, 1 + #B_PARAMS, 4, 6, 13, 5}
+-- scale = root + 12 chromatic keys = 13 stops. op = 4 op levels = 4 (all four op
+-- ratios are sequenced, edited on the main/alt seq pages). prob = prob/mode/note
+-- trig + op1..4 ratio-seq trig = 7. PERF carries 4 lines (reset/oct/rate/quantize);
+-- the scale page dropped its quantize line (now per-channel) so it's root + 12 keys.
+local LINES_PER_PAGE = {1 + #PARAMS, 1 + #B_PARAMS, 4, 7, 13, 4}
 local PAGE_PERF, PAGE_PROB, PAGE_SCALE, PAGE_OP = 3, 4, 5, 6
 
 local NOTE_NAMES = {'c','c#','d','d#','e','f','f#','g','g#','a','a#','b'}
@@ -180,7 +180,7 @@ function Screen:_layout(param)
   return layout
 end
 
--- the param list for the current sequence page: main (A) shows all eight; alt (B)
+-- the param list for the current sequence page: main (A) shows all twelve; alt (B)
 -- shows only the B-capable ones (the paired pages have no offset).
 function Screen:_seq_params()
   return (self:layer() == 'B') and B_PARAMS or PARAMS
@@ -417,19 +417,13 @@ local function step_table(cur, tbl, d)
   return tbl[clamp(idx + d, 1, #tbl)]
 end
 
--- OP page cursor: line 1 = op1 ratio (the static fundamental), lines 2..5 =
--- op1..op4 level. Ratio steps the curated set; level the 0..1 grid. (op2/3/4 ratios
--- are sequenced — edited on the main/alt seq pages, not here.)
+-- OP page cursor: lines 1..4 = op1..op4 level, stepping the 0..1 grid. (All four op
+-- ratios are sequenced — edited on the main/alt seq pages, not here.)
 function Screen:_edit_op(d)
   local ch = self.sel_ch
   local c = self.engine.channels[ch + 1]
-  local line = self.sel_line[PAGE_OP]
-  if line == 1 then
-    self.ctl:set_scalar(ch, 'opRatio1', step_table(c.opRatio1, GridUI.RATIO_PICKER, d))
-  else
-    local field = 'opLevel' .. (line - 1) -- line 2->op1 .. 5->op4
-    self.ctl:set_scalar(ch, field, step_table(c[field], GridUI.OP_LEVEL_VALUES, d))
-  end
+  local field = 'opLevel' .. self.sel_line[PAGE_OP]  -- line 1->op1 .. 4->op4
+  self.ctl:set_scalar(ch, field, step_table(c[field], GridUI.OP_LEVEL_VALUES, d))
 end
 
 function Screen:_edit_prob(d)
@@ -444,8 +438,8 @@ function Screen:_edit_prob(d)
   elseif line == 3 then
     self.ctl:set_scalar(ch, 'altTrig', clamp(c.altTrig + d, 0, #GridUI.ALT_TRIG_MODE_NAMES - 1))
   else
-    -- lines 4..6 = op2/3/4 ratio-sequence trig (hold/step), same toggle feel
-    local field = 'opRatio' .. (line - 2) .. 'Trig'  -- line 4->op2 .. 6->op4
+    -- lines 4..7 = op1/2/3/4 ratio-sequence trig (hold/step), same toggle feel
+    local field = 'opRatio' .. (line - 3) .. 'Trig'  -- line 4->op1 .. 7->op4
     self.ctl:set_scalar(ch, field, clamp(c[field] + d, 0, 1))
   end
 end
@@ -612,11 +606,9 @@ function Screen:page_lines()
   end
   local lines
   if self.page == PAGE_OP then
-    -- op1 ratio (static fundamental) + the four static op levels. op2/3/4 ratios are
-    -- sequenced (shown/edited on the main/alt seq pages), so they're absent here.
-    local function r(v) return (v % 1 == 0) and tostring(math.floor(v)) or tostring(v) end
+    -- the four static op levels. All four op ratios are sequenced (shown/edited on
+    -- the main/alt seq pages), so they're absent here.
     lines = {
-      {'op1 r', r(c.opRatio1)},
       {'op1 l', string.format('%.2f', c.opLevel1)},
       {'op2 l', string.format('%.2f', c.opLevel2)},
       {'op3 l', string.format('%.2f', c.opLevel3)},
@@ -628,7 +620,8 @@ function Screen:page_lines()
       {'prob', round(c.burstProb * 100) .. '%'},
       {'mode', c.probHit and 'hit' or 'burst'},
       {'note', trig(c.altTrig)},          -- note B trig
-      {'op2',  trig(c.opRatio2Trig)},     -- op2/3/4 ratio-seq trig
+      {'op1',  trig(c.opRatio1Trig)},     -- op1/2/3/4 ratio-seq trig
+      {'op2',  trig(c.opRatio2Trig)},
       {'op3',  trig(c.opRatio3Trig)},
       {'op4',  trig(c.opRatio4Trig)},
     }
@@ -647,7 +640,7 @@ function Screen:page_lines()
 end
 
 -- max line rows that fit above the step squares (y 52/58); longer pages (the
--- main page now carries 8 params + run = 9 lines) scroll a window around focus.
+-- main page now carries 12 params + run = 13 lines) scroll a window around focus.
 local MAX_VISIBLE_LINES = 7
 
 function Screen:draw_lines()

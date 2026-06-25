@@ -24,20 +24,21 @@
 --               page. KB page disabled; FM algorithm, env mode and geode are
 --               global params, not grid pages -- the old SND page was reclaimed)
 --   row 7     = 0 div/reps · 1 note · 2 level · 3 attack/decay · 4 modatk/moddec
---             · 5 op2 ratio · 6 op3 ratio · 7 op4 ratio · 8..10 dark
+--             · 5 op1 ratio · 6 op2 ratio · 7 op3 ratio · 8 op4 ratio · 9..10 dark
 --             · 11 CLR · 12 COPY · 13 PASTE · 14 RANDOMIZE · 15 MUTATE
 --             (one page-select button each; div/reps, attack/decay and
 --             modatk/moddec are paired pages showing two A-layer lanes. The two
 --             envelope pages are the carrier amp env and the modulator/FM-bright
---             env. op2/3/4 ratios are sequenced pages (A value | B offset, like
---             note/level); op1 ratio + all op levels stay static on the OP page)
---   CLR/COPY/PASTE act on the MAIN (A-layer) sequins of the tapped channel only;
---   the B (alt) layer is left intact so it can keep variating the copied sequins.
---   OP:    rows 0-5 = op1 RATIO (col 0, the static fundamental) · per-op LEVEL
---          (cols 8-11). Tap a cell to open its value picker on rows 6-7. (op2/3/4
---          ratios are sequenced — edited on their row-7 pages, not here.)
+--             env. All four op ratios are sequenced pages (A value | B offset, like
+--             note/level); op levels stay static on the OP page)
+--   CLR clears BOTH layers (A + the B/alt layer where present) of the tapped
+--   channel; COPY/PASTE act on the MAIN (A-layer) sequins only, leaving the B (alt)
+--   layer intact so it can keep variating the copied sequins.
+--   OP:    rows 0-5 = per-op LEVEL (cols 8-11). Tap a cell to open its value picker
+--          on rows 6-7. (All four op ratios are sequenced — edited on their row-7
+--          pages, not here, so the left side of the OP page is dark.)
 --   PROB:  rows 0-5 = note alt-trig hold/step (cols 0-1)
---          · op2/3/4 ratio-seq trig toggles (cols 3-5, single button each:
+--          · op1/2/3/4 ratio-seq trig toggles (cols 3-6, single button each:
 --            off=hold, on=step)
 --          · prob 25/50/75/100% (cols 11-14, right-justified)
 --          · col 15 burst/hit toggle
@@ -72,10 +73,10 @@ local SEQ_LEN = 8
 local B_COL0 = 8
 local NUM_CHANNELS = 6
 -- All sequenced params (the row-7 page buttons are a separate, smaller list —
--- ROW7_PAGES — one per page). op2/3/4 FM ratios are sequenced (A value + B additive
--- offset, like note/level); op1 ratio + all op levels stay static on the OP page.
+-- ROW7_PAGES — one per page). All four op FM ratios are sequenced (A value + B index
+-- offset, like note/level); op levels stay static on the OP page.
 local PARAMS = {'div', 'reps', 'note', 'level', 'attack', 'decay', 'modatk', 'moddec',
-                'opRatio2', 'opRatio3', 'opRatio4'}
+                'opRatio1', 'opRatio2', 'opRatio3', 'opRatio4'}
 -- Paired params share one page as two A-layer lanes (left|right) instead of a
 -- param's own A|B layers: div|reps (an additive offset on division/repeats isn't
 -- musical), attack|decay (the carrier envelope shape) and modatk|moddec (the
@@ -90,10 +91,10 @@ end
 local function has_b(param) return not PAIRED[param] end
 -- row-7 page-select buttons: ONE per page. A paired page is represented by its
 -- first member (selecting it shows both lanes via row_lanes); singles are
--- themselves. The three op-ratio pages (opRatio2/3/4) follow the env pages.
--- Cols 0..#ROW7_PAGES-1 (now 0..7).
+-- themselves. The four op-ratio pages (opRatio1/2/3/4) follow the env pages.
+-- Cols 0..#ROW7_PAGES-1 (now 0..8).
 local ROW7_PAGES = {'div', 'note', 'level', 'attack', 'modatk',
-                    'opRatio2', 'opRatio3', 'opRatio4'}
+                    'opRatio1', 'opRatio2', 'opRatio3', 'opRatio4'}
 
 -- row 7
 local CLR_BUTTON_COL = 11
@@ -112,9 +113,8 @@ local ROW6_PERF_COL = 12
 local ROW6_PROB_COL = 13
 local ROW6_SCALE_COL = 14 -- opens the scale picker (scale preset / degrees / root)
 local ROW6_QNT_COL = 15   -- per-channel QNT page (event snap grid, curated set)
--- OP page channel-row layout: op1 RATIO on col 0 (the static fundamental),
--- op1..4 LEVEL on cols 8..11. op2/3/4 ratios are sequenced (row-7 pages), not here.
-local OP_RATIO_COL0 = 0
+-- OP page channel-row layout: op1..4 LEVEL on cols 8..11. All four op ratios are
+-- sequenced (row-7 pages), not here, so the left side of the OP page is dark.
 local OP_LEVEL_COL0 = 8
 -- The step picker's 32-value grid renders on the control rows (6-7) while a pick
 -- is in progress, leaving all six channel rows visible so the step being edited
@@ -149,10 +149,10 @@ local RATE_COLS   = {11, 12, 13, 14, 15}
 -- trig toggles next to it (cols 3-5), prob options right-justified (cols 11-14), hit
 -- toggle at the far right (col 15). burstProb is a discrete 4-value set.
 local ALT_TRIG_COLS  = {0, 1}                -- note alt(B) layer: hold / step
--- op2/3/4 ratio-sequence trig: ONE button each (off=hold, on=step), to save grid
--- space (vs the note pair). Cols 3/4/5 -> opRatio2/3/4 trig.
-local OP_TRIG_COLS   = {3, 4, 5}
-local OP_TRIG_FIELDS = {'opRatio2Trig', 'opRatio3Trig', 'opRatio4Trig'}
+-- op1/2/3/4 ratio-sequence trig: ONE button each (off=hold, on=step), to save grid
+-- space (vs the note pair). Cols 3/4/5/6 -> opRatio1/2/3/4 trig.
+local OP_TRIG_COLS   = {3, 4, 5, 6}
+local OP_TRIG_FIELDS = {'opRatio1Trig', 'opRatio2Trig', 'opRatio3Trig', 'opRatio4Trig'}
 local PROB_VALUES   = {0.25, 0.5, 0.75, 1.0}
 local PROB_COLS     = {11, 12, 13, 14}
 local PROB_HIT_COL  = 15
@@ -200,9 +200,9 @@ local OP_RATIO_OFFSETS = {}
 for i = 0, 31 do OP_RATIO_OFFSETS[i + 1] = i end
 
 local DEFAULT_VALUE   = {div = 8, reps = 3, note = 0, level = 0.5, attack = 0, decay = 16 / 31, modatk = 0, moddec = 8 / 31,
-                         opRatio2 = 1, opRatio3 = 1, opRatio4 = 1}  -- op ratio default = unison
+                         opRatio1 = 1, opRatio2 = 1, opRatio3 = 1, opRatio4 = 1}  -- op ratio default = unison
 local DEFAULT_VALUE_B = {div = 0, reps = 0, note = 0, level = 0, attack = 0, decay = 0, modatk = 0, moddec = 0,
-                         opRatio2 = 0, opRatio3 = 0, opRatio4 = 0}  -- op ratio offset default = 0 (none)
+                         opRatio1 = 0, opRatio2 = 0, opRatio3 = 0, opRatio4 = 0}  -- op ratio offset default = 0 (none)
 
 -- 1-based value layouts for the step picker / KB bands. Index 1..32 maps to
 -- grid cell (y*16 + x + 1). These are the grid-reachability contract.
@@ -225,9 +225,10 @@ local STEP_PICKER_VALUES = {
   decay  = range(32, function(i) return i / 31 end),
   modatk = range(32, function(i) return i / 31 end),
   moddec = range(32, function(i) return i / 31 end),
-  -- sequenced op2/3/4 FM ratios: the A lane snaps to the 32-value grid-picker range
+  -- sequenced op1/2/3/4 FM ratios: the A lane snaps to the 32-value grid-picker range
   -- (RATIO_PICKER); the B lane (an index offset) uses OP_RATIO_OFFSETS — see
   -- picker_layout, which is layer-aware for op ratios.
+  opRatio1 = RATIO_PICKER,
   opRatio2 = RATIO_PICKER,
   opRatio3 = RATIO_PICKER,
   opRatio4 = RATIO_PICKER,
@@ -500,12 +501,10 @@ function GridUI:handle_normal_press(x, y)
       return
     end
     if self.opMode then
-      -- op1 ratio (the static fundamental) on col 0; op1..op4 levels on cols 8..11.
-      -- op2/3/4 ratios are sequenced now (their own row-7 pages), so cols 1..3 are dark.
+      -- op1..op4 levels on cols 8..11. All four op ratios are sequenced now (their own
+      -- row-7 pages), so the left side of the OP page is dark.
       local lvi = x - OP_LEVEL_COL0
-      if x == OP_RATIO_COL0 then             -- op1 ratio (first-32 picker range)
-        self:open_scalar_picker(y, 'opRatio1', RATIO_PICKER, 'ratio')
-      elseif lvi >= 0 and lvi <= 3 then      -- op1..op4 level
+      if lvi >= 0 and lvi <= 3 then          -- op1..op4 level
         self:open_scalar_picker(y, 'opLevel' .. (lvi + 1), OP_LEVEL_VALUES, 'level')
       end
       return
@@ -751,12 +750,16 @@ function GridUI:commit_step(ch, param, vals, layer)
   self:commit_step_raw(ch, param, vals, layer)
 end
 
--- CLR/COPY/PASTE all act on the MAIN (A-layer) sequins only, leaving the B (alt)
--- layer untouched so it can keep variating whatever was cleared/copied/pasted.
+-- CLR resets BOTH layers — A and (where present) the B (alt) layer — so a cleared
+-- channel is fully blank. COPY/PASTE still act on the MAIN (A-layer) sequins only,
+-- leaving the B (alt) layer untouched so it can keep variating the pasted sequins.
 
 function GridUI:clear_channel(ch)
   for _, param in ipairs(PARAMS) do
     self:commit_step_raw(ch, param, {DEFAULT_VALUE[param]}, 'A')
+    if has_b(param) then
+      self:commit_step_raw(ch, param, {DEFAULT_VALUE_B[param]}, 'B')
+    end
   end
   self:render_all()
 end
@@ -984,23 +987,19 @@ function GridUI:render_channel_row(ch)
   end
 end
 
--- OP page: op1 ratio (col 0, the static fundamental) + per-op level (cols 8..11),
--- each cell's brightness encoding its value; picker opens on tap. op2/3/4 ratios are
--- sequenced (their own row-7 pages), so cols 1..3 stay dark here.
+-- OP page: per-op level (cols 8..11), each cell's brightness encoding its value;
+-- picker opens on tap. All four op ratios are sequenced (their own row-7 pages), so
+-- the left side of the OP page stays dark here.
 function GridUI:render_op_row(ch)
   local c = self:chan(ch)
   for x = 0, GRID_W - 1 do self.g:set_led(x, ch, 0); self.g:set_strobe(x, ch, 'off') end
-  -- op1 ratio brightness from its index in the 32-cell picker range (low ratio = dim)
-  local idx = nearest_index(RATIO_PICKER, c.opRatio1)
-  self.g:set_led(OP_RATIO_COL0, ch, clamp(round(2 + (idx - 1) / (#RATIO_PICKER - 1) * 11), 2, VALUE_MAX))
   for op = 1, 4 do
     local lvl = c['opLevel' .. op] or 1
     self.g:set_led(OP_LEVEL_COL0 + (op - 1), ch, math.max(2, round(2 + lvl * 11)))
   end
   if self.picker and self.picker.kind == 'scalar' and self.picker.ch == ch then
     local f = self.picker.field
-    if f == 'opRatio1' then self.g:set_led(OP_RATIO_COL0, ch, 15)
-    elseif f:match('^opLevel') then self.g:set_led(OP_LEVEL_COL0 + (tonumber(f:sub(-1)) - 1), ch, 15) end
+    if f:match('^opLevel') then self.g:set_led(OP_LEVEL_COL0 + (tonumber(f:sub(-1)) - 1), ch, 15) end
   end
 end
 
@@ -1300,11 +1299,11 @@ function GridUI:_status()
   elseif self.perfMode then
     s = 'PERF — cols0-3 reset, cols5-9 oct, cols11-15 rate'
   elseif self.probMode then
-    s = 'PROB — 0-1 note trig, 3-5 op trig, 11-14 prob%, 15 hit'
+    s = 'PROB — 0-1 note trig, 3-6 op trig, 11-14 prob%, 15 hit'
   elseif self.qntMode then
     s = 'QNT — cols0-7 per-channel quantize (1/3..1/32)'
   elseif self.opMode then
-    s = 'OP — col0 op1 ratio, cols8-11 op level'
+    s = 'OP — cols8-11 op level (ratios are sequenced)'
   elseif self.actionMode then
     s = string.upper(self.actionMode) .. ' — tap a channel'
   elseif self.picker and self.picker.kind == 'scalar' then

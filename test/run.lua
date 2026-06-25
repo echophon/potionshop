@@ -118,8 +118,10 @@ for _ = 1, 200 do
   -- volume is a constant: randomize must leave it at the init value, length 1.
   local lv = seqx.values(c.level)
   if #lv ~= 1 or not approx(lv[1], LEVEL_CONST) then ok_level_const = false end
-  -- op1 ratio is editable but NOT scrambled: randomize keeps it at the 1.0 anchor.
-  if not approx(c.opRatio1, 1) then ok_op1 = false end
+  -- op1 ratio is sequenced but NOT scrambled: randomize keeps its A lane at the 1.0
+  -- anchor (a single step), so a randomized channel stays pitched.
+  local o1 = seqx.values(c.opRatio1)
+  if #o1 ~= 1 or not approx(o1[1], 1) then ok_op1 = false end
   local dl = seqx.len(c.div)
   if not (dl >= 2 and dl <= 4) then ok_len = false end
 end
@@ -142,7 +144,8 @@ check('mutate leaves volume unchanged',
 check('mutate keeps sequenced ratio steps on the curated set',
   in_set(seqx.values(emut.channels[1].opRatio2)[1], Burst.RATIO_VALUES)
   and in_set(seqx.values(emut.channels[1].opRatio4)[1], Burst.RATIO_VALUES))
-check('mutate keeps op1 ratio at the 1.0 anchor', approx(emut.channels[1].opRatio1, 1))
+check('mutate keeps op1 ratio at the 1.0 anchor',
+  seqx.len(emut.channels[1].opRatio1) == 1 and approx(seqx.values(emut.channels[1].opRatio1)[1], 1))
 
 -- ---- burst: clock-coroutine scheduling --------------------------------
 print('burst scheduling:')
@@ -235,11 +238,11 @@ check('alt-trig step arpeggiates the B pitch per hit',
   and approx(step[2], scales.degree_to_freq(5, major))
   and approx(step[3], scales.degree_to_freq(7, major)))
 
--- op1 ratio is a static per-channel scalar; op2/3/4 ratios are sequenced (A value +
--- B offset, drawn per burst). The drawn op2/3/4 values pass straight to trig args
--- 4/5/6 (r2/r3/r4); op1 rides as r1 at arg 20.
+-- all four op ratios are sequenced (A value + B offset, drawn per burst). The drawn
+-- op2/3/4 values pass straight to trig args 4/5/6 (r2/r3/r4); op1's drawn value rides
+-- as r1 at arg 20.
 -- engine.trig(freq, amp, algo, r2, r3, r4, modIndex,
---             atk, aDec, ampCurve, mDec, feedback, drive, ch, op1..op4, modAtk).
+--             atk, aDec, ampCurve, mDec, feedback, drive, ch, op1..op4, modAtk, r1).
 local function first_trig()
   clock._reset()
   local saved = engine
@@ -249,7 +252,7 @@ local function first_trig()
   set_quant(e, 0)
   e.channels[1].div = seqx.new{4}
   e.channels[1].reps = seqx.new{1}
-  e.channels[1].opRatio1 = 0.5
+  e.channels[1].opRatio1 = seqx.new{0.5}
   e.channels[1].opRatio2 = seqx.new{2}
   e.channels[1].opRatio3 = seqx.new{3.5}
   e.channels[1].opRatio4 = seqx.new{7}
@@ -262,7 +265,7 @@ local off = first_trig()
 check('algo passes at trig arg 3 (default channel = 1)', off and off[3] == 1)
 check('sequenced op2/3/4 ratios pass at trig args 4/5/6',
   off and approx(off[4], 2) and approx(off[5], 3.5) and approx(off[6], 7))
--- op1 ratio (static): it rides as r1 at trig arg 20 (appended last).
+-- op1 ratio (sequenced): its drawn value rides as r1 at trig arg 20 (appended last).
 check('op1 ratio passes at trig arg 20', off and approx(off[20], 0.5))
 
 -- op ratio B lane is an INDEX OFFSET: it shifts A's position in the sorted
@@ -365,6 +368,36 @@ end
 local a_step = op_ratio_A_held(1)
 check('op ratio step leaves the A lane held within the burst',
   #a_step == 3 and approx(a_step[1], 2) and approx(a_step[2], 2) and approx(a_step[3], 2))
+
+-- op1 is sequenced the same way (A value + B index offset + per-hit trig), and its
+-- drawn value rides as r1 at trig arg 20. A {2} + B {0,1,2} under step trig walks the
+-- index UP per hit, exactly like op2 above but observed on arg 20.
+local function op1_ratio_trig_seq(trig_mode)
+  clock._reset()
+  local saved = engine
+  local r1 = {}
+  engine = { trig = function(...) local a = {...}; r1[#r1 + 1] = a[20] end }
+  local e = Burst.new()
+  set_quant(e, 0)
+  e.channels[1].div  = seqx.new{4}
+  e.channels[1].reps = seqx.new{3}        -- length-1 finite -> single 3-hit burst
+  e.channels[1].opRatio1  = seqx.new{2}   -- A: held per burst
+  e.channels[1].opRatio1B = seqx.new{0, 1, 2}  -- B: index offsets
+  e.channels[1].opRatio1Trig = trig_mode
+  e:launch(1)
+  clock._run_until(4)
+  engine = saved
+  return r1
+end
+local hold_r1 = op1_ratio_trig_seq(0)
+check('op1 ratio trig hold holds one B offset across the burst (arg 20)',
+  #hold_r1 == 3 and approx(hold_r1[1], 2) and approx(hold_r1[2], 2) and approx(hold_r1[3], 2))
+local step_r1 = op1_ratio_trig_seq(1)
+check('op1 ratio trig step walks the index UP per hit on arg 20',
+  #step_r1 == 3 and approx(step_r1[1], 2)
+  and step_r1[2] == Burst.op_ratio(2, 1) and step_r1[3] == Burst.op_ratio(2, 2)
+  and step_r1[2] > step_r1[1] and step_r1[3] > step_r1[2])
+check('op1 ratio trig defaults to hold (0)', Burst.new().channels[1].opRatio1Trig == 0)
 
 -- envelope shape from the paired attack/decay sequences. attack -> absolute time
 -- (0.001 + a^2*0.4) at trig arg 8; decay -> gap-relative amp decay at trig arg 9.
@@ -745,24 +778,29 @@ check('mod-env page right half edits moddec',
   ctl.picker.param == 'moddec' and ctl.picker.layer == 'A')
 ctl:close_picker()
 
--- sequenced op ratio pages (row7 cols 5/6/7 = op2/3/4): an A|B sequence like
--- note/level (left half = A value, right half = B additive offset).
-ctl:press(5, 7)  -- col 5 = op2 ratio page
+-- sequenced op ratio pages (row7 cols 5/6/7/8 = op1/2/3/4): an A|B sequence like
+-- note/level (left half = A value, right half = B index offset).
+ctl:press(5, 7)  -- col 5 = op1 ratio page
+check('op1 ratio page selected', ctl.selectedParam == 'opRatio1')
+check('op1 ratio page shows opRatio1 A | B lanes',
+  ctl:row_lanes()[1].param == 'opRatio1' and ctl:row_lanes()[1].layer == 'A'
+  and ctl:row_lanes()[2].param == 'opRatio1' and ctl:row_lanes()[2].layer == 'B')
+ctl:press(0, 0)  -- left half step 0 -> opRatio1 A picker
+check('op1 ratio left half edits the A layer',
+  ctl.picker.param == 'opRatio1' and ctl.picker.layer == 'A')
+ctl:press(11, 6) -- value grid row 6 col 11 -> RATIO_PICKER[12] = 2
+check('op1 ratio A picker writes a curated ratio step',
+  approx(seqx.values(geng.channels[1].opRatio1)[1], GridUI.RATIO_PICKER[12]))
+ctl:press(8, 0)  -- right half step 0 -> opRatio1 B (offset) picker
+check('op1 ratio right half edits the B (offset) layer',
+  ctl.picker.param == 'opRatio1' and ctl.picker.layer == 'B')
+ctl:close_picker()
+ctl:press(6, 7)  -- col 6 = op2 ratio page
 check('op2 ratio page selected', ctl.selectedParam == 'opRatio2')
 check('op2 ratio page shows opRatio2 A | B lanes',
   ctl:row_lanes()[1].param == 'opRatio2' and ctl:row_lanes()[1].layer == 'A'
   and ctl:row_lanes()[2].param == 'opRatio2' and ctl:row_lanes()[2].layer == 'B')
-ctl:press(0, 0)  -- left half step 0 -> opRatio2 A picker
-check('op2 ratio left half edits the A layer',
-  ctl.picker.param == 'opRatio2' and ctl.picker.layer == 'A')
-ctl:press(11, 6) -- value grid row 6 col 11 -> RATIO_PICKER[12] = 2
-check('op2 ratio A picker writes a curated ratio step',
-  approx(seqx.values(geng.channels[1].opRatio2)[1], GridUI.RATIO_PICKER[12]))
-ctl:press(8, 0)  -- right half step 0 -> opRatio2 B (offset) picker
-check('op2 ratio right half edits the B (offset) layer',
-  ctl.picker.param == 'opRatio2' and ctl.picker.layer == 'B')
-ctl:close_picker()
-ctl:press(7, 7)  -- col 7 = op4 ratio page
+ctl:press(8, 7)  -- col 8 = op4 ratio page
 check('op4 ratio page selected', ctl.selectedParam == 'opRatio4')
 -- back to the note page so later tests start from a known selection
 ctl:press(1, 7)
@@ -816,32 +854,28 @@ ctl:press(1, 0)   -- ALT_TRIG_COLS[2] -> altTrig = 1 (step) on channel 0
 check('alt-trig key sets altTrig to step', geng.channels[1].altTrig == 1)
 ctl:press(0, 0)   -- ALT_TRIG_COLS[1] -> altTrig = 0 (hold)
 check('alt-trig key sets altTrig to hold', geng.channels[1].altTrig == 0)
--- op2/3/4 ratio-seq trig toggles (cols 3-5): single button, hold (0) <-> step (1)
-check('op2 ratio trig defaults to hold', geng.channels[1].opRatio2Trig == 0)
-ctl:press(3, 0)   -- col3 -> toggle op2 trig
-check('op2 trig button toggles to step', geng.channels[1].opRatio2Trig == 1)
+-- op1/2/3/4 ratio-seq trig toggles (cols 3-6): single button, hold (0) <-> step (1)
+check('op1 ratio trig defaults to hold', geng.channels[1].opRatio1Trig == 0)
+ctl:press(3, 0)   -- col3 -> toggle op1 trig
+check('op1 trig button toggles to step', geng.channels[1].opRatio1Trig == 1)
 ctl:press(3, 0)   -- toggle back
-check('op2 trig button toggles back to hold', geng.channels[1].opRatio2Trig == 0)
-ctl:press(5, 0)   -- col5 -> op4 trig toggle
-check('op4 trig button (col5) sets step', geng.channels[1].opRatio4Trig == 1)
-ctl:press(5, 0)
+check('op1 trig button toggles back to hold', geng.channels[1].opRatio1Trig == 0)
+ctl:press(4, 0)   -- col4 -> op2 trig toggle
+check('op2 trig button (col4) sets step', geng.channels[1].opRatio2Trig == 1)
+ctl:press(4, 0)
+ctl:press(6, 0)   -- col6 -> op4 trig toggle
+check('op4 trig button (col6) sets step', geng.channels[1].opRatio4Trig == 1)
+ctl:press(6, 0)
 ctl:press(13, 6)
 check('PROB mode exited', ctl.probMode == false)
 
--- OP page (row6 col 11): op1 ratio (col 0, static) + per-op level (cols 8-11).
--- op2/3/4 ratios moved to their own sequence pages, so cols 1-3 are inert here.
+-- OP page (row6 col 11): per-op level (cols 8-11). All four op ratios moved to their
+-- own sequence pages, so the left side of the OP page (cols 0-7) is inert here.
 ctl:press(11, 6)
 check('OP mode entered', ctl.opMode == true)
--- col0 opens the op1 ratio (the static fundamental) picker.
-ctl:press(0, 0)   -- col0 -> op1 ratio picker
-check('op1 ratio cell opens a scalar picker',
-  ctl.picker and ctl.picker.kind == 'scalar' and ctl.picker.field == 'opRatio1')
-ctl:press(2, 6)   -- value grid row 6 col 2 -> RATIO_PICKER[3]
-check('OP ratio picker sets opRatio1',
-  approx(geng.channels[1].opRatio1, GridUI.RATIO_PICKER[3]) and ctl.picker == nil)
--- cols 1-3 (the old op2/3/4 ratio slots) are now dark / inert on the OP page.
-ctl:press(1, 0)
-check('OP cols 1-3 are inert (op ratios are sequenced now)', ctl.picker == nil)
+-- col0 (the old op1 ratio slot) is now inert — op ratios are sequenced.
+ctl:press(0, 0)
+check('OP col0 is inert (op1 ratio is sequenced now)', ctl.picker == nil)
 ctl:press(8, 0)   -- col8 -> op1 level picker
 check('OP level cell opens a scalar picker',
   ctl.picker and ctl.picker.field == 'opLevel1')
@@ -924,30 +958,30 @@ check('prob mode line toggles probHit', seng.channels[1].probHit == true)
 sui.sel_line[4] = 3
 sui:enc(3, 1)
 check('alt-trig line steps altTrig to step', seng.channels[1].altTrig == 1)
-sui.sel_line[4] = 4   -- op2 ratio-seq trig
+sui.sel_line[4] = 4   -- op1 ratio-seq trig
+sui:enc(3, 1)
+check('prob page op1 trig line steps to step', seng.channels[1].opRatio1Trig == 1)
+sui:enc(3, -1)
+check('prob page op1 trig line steps back to hold', seng.channels[1].opRatio1Trig == 0)
+sui.sel_line[4] = 5   -- op2 ratio-seq trig
 sui:enc(3, 1)
 check('prob page op2 trig line steps to step', seng.channels[1].opRatio2Trig == 1)
 sui:enc(3, -1)
 check('prob page op2 trig line steps back to hold', seng.channels[1].opRatio2Trig == 0)
 
--- op page: line 1 = op1 ratio (static), lines 2..5 = op1..op4 level. op2/3/4 ratios
--- are sequenced now (edited on the main/alt seq pages), so they're absent here.
+-- op page: lines 1..4 = op1..op4 level. All four op ratios are sequenced now (edited
+-- on the main/alt seq pages), so they're absent here.
 sui:set_page(6)
-sui.sel_line[6] = 1   -- op1 ratio (the static fundamental)
-seng.channels[1].opRatio1 = 1
-sui:enc(3, 1)
-check('op page ratio line steps opRatio1 up the curated set',
-  in_set(seng.channels[1].opRatio1, GridUI.RATIO_PICKER) and seng.channels[1].opRatio1 ~= 1)
-sui.sel_line[6] = 2   -- op1 level
+sui.sel_line[6] = 1   -- op1 level
 seng.channels[1].opLevel1 = 1.0
 sui:enc(3, -1)
 check('op page level line steps opLevel1 down the 0..1 grid',
   in_set(seng.channels[1].opLevel1, GridUI.OP_LEVEL_VALUES) and seng.channels[1].opLevel1 < 1.0)
 
--- op2/3/4 ratios are now sequenced — editable on the main seq page like any lane.
+-- op1/2/3/4 ratios are now sequenced — editable on the main seq page like any lane.
 sui:set_page(1)
 sui.sel_ch = 0
-sui.sel_line[1] = 1 + 9   -- run(1) + params 1..8 + opRatio2 = line 10
+sui.sel_line[1] = 1 + 10  -- run(1) + params 1..8 + opRatio1(9) + opRatio2(10) = line 11
 sui:enc(2, 0)             -- sync grid selected param to the focused line
 check('main page line reaches the sequenced opRatio2 lane', sui:main_param() == 'opRatio2')
 seng.channels[1].opRatio2 = seqx.new{1}
@@ -1256,9 +1290,17 @@ check('div has no B param', fake:lookup_param('ch1_div_b') == nil)
 check('reps has no B param', fake:lookup_param('ch1_reps_b') == nil)
 check('harm has no param at all', fake:lookup_param('ch1_harm_a') == nil)
 
--- op1 ratio is a static curated option; op levels are 0..31 grid scalars.
-fake:set('ch1_ratio1', 7)   -- option index 7 -> RATIO_PICKER[7] = 0.875
-check('ratio option sets opRatio1', approx(peng.channels[1].opRatio1, GridUI.RATIO_PICKER[7]))
+-- op1 ratio is sequenced now (no static ch1_ratio1 scalar); op levels are 0..31 grid scalars.
+check('no static op1-ratio scalar param', fake:lookup_param('ch1_ratio1') == nil)
+check('op1 ratio has a sequenced A block', fake:lookup_param('ch1_opRatio1_a') ~= nil)
+fake:set('ch1_opRatio1_a', '1.5 2 3.5')
+check('op1 ratio text installs a curated-ratio sequence',
+  vals_eq(seqx.values(peng.channels[1].opRatio1), {1.5, 2, 3.5}))
+check('op1 ratio has a B (index-offset) block', fake:lookup_param('ch1_opRatio1_b') ~= nil)
+fake:set('ch1_op1_trig', 2)  -- option 2 = step
+check('op1 ratio trig param sets step', peng.channels[1].opRatio1Trig == 1)
+fake:set('ch1_op1_trig', 1)  -- option 1 = hold
+check('op1 ratio trig param sets hold', peng.channels[1].opRatio1Trig == 0)
 fake:set('ch1_level3', 0)
 check('op level 0 -> 0.0', approx(peng.channels[1].opLevel3, 0))
 fake:set('ch1_level3', 31)
@@ -1341,19 +1383,23 @@ check('copy+paste duplicates all MAIN sequins across channels', cp_ok)
 check('paste reflected into dest text param',
   vals_eq(ParamsSync.from_text('note', 'A', fake:get('ch5_note_a')), {1, 2, 3, 4}))
 
--- clear: resets all six MAIN sequins to defaults, leaving the ALT (B) layer intact
+-- clear: resets BOTH layers (A + B where present) to defaults, so the channel is blank
 fake:set('ch6_div_a', '4 8 16')
-fake:set('ch6_note_b', '1 2 3')  -- B-layer offset must survive clear
+fake:set('ch6_note_b', '1 2 3')  -- B-layer offset is cleared too now
 fake:set('ch6_clear', 1)
 -- assert against the module's own defaults so this follows DEFAULT_VALUE edits
 local cl_ok = true
 for _, p in ipairs(GridUI.PARAMS) do
   local v = seqx.values(peng.channels[6][p])
   if #v ~= 1 or not approx(v[1], GridUI.DEFAULT_VALUE[p]) then cl_ok = false end
+  if GridUI.has_b(p) then  -- every B-layer default is 0 (no offset)
+    local vb = seqx.values(peng.channels[6][p .. 'B'])
+    if #vb ~= 1 or not approx(vb[1], 0) then cl_ok = false end
+  end
 end
-check('clear resets all MAIN sequins to defaults', cl_ok)
-check('clear leaves ALT (B) layer intact',
-  vals_eq(seqx.values(peng.channels[6].noteB), {1, 2, 3}))
+check('clear resets every sequence on both layers to defaults', cl_ok)
+check('clear resets the ALT (B) layer too',
+  vals_eq(seqx.values(peng.channels[6].noteB), {0}))
 
 -- randomize trigger: result reflects exactly (grid-reachability contract)
 fake:set('ch4_randomize', 1)
