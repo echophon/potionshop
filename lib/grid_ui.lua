@@ -24,17 +24,21 @@
 --               page. KB page disabled; FM algorithm, env mode and geode are
 --               global params, not grid pages -- the old SND page was reclaimed)
 --   row 7     = 0 div/reps · 1 note · 2 level · 3 attack/decay · 4 modatk/moddec
---             · 5..10 dark · 11 CLR · 12 COPY · 13 PASTE · 14 RANDOMIZE · 15 MUTATE
+--             · 5 op2 ratio · 6 op3 ratio · 7 op4 ratio · 8..10 dark
+--             · 11 CLR · 12 COPY · 13 PASTE · 14 RANDOMIZE · 15 MUTATE
 --             (one page-select button each; div/reps, attack/decay and
 --             modatk/moddec are paired pages showing two A-layer lanes. The two
 --             envelope pages are the carrier amp env and the modulator/FM-bright
---             env. timbre — per-op ratio/level — lives
---             on the OP page as static scalars)
+--             env. op2/3/4 ratios are sequenced pages (A value | B offset, like
+--             note/level); op1 ratio + all op levels stay static on the OP page)
 --   CLR/COPY/PASTE act on the MAIN (A-layer) sequins of the tapped channel only;
 --   the B (alt) layer is left intact so it can keep variating the copied sequins.
---   OP:    rows 0-5 = per-op RATIO (cols 0-3, op1..op4 all editable) · per-op LEVEL
---          (cols 8-11). Tap a cell to open its value picker on rows 6-7.
+--   OP:    rows 0-5 = op1 RATIO (col 0, the static fundamental) · per-op LEVEL
+--          (cols 8-11). Tap a cell to open its value picker on rows 6-7. (op2/3/4
+--          ratios are sequenced — edited on their row-7 pages, not here.)
 --   PROB:  rows 0-5 = note alt-trig hold/step (cols 0-1)
+--          · op2/3/4 ratio-seq trig toggles (cols 3-5, single button each:
+--            off=hold, on=step)
 --          · prob 25/50/75/100% (cols 11-14, right-justified)
 --          · col 15 burst/hit toggle
 --   PERF:  rows 0-5 = reset off/1/2/4 bars (cols 0..3) · octave -2..+2 (cols 5..9)
@@ -68,9 +72,10 @@ local SEQ_LEN = 8
 local B_COL0 = 8
 local NUM_CHANNELS = 6
 -- All sequenced params (the row-7 page buttons are a separate, smaller list —
--- ROW7_PAGES — one per page). Timbre (per-op ratios + levels) is no longer
--- sequenced — it lives on the per-channel OP page as static scalars.
-local PARAMS = {'div', 'reps', 'note', 'level', 'attack', 'decay', 'modatk', 'moddec'}
+-- ROW7_PAGES — one per page). op2/3/4 FM ratios are sequenced (A value + B additive
+-- offset, like note/level); op1 ratio + all op levels stay static on the OP page.
+local PARAMS = {'div', 'reps', 'note', 'level', 'attack', 'decay', 'modatk', 'moddec',
+                'opRatio2', 'opRatio3', 'opRatio4'}
 -- Paired params share one page as two A-layer lanes (left|right) instead of a
 -- param's own A|B layers: div|reps (an additive offset on division/repeats isn't
 -- musical), attack|decay (the carrier envelope shape) and modatk|moddec (the
@@ -85,8 +90,10 @@ end
 local function has_b(param) return not PAIRED[param] end
 -- row-7 page-select buttons: ONE per page. A paired page is represented by its
 -- first member (selecting it shows both lanes via row_lanes); singles are
--- themselves. Cols 0..#ROW7_PAGES-1.
-local ROW7_PAGES = {'div', 'note', 'level', 'attack', 'modatk'}
+-- themselves. The three op-ratio pages (opRatio2/3/4) follow the env pages.
+-- Cols 0..#ROW7_PAGES-1 (now 0..7).
+local ROW7_PAGES = {'div', 'note', 'level', 'attack', 'modatk',
+                    'opRatio2', 'opRatio3', 'opRatio4'}
 
 -- row 7
 local CLR_BUTTON_COL = 11
@@ -105,8 +112,8 @@ local ROW6_PERF_COL = 12
 local ROW6_PROB_COL = 13
 local ROW6_SCALE_COL = 14 -- opens the scale picker (scale preset / degrees / root)
 local ROW6_QNT_COL = 15   -- per-channel QNT page (event snap grid, curated set)
--- OP page channel-row layout: op1..4 RATIO on cols 0..3 (op1 default 1.0, editable),
--- op1..4 LEVEL on cols 8..11 (left/right halves, like the A/B convention).
+-- OP page channel-row layout: op1 RATIO on col 0 (the static fundamental),
+-- op1..4 LEVEL on cols 8..11. op2/3/4 ratios are sequenced (row-7 pages), not here.
 local OP_RATIO_COL0 = 0
 local OP_LEVEL_COL0 = 8
 -- The step picker's 32-value grid renders on the control rows (6-7) while a pick
@@ -138,10 +145,14 @@ local OCTAVE_VALUES = {-2, -1, 0, 1, 2}
 local OCTAVE_COLS   = {5, 6, 7, 8, 9}
 local RATE_VALUES = {0.25, 0.5, 1, 2, 4}
 local RATE_COLS   = {11, 12, 13, 14, 15}
--- PROB page: note alt-trig mode packed left, prob options right-justified, hit
--- toggle at the far right (col 15). burstProb is a discrete 4-value set. (harm/op
--- trig columns are gone — harm and op levels no longer have a B layer.)
+-- PROB page: note alt-trig mode packed left (cols 0-1), the three op-ratio sequence
+-- trig toggles next to it (cols 3-5), prob options right-justified (cols 11-14), hit
+-- toggle at the far right (col 15). burstProb is a discrete 4-value set.
 local ALT_TRIG_COLS  = {0, 1}                -- note alt(B) layer: hold / step
+-- op2/3/4 ratio-sequence trig: ONE button each (off=hold, on=step), to save grid
+-- space (vs the note pair). Cols 3/4/5 -> opRatio2/3/4 trig.
+local OP_TRIG_COLS   = {3, 4, 5}
+local OP_TRIG_FIELDS = {'opRatio2Trig', 'opRatio3Trig', 'opRatio4Trig'}
 local PROB_VALUES   = {0.25, 0.5, 0.75, 1.0}
 local PROB_COLS     = {11, 12, 13, 14}
 local PROB_HIT_COL  = 15
@@ -159,20 +170,39 @@ local ALGO_NAMES = {'4>3>2>1', '(4,3)>2>1', '4>3>1 2>1', '4>2>1 3>1',
 --   hold = add&hold (B drawn once per burst, summed onto A for every hit)
 --   step = advance the B sequins per hit (arpeggiates the alt layer)
 local ALT_TRIG_MODE_NAMES  = {'hold', 'step'}
--- Curated per-operator FM ratios for the OP-page picker (32 values across the two
--- picker rows 6-7: cols 0..15 = ratios 1..16, second row = 17..32). Mirrors
--- Burst.RATIO_VALUES (randomize/mutate) — keep the two in sync. Superset of the
--- earlier 16-value set: denser sub-octave bass, a unity-detune zone (1.25/1.75),
--- and half-integer inharmonic ratios for bell/metallic timbres.
-local RATIO_VALUES = {
+-- Curated per-operator FM ratios. Mirrors Burst.RATIO_PICKER / RATIO_FINE /
+-- RATIO_VALUES — keep in sync. RATIO_PICKER = the 32 COARSE ratios the grid pickers
+-- show (op1 scalar + op2/3/4 A lane, rendered across rows 6-7: cols 0..15 = 1..16,
+-- second row = 17..32). RATIO_FINE = finer just-intonation ratios woven between the
+-- coarse steps (low/mid range), reachable ONLY through the op-ratio B index offset.
+local RATIO_PICKER = {
   0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1,
   1.25, 1.5, 1.75, 2, 2.25, 2.5, 2.75, 3,
   3.5, 4, 4.5, 5, 5.5, 6, 6.5, 7,
   7.5, 8, 9, 10, 11, 12, 13, 14,
 }
+local RATIO_FINE = {
+  -- sub-unity (sub-octave JI): 1/3, 9/16, 3/5, 2/3, 7/10, 4/5, 5/6, 9/10, 15/16
+  0.333, 0.5625, 0.6, 0.667, 0.7, 0.8, 0.833, 0.9, 0.9375,
+  -- octave 1-2: 9/8, 6/5, 4/3, 7/5, 8/5, 5/3, 9/5, 15/8
+  1.125, 1.2, 1.333, 1.4, 1.6, 1.667, 1.8, 1.875,
+  -- 2-4 (denser): 11/5, 7/3, 12/5, 8/3, 14/5, 16/5, 10/3, 18/5, 15/4
+  2.2, 2.333, 2.4, 2.667, 2.8, 3.2, 3.333, 3.6, 3.75,
+}
+-- full set = coarse + fine, sorted ascending so a B index step is a pitch step.
+local RATIO_VALUES = {}
+for _, v in ipairs(RATIO_PICKER) do RATIO_VALUES[#RATIO_VALUES + 1] = v end
+for _, v in ipairs(RATIO_FINE)   do RATIO_VALUES[#RATIO_VALUES + 1] = v end
+table.sort(RATIO_VALUES)
+-- op-ratio B lane: integer INDEX offsets 0..31 (0 = no shift, the default). Adding
+-- this to the A ratio's index walks UP RATIO_VALUES into the finer in-between ratios.
+local OP_RATIO_OFFSETS = {}
+for i = 0, 31 do OP_RATIO_OFFSETS[i + 1] = i end
 
-local DEFAULT_VALUE   = {div = 8, reps = 3, note = 0, level = 0.5, attack = 0, decay = 16 / 31, modatk = 0, moddec = 8 / 31}
-local DEFAULT_VALUE_B = {div = 0, reps = 0, note = 0, level = 0, attack = 0, decay = 0, modatk = 0, moddec = 0}
+local DEFAULT_VALUE   = {div = 8, reps = 3, note = 0, level = 0.5, attack = 0, decay = 16 / 31, modatk = 0, moddec = 8 / 31,
+                         opRatio2 = 1, opRatio3 = 1, opRatio4 = 1}  -- op ratio default = unison
+local DEFAULT_VALUE_B = {div = 0, reps = 0, note = 0, level = 0, attack = 0, decay = 0, modatk = 0, moddec = 0,
+                         opRatio2 = 0, opRatio3 = 0, opRatio4 = 0}  -- op ratio offset default = 0 (none)
 
 -- 1-based value layouts for the step picker / KB bands. Index 1..32 maps to
 -- grid cell (y*16 + x + 1). These are the grid-reachability contract.
@@ -195,7 +225,20 @@ local STEP_PICKER_VALUES = {
   decay  = range(32, function(i) return i / 31 end),
   modatk = range(32, function(i) return i / 31 end),
   moddec = range(32, function(i) return i / 31 end),
+  -- sequenced op2/3/4 FM ratios: the A lane snaps to the 32-value grid-picker range
+  -- (RATIO_PICKER); the B lane (an index offset) uses OP_RATIO_OFFSETS — see
+  -- picker_layout, which is layer-aware for op ratios.
+  opRatio2 = RATIO_PICKER,
+  opRatio3 = RATIO_PICKER,
+  opRatio4 = RATIO_PICKER,
 }
+-- Layer-aware picker layout. Op-ratio B is the one lane whose value set differs from
+-- its A lane (integer index offsets vs ratios); every other lane uses one layout for
+-- both A and B (B's "no offset" literal-0 is handled where it's drawn/parsed).
+local function picker_layout(param, layer)
+  if layer == 'B' and param:match('^opRatio') then return OP_RATIO_OFFSETS end
+  return STEP_PICKER_VALUES[param]
+end
 -- OP-page op-level picker: 0..1 in 1/31 steps (same layout the old op sequins
 -- used), so every operator level stays grid-reachable.
 local OP_LEVEL_VALUES = range(32, function(i) return i / 31 end)
@@ -240,7 +283,7 @@ end
 -- screen draw_steps), so every *value* tops out at VALUE_MAX. With the playhead
 -- the only thing that can hit 15, it stays legible even over a hot step.
 local VALUE_MAX = 13
-local function value_brightness(param, value)
+local function value_brightness(param, value, layer)
   local b
   if param == 'div' then
     b = value <= 4 and 6 or value <= 8 and 8 or value <= 16 and 11 or VALUE_MAX
@@ -254,6 +297,16 @@ local function value_brightness(param, value)
     -- positive one brighter, so +n and -n no longer collide (they did under the
     -- old abs() mapping). Reads like pitch height — higher note, brighter cell.
     b = clamp(round(7 + value), 2, VALUE_MAX)
+  elseif param:match('^opRatio') then
+    if layer == 'B' then
+      -- B is an integer index offset 0..31: brightness ramps with the shift amount.
+      b = clamp(round(2 + clamp(value, 0, 31) / 31 * 11), 2, VALUE_MAX)
+    else
+      -- A ratio: brightness from its index in the 32-cell picker (low ratio = dim),
+      -- so the sequence row reads like the OP-page ratio cells.
+      local idx = nearest_index(RATIO_PICKER, value)
+      b = clamp(round(2 + (idx - 1) / (#RATIO_PICKER - 1) * 11), 2, VALUE_MAX)
+    end
   elseif param == 'level' or param:match('^op%d') then
     b = math.max(2, round(2 + value * 11))
   elseif param == 'harm' then
@@ -289,6 +342,9 @@ GridUI.QUANTIZE_VALUES = QUANTIZE_VALUES
 GridUI.PROB_VALUES = PROB_VALUES
 GridUI.ALT_TRIG_MODE_NAMES = ALT_TRIG_MODE_NAMES
 GridUI.RATIO_VALUES = RATIO_VALUES
+GridUI.RATIO_PICKER = RATIO_PICKER          -- first-32 grid-picker range (op1 + op ratio A)
+GridUI.OP_RATIO_OFFSETS = OP_RATIO_OFFSETS  -- op ratio B index-offset layout (0..31)
+GridUI.picker_layout = picker_layout        -- layer-aware step-picker layout
 GridUI.OP_LEVEL_VALUES = OP_LEVEL_VALUES
 
 -- opts.on_status(string): pushed status text (for screen). opts.on_redraw():
@@ -427,11 +483,16 @@ function GridUI:handle_normal_press(x, y)
     end
     if self.probMode then
       local trig_idx = index_of(ALT_TRIG_COLS, x)
+      local op_trig_idx = index_of(OP_TRIG_COLS, x)
       local prob_idx = index_of(PROB_COLS, x)
       if x == PROB_HIT_COL then
         self:set_scalar(y, 'probHit', not self:chan(y).probHit)
       elseif trig_idx ~= -1 then
         self:set_scalar(y, 'altTrig', trig_idx)
+      elseif op_trig_idx ~= -1 then
+        -- single-button toggle: hold (0) <-> step (1)
+        local field = OP_TRIG_FIELDS[op_trig_idx + 1]
+        self:set_scalar(y, field, (self:chan(y)[field] == 1) and 0 or 1)
       elseif prob_idx ~= -1 then
         self:set_scalar(y, 'burstProb', PROB_VALUES[prob_idx + 1])
       end
@@ -439,11 +500,11 @@ function GridUI:handle_normal_press(x, y)
       return
     end
     if self.opMode then
-      -- ratios on cols 0..3 (op1..op4, all editable); levels on cols 8..11
-      local ri = x - OP_RATIO_COL0
+      -- op1 ratio (the static fundamental) on col 0; op1..op4 levels on cols 8..11.
+      -- op2/3/4 ratios are sequenced now (their own row-7 pages), so cols 1..3 are dark.
       local lvi = x - OP_LEVEL_COL0
-      if ri >= 0 and ri <= 3 then            -- op1..op4 ratio
-        self:open_scalar_picker(y, 'opRatio' .. (ri + 1), RATIO_VALUES, 'ratio')
+      if x == OP_RATIO_COL0 then             -- op1 ratio (first-32 picker range)
+        self:open_scalar_picker(y, 'opRatio1', RATIO_PICKER, 'ratio')
       elseif lvi >= 0 and lvi <= 3 then      -- op1..op4 level
         self:open_scalar_picker(y, 'opLevel' .. (lvi + 1), OP_LEVEL_VALUES, 'level')
       end
@@ -497,7 +558,7 @@ end
 
 function GridUI:apply_picker_value(p, x, y)
   if p.kind == 'step' then
-    local v = STEP_PICKER_VALUES[p.param][y * GRID_W + x + 1]
+    local v = picker_layout(p.param, p.layer)[y * GRID_W + x + 1]
     if v == nil then return end
     -- pressing the already-selected (full-bright) value toggles the step off:
     -- the value grid (rows 6-7) is the remove affordance, freeing the channel
@@ -829,7 +890,7 @@ end
 function GridUI:render_step_picker(p)
   local vals = seqx.values(self:seq_ref(p.ch, p.param, p.layer))
   local focused = vals[p.col + 1]
-  local layout = STEP_PICKER_VALUES[p.param]
+  local layout = picker_layout(p.param, p.layer)
   for y = 0, 1 do
     for x = 0, GRID_W - 1 do
       local v = layout[y * GRID_W + x + 1]
@@ -905,7 +966,7 @@ function GridUI:render_channel_row(ch)
     for i = 0, SEQ_LEN - 1 do
       local col = base + i
       if i < len then
-        self.g:set_led(col, ch, value_brightness(lane.param, vals[i + 1]))
+        self.g:set_led(col, ch, value_brightness(lane.param, vals[i + 1], lane.layer))
       elseif i == len and len < SEQ_LEN then
         self.g:set_led(col, ch, 1)  -- the add slot
       else
@@ -923,25 +984,23 @@ function GridUI:render_channel_row(ch)
   end
 end
 
--- OP page: per-op ratio (cols 0..3, op1..op4 all editable) + per-op level
--- (cols 8..11), each cell's brightness encoding its value; picker opens on tap.
+-- OP page: op1 ratio (col 0, the static fundamental) + per-op level (cols 8..11),
+-- each cell's brightness encoding its value; picker opens on tap. op2/3/4 ratios are
+-- sequenced (their own row-7 pages), so cols 1..3 stay dark here.
 function GridUI:render_op_row(ch)
   local c = self:chan(ch)
   for x = 0, GRID_W - 1 do self.g:set_led(x, ch, 0); self.g:set_strobe(x, ch, 'off') end
-  local ratios = {c.opRatio1, c.opRatio2, c.opRatio3, c.opRatio4}
+  -- op1 ratio brightness from its index in the 32-cell picker range (low ratio = dim)
+  local idx = nearest_index(RATIO_PICKER, c.opRatio1)
+  self.g:set_led(OP_RATIO_COL0, ch, clamp(round(2 + (idx - 1) / (#RATIO_PICKER - 1) * 11), 2, VALUE_MAX))
   for op = 1, 4 do
-    -- ratio brightness from its index in the curated set (low ratio = dim)
-    local idx = nearest_index(RATIO_VALUES, ratios[op])
-    local rb = clamp(round(2 + (idx - 1) / (#RATIO_VALUES - 1) * 11), 2, VALUE_MAX)
-    self.g:set_led(OP_RATIO_COL0 + (op - 1), ch, rb)
     local lvl = c['opLevel' .. op] or 1
     self.g:set_led(OP_LEVEL_COL0 + (op - 1), ch, math.max(2, round(2 + lvl * 11)))
   end
   if self.picker and self.picker.kind == 'scalar' and self.picker.ch == ch then
     local f = self.picker.field
-    local op = tonumber(f:sub(-1))
-    if f:match('^opRatio') then self.g:set_led(OP_RATIO_COL0 + (op - 1), ch, 15)
-    elseif f:match('^opLevel') then self.g:set_led(OP_LEVEL_COL0 + (op - 1), ch, 15) end
+    if f == 'opRatio1' then self.g:set_led(OP_RATIO_COL0, ch, 15)
+    elseif f:match('^opLevel') then self.g:set_led(OP_LEVEL_COL0 + (tonumber(f:sub(-1)) - 1), ch, 15) end
   end
 end
 
@@ -951,6 +1010,12 @@ function GridUI:render_prob_row(ch)
   -- note alt-trig mode (cols 0-1): hold / step
   for i = 1, #ALT_TRIG_MODE_NAMES do
     self.g:set_led(ALT_TRIG_COLS[i], ch, c.altTrig == (i - 1) and 15 or 4)
+  end
+  -- op2/3/4 ratio-seq trig toggles (cols 3-5): on (step) bright+strobe, off (hold) dim
+  for i = 1, #OP_TRIG_COLS do
+    local on = c[OP_TRIG_FIELDS[i]] == 1
+    self.g:set_led(OP_TRIG_COLS[i], ch, on and 14 or 4)
+    self.g:set_strobe(OP_TRIG_COLS[i], ch, on and 'slow' or 'off')
   end
   -- prob options (right-justified): nearest discrete value highlighted
   local sel = nearest_index(PROB_VALUES, c.burstProb)
@@ -1235,11 +1300,11 @@ function GridUI:_status()
   elseif self.perfMode then
     s = 'PERF — cols0-3 reset, cols5-9 oct, cols11-15 rate'
   elseif self.probMode then
-    s = 'PROB — cols0-1 note trig, 11-14 prob%, 15 burst/hit'
+    s = 'PROB — 0-1 note trig, 3-5 op trig, 11-14 prob%, 15 hit'
   elseif self.qntMode then
     s = 'QNT — cols0-7 per-channel quantize (1/3..1/32)'
   elseif self.opMode then
-    s = 'OP — cols0-3 op ratio, cols8-11 op level'
+    s = 'OP — col0 op1 ratio, cols8-11 op level'
   elseif self.actionMode then
     s = string.upper(self.actionMode) .. ' — tap a channel'
   elseif self.picker and self.picker.kind == 'scalar' then

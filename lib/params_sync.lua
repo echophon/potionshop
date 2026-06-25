@@ -8,17 +8,19 @@
 -- fm feedback / fm drive),
 -- the OUTPUTS group (lib/outputs.lua), plus one group per
 -- channel ("CHANNEL 1".."CHANNEL 6"). Each group holds the channel scalars
--- (run, rate, quantize, prob, alt trig, reset, per-op ratios/levels, clear/copy/paste + action
--- triggers) and, per sequence parameter x layer (div/reps/note/level/attack/decay/
--- modatk/moddec x A/B, where div/reps, attack/decay and modatk/moddec are A-only),
+-- (run, rate, quantize, prob, alt trig, op2/3/4 ratio trig, reset, op1 ratio, per-op
+-- levels, clear/copy/paste + action triggers) and, per sequence parameter x layer (div/reps/note/level/
+-- attack/decay/modatk/moddec/opRatio2/opRatio3/opRatio4 x A/B, where div/reps,
+-- attack/decay and modatk/moddec are A-only),
 -- a 3-param block:
 --   chN_<p>_<a|b>        text — the whole sequence as a space-separated string
 --   chN_<p>_<a|b>_step   number — cursor into the sequence (1-based)
 --   chN_<p>_<a|b>_val    number — value at the cursor, as an INDEX into
 --                        GridUI.STEP_PICKER_VALUES (B layer adds index 0 =
 --                        literal 0, the no-offset default). MIDI-mappable.
--- Per-op timbre is NOT sequenced: chN_ratio2/3/4 (curated options) and
--- chN_level1..4 (0..31 grid) are plain per-channel scalars.
+-- Per-op timbre: op2/3/4 FM ratios ARE sequenced (chN_opRatio2/3/4_a/b text+cursor
+-- blocks, like note/level). op1 ratio (chN_ratio1, curated options) and chN_level1..4
+-- (0..31 grid) stay plain per-channel scalars.
 --
 -- String tokens use the display units the grid/screen use: div/note/reps as
 -- integers ('rN' for an N-step rest, reps <= 0), level/attack/decay on the 0..31 grid scale
@@ -44,7 +46,15 @@ local GridUI = require 'grid_ui'
 
 local SEQ_PARAMS = GridUI.PARAMS  -- {'div','reps','note','level','attack','decay'}
 local SPV        = GridUI.STEP_PICKER_VALUES
+local OP_OFFSETS = GridUI.OP_RATIO_OFFSETS  -- op-ratio B index-offset layout (0..31)
 local MAX_STEPS  = GridUI.SEQ_LEN  -- 8-step cap, shared with grid/screen
+
+-- Layer-aware value layout (mirrors GridUI.picker_layout): op-ratio B is an integer
+-- index offset, every other lane uses its single STEP_PICKER layout.
+local function layout_of(p, layer)
+  if layer == 'B' and p:match('^opRatio') then return OP_OFFSETS end
+  return SPV[p]
+end
 
 local RATE_NAMES = {'0.25x', '0.5x', '1x', '2x', '4x'}
 -- curated per-channel quantize labels (mirror GridUI.QUANTIZE_VALUES order),
@@ -59,13 +69,13 @@ local PROB_MODE_NAMES = {'burst', 'hit'}
 local PROB_PCT_NAMES = {}
 for i, v in ipairs(GridUI.PROB_VALUES) do PROB_PCT_NAMES[i] = (v * 100) .. '%' end
 local ALT_TRIG_NAMES = GridUI.ALT_TRIG_MODE_NAMES
--- curated per-op ratio option labels (mirror GridUI.RATIO_VALUES order)
+-- op1 ratio option labels (the static scalar reaches only the 32-cell picker range)
 local RATIO_LABELS = {}
-for i, r in ipairs(GridUI.RATIO_VALUES) do
+for i, r in ipairs(GridUI.RATIO_PICKER) do
   RATIO_LABELS[i] = (r % 1 == 0) and tostring(math.floor(r)) or tostring(r)
 end
 local function ratio_index(v)
-  for i, r in ipairs(GridUI.RATIO_VALUES) do if r == v then return i end end
+  for i, r in ipairs(GridUI.RATIO_PICKER) do if r == v then return i end end
   return 1
 end
 local NOTE_NAMES = {'C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'}
@@ -91,21 +101,29 @@ M.MAX_STEPS = MAX_STEPS
 
 -- ---- pure value/text conversions (module-level so tests can pin them) ----
 
--- step-param index <-> engine value. B-layer index 0 = literal 0.
+-- step-param index <-> engine value. B-layer index 0 = literal 0 (no offset). For
+-- op-ratio B the layout is the integer index-offset set (layout_of).
 function M.index_to_value(p, layer, idx)
   if layer == 'B' and idx == 0 then return 0 end
-  return SPV[p][clamp(idx, 1, #SPV[p])]
+  local L = layout_of(p, layer)
+  return L[clamp(idx, 1, #L)]
 end
 
 function M.value_to_index(p, layer, v)
   if layer == 'B' and v == 0 then return 0 end
-  return GridUI.nearest_index(SPV[p], v)
+  return GridUI.nearest_index(layout_of(p, layer), v)
 end
 
 -- engine value -> display token (the units the grid/screen show).
 function M.fmt_value(p, v)
   if p == 'reps' and v <= 0 then return 'r' .. (1 - v) end  -- rest: r1..r16 = 1..16 steps
   if is_level_like(p) then return tostring(round(v * 31)) end
+  if p:match('^opRatio') then
+    -- curated ratios incl. thirds/eighths (0.125..14): 3 decimals then trim, so
+    -- e.g. 0.375 -> '0.375', 1.5 -> '1.5', 2 -> '2' (round() would corrupt these).
+    local s = string.format('%.3f', v)
+    return (s:gsub('0+$', ''):gsub('%.$', ''))
+  end
   if p == 'harm' then
     local s = string.format('%.2f', v)
     s = s:gsub('0+$', ''):gsub('%.$', '')  -- 2.00 -> 2, 3.50 -> 3.5
@@ -123,6 +141,9 @@ function M.parse_token(p, layer, tok)
   local n = tonumber(tok)
   if n == nil then return nil end
   if layer == 'B' and n == 0 then return 0 end
+  if layer == 'B' and p:match('^opRatio') then
+    return clamp(round(n), 0, #OP_OFFSETS - 1)  -- B = integer index offset 0..31
+  end
   if is_level_like(p) then
     return clamp(round(n), 0, 31) / 31
   end
@@ -279,8 +300,8 @@ function M:add_globals()
   params:set_action('fm_feedback', function(v) eng.fmFeedback = v / 100 end)
   params:add_number('fm_drive', 'FM drive', 100, 800, round(eng.drive * 100), pct())
   params:set_action('fm_drive', function(v) eng.drive = v / 100 end)
-  -- per-operator ratios + output levels are per-channel static scalars
-  -- (chN_ratio2/3/4, chN_level1..4), added in the channel groups below.
+  -- op1 ratio + per-op output levels are per-channel static scalars (chN_ratio1,
+  -- chN_level1..4); op2/3/4 ratios are sequenced, added in the channel groups below.
 end
 
 function M:add_channels()
@@ -351,17 +372,26 @@ function M:_add_channel_params(n)
       self:request_render()
     end)
   end)
-  -- per-operator FM ratios (op1..4; op1 default 1.0, now editable) — curated static scalars
-  for op = 1, 4 do
-    local field = 'opRatio' .. op
+  -- per-op-ratio sequence trig mode (hold/step), one per sequenced op ratio
+  for op = 2, 4 do
+    local field = 'opRatio' .. op .. 'Trig'
     def(1, function()
-      params:add_option(id('ratio' .. op), 'op' .. op .. ' ratio', RATIO_LABELS, ratio_index(c[field]))
-      params:set_action(id('ratio' .. op), function(i)
-        c[field] = GridUI.RATIO_VALUES[i]
+      params:add_option(id('op' .. op .. '_trig'), 'op' .. op .. ' ratio trig', ALT_TRIG_NAMES, c[field] + 1)
+      params:set_action(id('op' .. op .. '_trig'), function(i)
+        c[field] = i - 1
         self:request_render()
       end)
     end)
   end
+  -- op1 FM ratio (the static fundamental) — a curated static scalar. op2/3/4 ratios
+  -- are sequenced (the chN_opRatioN_a/b blocks generated by the SEQ_PARAMS loop).
+  def(1, function()
+    params:add_option(id('ratio1'), 'op1 ratio', RATIO_LABELS, ratio_index(c.opRatio1))
+    params:set_action(id('ratio1'), function(i)
+      c.opRatio1 = GridUI.RATIO_PICKER[i]
+      self:request_render()
+    end)
+  end)
   -- per-operator output levels (op1..4) — static scalars on the 0..1 (1/31) grid
   for op = 1, 4 do
     local field = 'opLevel' .. op
@@ -465,7 +495,7 @@ function M:_add_channel_params(n)
         end)
 
         params:add_number(val_id, label .. ' value',
-          (layer == 'B') and 0 or 1, #SPV[p],
+          (layer == 'B') and 0 or 1, #layout_of(p, layer),
           M.value_to_index(p, layer, vals[1]),
           function(param) return M.fmt_value(p, M.index_to_value(p, layer, param:get())) end)
         params:set_action(val_id, function(idx)
@@ -546,9 +576,10 @@ function M:reflect_scalars(n)
   params:set(id('prob'), GridUI.nearest_index(GridUI.PROB_VALUES, c.burstProb), true)
   params:set(id('prob_mode'), c.probHit and 2 or 1, true)
   params:set(id('alt_trig'), c.altTrig + 1, true)
+  for op = 2, 4 do params:set(id('op' .. op .. '_trig'), c['opRatio' .. op .. 'Trig'] + 1, true) end
   params:set(id('reset'), GridUI.nearest_index(GridUI.RESET_INTERVALS, c.resetInterval), true)
   params:set(id('octave'), c.octave, true)
-  for op = 1, 4 do params:set(id('ratio' .. op), ratio_index(c['opRatio' .. op]), true) end
+  params:set(id('ratio1'), ratio_index(c.opRatio1), true)  -- op1 ratio static; op2/3/4 sequenced
   for op = 1, 4 do params:set(id('level' .. op), round(c['opLevel' .. op] * 31), true) end
 end
 

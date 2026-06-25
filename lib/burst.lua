@@ -37,19 +37,56 @@ Burst.MUSICAL_DIVS = MUSICAL_DIVS
 local QUANTIZE_VALUES = {3, 4, 6, 8, 12, 16, 24, 32}
 Burst.QUANTIZE_VALUES = QUANTIZE_VALUES
 
--- Curated per-operator FM ratios (op1 default 1.0 = fundamental, now editable
--- like op2/3/4 — randomize/mutate still leave op1 at 1.0 as a pitch anchor), 32 values.
--- Mirrors GridUI.RATIO_VALUES (the grid ratio picker) — keep the two in sync; the
--- reachability test asserts every randomized ratio lands on this set. Sub-unity
--- ratios (0.125..0.875) give sub-octave / bass timbres; half-integer ratios
--- (2.25, 3.5, ...) give inharmonic bell/metallic colours.
-local RATIO_VALUES = {
+-- Curated per-operator FM ratios, in two parts. RATIO_PICKER = the 32 COARSE ratios
+-- the grid pickers show (op1 scalar + op2/3/4 A lane): sub-unity 0.125..0.875 =
+-- sub-octave/bass; half-integers 2.25, 3.5, ... = inharmonic bell/metallic; up to 14.
+local RATIO_PICKER = {
   0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1,
   1.25, 1.5, 1.75, 2, 2.25, 2.5, 2.75, 3,
   3.5, 4, 4.5, 5, 5.5, 6, 6.5, 7,
   7.5, 8, 9, 10, 11, 12, 13, 14,
 }
+Burst.RATIO_PICKER = RATIO_PICKER
+-- Finer just-intonation ratios woven BETWEEN the coarse steps across the low/mid
+-- range. Reachable ONLY via the op-ratio B index offset, which walks UP the merged
+-- sorted list from a coarse A base (see op_ratio) — i.e. micro-tuning. Three bands:
+local RATIO_FINE = {
+  -- sub-unity (sub-octave JI, mirrors the 1-2 octave below the fundamental):
+  -- 1/3, 9/16, 3/5, 2/3, 7/10, 4/5, 5/6, 9/10, 15/16
+  0.333, 0.5625, 0.6, 0.667, 0.7, 0.8, 0.833, 0.9, 0.9375,
+  -- octave 1-2: 9/8, 6/5, 4/3, 7/5, 8/5, 5/3, 9/5, 15/8
+  1.125, 1.2, 1.333, 1.4, 1.6, 1.667, 1.8, 1.875,
+  -- 2-4 (denser): 11/5, 7/3, 12/5, 8/3, 14/5, 16/5, 10/3, 18/5, 15/4
+  2.2, 2.333, 2.4, 2.667, 2.8, 3.2, 3.333, 3.6, 3.75,
+}
+-- the full curated set = coarse + fine, sorted ascending so a B index step is a pitch
+-- step. Mirrors GridUI.RATIO_VALUES / RATIO_PICKER / RATIO_FINE — keep in sync.
+local RATIO_VALUES = {}
+for _, v in ipairs(RATIO_PICKER) do RATIO_VALUES[#RATIO_VALUES + 1] = v end
+for _, v in ipairs(RATIO_FINE)   do RATIO_VALUES[#RATIO_VALUES + 1] = v end
+table.sort(RATIO_VALUES)
 Burst.RATIO_VALUES = RATIO_VALUES
+
+-- value -> 1-based index in RATIO_VALUES (exact for picked values; nearest otherwise).
+local RATIO_INDEX = {}
+for i, r in ipairs(RATIO_VALUES) do RATIO_INDEX[r] = i end
+local function ratio_pos(v)
+  if RATIO_INDEX[v] then return RATIO_INDEX[v] end
+  local best, bd = 1, math.huge
+  for i, r in ipairs(RATIO_VALUES) do
+    local d = math.abs(r - v); if d < bd then bd = d; best = i end
+  end
+  return best
+end
+
+-- Resolve a sequenced op ratio: A is a curated ratio value (first-32 grid range),
+-- `off` is the B integer index offset that walks UP the list (clamped to its end).
+-- The result is always a real RATIO_VALUES entry — never an off-grid sum.
+local function op_ratio(a, off)
+  local idx = ratio_pos(a) + math.floor((off or 0) + 0.5)
+  return RATIO_VALUES[math.max(1, math.min(#RATIO_VALUES, idx))]
+end
+Burst.op_ratio = op_ratio
 
 -- Which operators are modulators (appear as a 'from' in some edge) per algorithm
 -- 1..16. Mirrors Engine_Potionshop.algorithms (SC) — keep in sync; used only to
@@ -159,11 +196,16 @@ local function default_channel()
     -- div/reps/attack/decay/modatk/moddec have no B layer; note/level keep one.
     noteB  = seqx.new{0},
     levelB = seqx.new{0},
-    -- per-operator FM ratios (op1 default 1.0 = fundamental, now editable) and
-    -- output levels (0..1) are per-channel STATIC timbre, edited on the OP page — not
-    -- sequenced. ratios 1,1,1 = unison (cleanest, ~2-op); levels: FM depth when
-    -- the op is a modulator, mix gain when it's a carrier.
-    opRatio1 = 1, opRatio2 = 1, opRatio3 = 1, opRatio4 = 1,
+    -- per-operator FM ratios. op1 is a per-channel STATIC scalar (the fundamental,
+    -- editable on the OP page); op2/3/4 are SEQUENCED (their own grid pages, A value
+    -- + B additive offset, like note/level) so the modulator voicing can morph per
+    -- step. ratios 1,1,1 = unison (cleanest, ~2-op).
+    opRatio1 = 1,
+    opRatio2 = seqx.new{1}, opRatio3 = seqx.new{1}, opRatio4 = seqx.new{1},
+    opRatio2B = seqx.new{0}, opRatio3B = seqx.new{0}, opRatio4B = seqx.new{0},
+    -- per-operator output levels (0..1) stay per-channel STATIC timbre, edited on the
+    -- OP page — not sequenced. levels: FM depth when the op is a modulator, mix gain
+    -- when it's a carrier.
     opLevel1 = 1, opLevel2 = 15/31, opLevel3 = 15/31, opLevel4 = 15/31,  -- ~0.48, grid-exact on the i/31 OP page
     burstProb = 1,
     probHit = false,
@@ -172,6 +214,10 @@ local function default_channel()
     quantize = 16,  -- per-channel event snap grid (events per whole note), from QUANTIZE_VALUES
     octave = 0,     -- -2..2, whole-octave pitch shift (perf page)
     altTrig = 0,    -- alt(B) note layering: 0=hold (add&hold) 1=step (per-hit)
+    -- per-op-ratio sequence trig mode (prob page): 0=hold (the ratio is drawn once
+    -- per burst, held for every hit) 1=step (advance the opRatioN A+B sequins per
+    -- hit, so the ratio arpeggiates within a burst). Mirrors altTrig for the note B.
+    opRatio2Trig = 0, opRatio3Trig = 0, opRatio4Trig = 0,
   }
 end
 
@@ -238,8 +284,10 @@ end
 function Burst:reset_channel(ch)
   local c = self.channels[ch]
   for _, k in ipairs{'div','reps','note','level','attack','decay',
-                     'modatk','moddec',     -- modulator envelope (paired, A-only)
-                     'noteB','levelB'} do   -- note/level keep a B layer
+                     'modatk','moddec',                 -- modulator envelope (paired, A-only)
+                     'opRatio2','opRatio3','opRatio4',  -- sequenced op ratios (A)
+                     'noteB','levelB',                  -- note/level keep a B layer
+                     'opRatio2B','opRatio3B','opRatio4B'} do  -- op ratios keep a B layer
     c[k]:reset()
   end
 end
@@ -354,6 +402,19 @@ function Burst:run_burst(ch, token, target_in)
     local degreeA = note_seq()
     local degreeB = note_seqB()
     local level = c.level() + c.levelB()
+    -- sequenced op2/3/4 FM ratios: A = base ratio (first-32 grid range), B = integer
+    -- index offset that walks UP RATIO_VALUES (the only route into the 33..63 extended
+    -- range). A is the per-burst value (drawn once, held for every hit, like the note
+    -- A degree); B is its offset. Kept separate so the step trig mode below can
+    -- advance B per hit while A stays held. Drawn above the rest/skip checks so the
+    -- sequins advance on every burst step. op1 stays a static scalar (read in fire).
+    -- A live edit applies at the next burst (not identity-checked, like level).
+    local ratio2A, ratio2B = c.opRatio2(), c.opRatio2B()
+    local ratio3A, ratio3B = c.opRatio3(), c.opRatio3B()
+    local ratio4A, ratio4B = c.opRatio4(), c.opRatio4B()
+    local ratio2 = op_ratio(ratio2A, ratio2B)
+    local ratio3 = op_ratio(ratio3A, ratio3B)
+    local ratio4 = op_ratio(ratio4A, ratio4B)
     local attack_n = c.attack()  -- normalized carrier-env shape (paired, A-only)
     local decay_n = c.decay()
     local modatk_n = c.modatk()  -- normalized modulator-env shape (paired, A-only)
@@ -405,12 +466,24 @@ function Burst:run_burst(ch, token, target_in)
         freq = scales.degree_to_freq(degreeA + degreeB, self.scale, self.root)
       end
 
+      -- OP-RATIO STEP MODE: per sequence, when opRatioNTrig == 1 the B (offset) lane
+      -- advances per hit and re-resolves against the held A, so the index walks
+      -- through neighbouring ratios within the burst (A stays the per-burst base —
+      -- exactly like the note alt-trig above). Same placement/rationale: above the
+      -- probHit skip and i > 0, so a skipped hit still consumes a B value.
+      if i > 0 then
+        if c.opRatio2Trig == 1 then ratio2 = op_ratio(ratio2A, c.opRatio2B()) end
+        if c.opRatio3Trig == 1 then ratio3 = op_ratio(ratio3A, c.opRatio3B()) end
+        if c.opRatio4Trig == 1 then ratio4 = op_ratio(ratio4A, c.opRatio4B()) end
+      end
+
       if c.probHit and math.random() > c.burstProb then
         -- per-hit skip: advance the playhead but don't trigger a voice.
         self:emit{ type = 'fire', ch = ch, beat = target,
                    freq = freq, level = level }
       else
-        self:fire(ch, target, freq, level, attack_n, decay_n, modatk_n, moddec_n, div, total, i)
+        self:fire(ch, target, freq, level, attack_n, decay_n, modatk_n, moddec_n, div, total, i,
+                  ratio2, ratio3, ratio4)
       end
       target = target + (4 / div) / c.rate
       i = i + 1
@@ -422,8 +495,12 @@ function Burst:run_burst(ch, token, target_in)
   return nil
 end
 
-function Burst:fire(ch, beat, freq, level, attack_n, decay_n, modatk_n, moddec_n, div, total, hit_idx)
+function Burst:fire(ch, beat, freq, level, attack_n, decay_n, modatk_n, moddec_n, div, total, hit_idx,
+                    ratio2, ratio3, ratio4)
   local c = self.channels[ch]
+  -- op2/3/4 ratios are sequenced and passed in (drawn per burst in run_burst); op1
+  -- is the static scalar c.opRatio1. Default to unison when called directly (tests).
+  ratio2 = ratio2 or 1; ratio3 = ratio3 or 1; ratio4 = ratio4 or 1
   -- octave shift is applied per hit, not per burst: a single long burst never
   -- redraws freq mid-burst, so a burst-start shift would be inaudible across its
   -- hits. Shifting here also feeds the final freq to external outputs.
@@ -437,11 +514,11 @@ function Burst:fire(ch, beat, freq, level, attack_n, decay_n, modatk_n, moddec_n
   -- geo_freq stays at the target pitch (this voice has no pitch envelope).
   local geo_freq = freq
 
-  -- per-channel static FM ratios (op1 default 1.0 = fundamental, now editable like
-  -- the others). The brightness proxy handed to external outputs is the largest
-  -- ratio among this algo's active modulators (or op1's ratio for additive) — a
-  -- stand-in for the old harm.
-  local ratios = {c.opRatio1, c.opRatio2, c.opRatio3, c.opRatio4}
+  -- FM ratios: op1 is the static fundamental scalar; op2/3/4 are the sequenced
+  -- (A+B) values drawn for this burst. The brightness proxy handed to external
+  -- outputs is the largest ratio among this algo's active modulators (or op1's
+  -- ratio for additive) — a stand-in for the old harm.
+  local ratios = {c.opRatio1, ratio2, ratio3, ratio4}
   local bright_ratio = 0
   for _, op in ipairs(ALGO_MODULATORS[self.algo] or {}) do
     if ratios[op] > bright_ratio then bright_ratio = ratios[op] end
@@ -500,12 +577,12 @@ function Burst:fire(ch, beat, freq, level, attack_n, decay_n, modatk_n, moddec_n
   local out = self.outputs
   if engine and engine.trig and ((not out) or out:wants_audio(ch)) then
     -- 4-op FM (lib/Engine_Potionshop.sc): the engine-wide algorithm selects the
-    -- operator routing; opRatio1..4 are the static per-op FM ratios (op1 default
-    -- 1.0, now editable); the rest are the final hit envelope; ol[1..4] are this
-    -- channel's static operator levels, geode-shaped per hit above. opRatio1 rides
-    -- as r1 (arg 20, appended) so the older positional args keep their indices.
+    -- operator routing; r2/r3/r4 are the per-burst sequenced op2/3/4 ratios; the
+    -- rest are the final hit envelope; ol[1..4] are this channel's static operator
+    -- levels, geode-shaped per hit above. opRatio1 (the static fundamental) rides as
+    -- r1 (arg 20, appended) so the older positional args keep their indices.
     engine.trig(geo_freq, actual_level, self.algo,
-                c.opRatio2, c.opRatio3, c.opRatio4, mod_index,
+                ratio2, ratio3, ratio4, mod_index,
                 attack, amp_dec, amp_curve, mod_dec, feedback, drive, ch,
                 ol[1], ol[2], ol[3], ol[4], mod_attack, c.opRatio1)
   end
@@ -544,13 +621,15 @@ function Burst:randomize(ch)
   -- modulator envelope shape, same grid-reachable k/31 spread as the carrier
   c.modatk = seqx.new(fill(len, function() return ri(8) / 31 end))
   c.moddec = seqx.new(fill(len, function() return (8 + ri(16)) / 31 end))
-  -- op2/3/4 FM ratios ARE scrambled (timbral variety) — picked from the curated
-  -- grid-reachable set so the OP-page picker can still highlight/edit them. op1's
-  -- ratio is hand-editable but deliberately left at its 1.0 default here, so a
-  -- randomized channel keeps a fundamental and stays pitched (mutate likewise).
-  c.opRatio2 = pick(RATIO_VALUES)
-  c.opRatio3 = pick(RATIO_VALUES)
-  c.opRatio4 = pick(RATIO_VALUES)
+  -- op2/3/4 FM ratios ARE scrambled (timbral variety) — now sequenced, so each gets
+  -- a fresh A-layer sequence picked from the curated grid-reachable set (the picker
+  -- can still highlight/edit them; the reachability test asserts it). The B (offset)
+  -- layer is left intact, like noteB/levelB. op1's ratio is hand-editable but
+  -- deliberately left at its 1.0 default, so a randomized channel keeps a
+  -- fundamental and stays pitched (mutate likewise).
+  c.opRatio2 = seqx.new(fill(len, function() return pick(RATIO_PICKER) end))
+  c.opRatio3 = seqx.new(fill(len, function() return pick(RATIO_PICKER) end))
+  c.opRatio4 = seqx.new(fill(len, function() return pick(RATIO_PICKER) end))
   -- The engine-wide modes (envMode/geodeMode) and per-op LEVELS are
   -- left untouched: a randomized op1 = 0 would silently kill the channel (op1 is
   -- usually the carrier), so the operator level balance stays a deliberate,
@@ -587,15 +666,17 @@ function Burst:mutate(ch, amount)
   c.decay  = map(c.decay,  function(v) return clamp(v + jitter(amount * 0.6), 0, 1) end)
   c.modatk = map(c.modatk, function(v) return clamp(v + jitter(amount * 0.6), 0, 1) end)
   c.moddec = map(c.moddec, function(v) return clamp(v + jitter(amount * 0.6), 0, 1) end)
-  -- nudge per-op ratios to a neighbouring curated value (keeps them grid-exact).
+  -- nudge each sequenced op ratio A step to a neighbouring picker value (keeps them
+  -- grid-exact AND within the first-32 A-picker range; the B offset lane is left
+  -- untouched). op2/3/4 are sequences now, so map over each like the other lanes.
   local function nudge_ratio(v)
     local idx = 1
-    for i, r in ipairs(RATIO_VALUES) do if r == v then idx = i break end end
-    return RATIO_VALUES[clamp(idx + (jitter(amount) > 0 and 1 or -1), 1, #RATIO_VALUES)]
+    for i, r in ipairs(RATIO_PICKER) do if r == v then idx = i break end end
+    return RATIO_PICKER[clamp(idx + (jitter(amount) > 0 and 1 or -1), 1, #RATIO_PICKER)]
   end
-  c.opRatio2 = nudge_ratio(c.opRatio2)
-  c.opRatio3 = nudge_ratio(c.opRatio3)
-  c.opRatio4 = nudge_ratio(c.opRatio4)
+  c.opRatio2 = map(c.opRatio2, nudge_ratio)
+  c.opRatio3 = map(c.opRatio3, nudge_ratio)
+  c.opRatio4 = map(c.opRatio4, nudge_ratio)
 end
 
 return Burst

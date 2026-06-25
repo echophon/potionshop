@@ -21,7 +21,7 @@
 --        clamped; order mirrors the grid's row-6 button layout)
 --   K1 = untouched — left to the norns system menus
 --
--- Pages: `main` edits launch + the eight A-layer param sequences (via the same
+-- Pages: `main` edits launch + the eleven A-layer param sequences (via the same
 -- commit_step path the grid uses; the list scrolls in a window since it exceeds
 -- the visible rows); `alt` is its clone for the B (additive
 -- offset) layer, snapping to the same extended value set params_sync uses
@@ -44,9 +44,12 @@ local seqx   = require 'seqx'
 local GridUI = require 'grid_ui'
 
 local SEQ_LEN = GridUI.SEQ_LEN  -- max steps per sequence (shared cap with the grid)
-local PARAMS = {'div', 'reps', 'note', 'level', 'attack', 'decay', 'modatk', 'moddec'}
+-- the full sequenced-param list (shared with the grid/params so it can't drift):
+-- div/reps/note/level/attack/decay/modatk/moddec + the sequenced op2/3/4 ratios.
+local PARAMS = GridUI.PARAMS
 -- alt (B-layer) page: div/reps, attack/decay and modatk/moddec have no B layer
--- (see GridUI.has_b), so it carries only the params that take an additive offset.
+-- (see GridUI.has_b), so it carries only the params that take an additive offset
+-- (note, level, opRatio2/3/4).
 local B_PARAMS = {}
 for _, p in ipairs(PARAMS) do if GridUI.has_b(p) then B_PARAMS[#B_PARAMS + 1] = p end end
 -- Page order mirrors the grid's row-6 button layout (op · perf · prob · scale),
@@ -54,10 +57,11 @@ for _, p in ipairs(PARAMS) do if GridUI.has_b(p) then B_PARAMS[#B_PARAMS + 1] = 
 -- map onto the same pages (see _sync_page_from_grid).
 local PAGES  = {'main', 'alt', 'perf', 'prob', 'scale', 'op'}
 -- main line 1 = run + all params; alt line 1 = run + the B-capable params.
--- scale = root + 12 chromatic keys = 13 stops. op = r1..r4 + 4 levels.
+-- scale = root + 12 chromatic keys = 13 stops. op = op1 ratio + 4 levels = 5
+-- (op2/3/4 ratios are sequenced, edited on the main/alt seq pages).
 -- PERF now carries 4 lines (reset/oct/rate/quantize); the scale page dropped its
 -- quantize line (now per-channel) so it's root + 12 keys = 13.
-local LINES_PER_PAGE = {1 + #PARAMS, 1 + #B_PARAMS, 4, 3, 13, 8}
+local LINES_PER_PAGE = {1 + #PARAMS, 1 + #B_PARAMS, 4, 6, 13, 5}
 local PAGE_PERF, PAGE_PROB, PAGE_SCALE, PAGE_OP = 3, 4, 5, 6
 
 local NOTE_NAMES = {'c','c#','d','d#','e','f','f#','g','g#','a','a#','b'}
@@ -93,6 +97,7 @@ local function fmt(param, v)
     return tostring(math.floor(v * 31 + 0.5))
   end
   if param == 'level' then return string.format('%.2f', v) end
+  if param:match('^opRatio') then return (v % 1 == 0) and tostring(math.floor(v)) or tostring(v) end
   if param == 'harm' then return string.format('%.1f', v) end
   if param == 'reps' and v <= 0 then return 'r' .. (1 - v) end  -- rest of 1-v steps
   return tostring(v)
@@ -159,10 +164,13 @@ end
 function Screen:_seq_page() return self.page <= 2 end
 function Screen:layer() return (self.page == 2) and 'B' or 'A' end
 
--- value layout for the focused param on this page. The B layer's value set
--- is params_sync's: literal 0 (the no-offset default) plus the picker grid —
--- prepended only where the A layout doesn't already start at 0.
+-- value layout for the focused param on this page. Op-ratio B is the integer
+-- index-offset set (its first value is already 0 = no shift). For every other B
+-- lane the additive offset set is literal 0 (no offset) prepended to the picker grid.
 function Screen:_layout(param)
+  if self:layer() == 'B' and param:match('^opRatio') then
+    return GridUI.OP_RATIO_OFFSETS
+  end
   local layout = self.SPV[param]
   if self:layer() == 'B' and layout[1] ~= 0 then
     local t = {0}
@@ -409,17 +417,17 @@ local function step_table(cur, tbl, d)
   return tbl[clamp(idx + d, 1, #tbl)]
 end
 
--- OP page cursor: lines 1..4 = op1..op4 ratio (op1 default 1.0, now editable),
--- lines 5..8 = op1..op4 level. Ratio steps the curated set; level the 0..1 grid.
+-- OP page cursor: line 1 = op1 ratio (the static fundamental), lines 2..5 =
+-- op1..op4 level. Ratio steps the curated set; level the 0..1 grid. (op2/3/4 ratios
+-- are sequenced — edited on the main/alt seq pages, not here.)
 function Screen:_edit_op(d)
   local ch = self.sel_ch
   local c = self.engine.channels[ch + 1]
   local line = self.sel_line[PAGE_OP]
-  if line <= 4 then
-    local field = 'opRatio' .. line       -- line 1->op1 .. 4->op4
-    self.ctl:set_scalar(ch, field, step_table(c[field], GridUI.RATIO_VALUES, d))
+  if line == 1 then
+    self.ctl:set_scalar(ch, 'opRatio1', step_table(c.opRatio1, GridUI.RATIO_PICKER, d))
   else
-    local field = 'opLevel' .. (line - 4) -- line 5->op1 .. 8->op4
+    local field = 'opLevel' .. (line - 1) -- line 2->op1 .. 5->op4
     self.ctl:set_scalar(ch, field, step_table(c[field], GridUI.OP_LEVEL_VALUES, d))
   end
 end
@@ -433,8 +441,12 @@ function Screen:_edit_prob(d)
     self.ctl:set_scalar(ch, 'burstProb', step_table(c.burstProb, GridUI.PROB_VALUES, d))
   elseif line == 2 then
     self.ctl:set_scalar(ch, 'probHit', not c.probHit)
-  else
+  elseif line == 3 then
     self.ctl:set_scalar(ch, 'altTrig', clamp(c.altTrig + d, 0, #GridUI.ALT_TRIG_MODE_NAMES - 1))
+  else
+    -- lines 4..6 = op2/3/4 ratio-sequence trig (hold/step), same toggle feel
+    local field = 'opRatio' .. (line - 2) .. 'Trig'  -- line 4->op2 .. 6->op4
+    self.ctl:set_scalar(ch, field, clamp(c[field] + d, 0, 1))
   end
 end
 
@@ -600,19 +612,25 @@ function Screen:page_lines()
   end
   local lines
   if self.page == PAGE_OP then
+    -- op1 ratio (static fundamental) + the four static op levels. op2/3/4 ratios are
+    -- sequenced (shown/edited on the main/alt seq pages), so they're absent here.
     local function r(v) return (v % 1 == 0) and tostring(math.floor(v)) or tostring(v) end
     lines = {
-      {'op1 r', r(c.opRatio1)}, {'op2 r', r(c.opRatio2)}, {'op3 r', r(c.opRatio3)}, {'op4 r', r(c.opRatio4)},
+      {'op1 r', r(c.opRatio1)},
       {'op1 l', string.format('%.2f', c.opLevel1)},
       {'op2 l', string.format('%.2f', c.opLevel2)},
       {'op3 l', string.format('%.2f', c.opLevel3)},
       {'op4 l', string.format('%.2f', c.opLevel4)},
     }
   elseif self.page == PAGE_PROB then
+    local function trig(v) return GridUI.ALT_TRIG_MODE_NAMES[v + 1] end
     lines = {
       {'prob', round(c.burstProb * 100) .. '%'},
       {'mode', c.probHit and 'hit' or 'burst'},
-      {'note', GridUI.ALT_TRIG_MODE_NAMES[c.altTrig + 1]},
+      {'note', trig(c.altTrig)},          -- note B trig
+      {'op2',  trig(c.opRatio2Trig)},     -- op2/3/4 ratio-seq trig
+      {'op3',  trig(c.opRatio3Trig)},
+      {'op4',  trig(c.opRatio4Trig)},
     }
   else  -- PAGE_PERF
     local iv = c.resetInterval
@@ -672,7 +690,7 @@ function Screen:draw_steps()
     local vals = seqx.values(seq)
     local ph = seqx.playhead(seq)
     for i = 1, math.min(#vals, SEQ_LEN) do
-      local lvl = GridUI.value_brightness(lane.param, vals[i])
+      local lvl = GridUI.value_brightness(lane.param, vals[i], lane.layer)
       if running and (i - 1) == ph then lvl = 15 end
       screen.level(math.max(1, lvl))
       screen.rect(2 + (i - 1) * 5, y, 4, 4)
