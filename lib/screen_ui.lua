@@ -59,9 +59,9 @@ local PAGES  = {'main', 'alt', 'perf', 'prob', 'scale', 'mix'}
 -- main line 1 = run + all params; alt line 1 = run + the B-capable params.
 -- scale = root + 12 chromatic keys = 13 stops. mix = channel level + 4 op levels = 5
 -- (all four op ratios are sequenced, edited on the main/alt seq pages). prob =
--- prob/mode/note trig + op1..4 ratio-seq trig = 7. PERF carries 4 lines (reset/oct/
--- rate/quantize); the scale page dropped its quantize line so it's root + 12 keys.
-local LINES_PER_PAGE = {1 + #PARAMS, 1 + #B_PARAMS, 4, 7, 13, 5}
+-- prob/mode/note trig + op1..4 ratio-seq trig + amp/mod env trig = 9. PERF carries 4
+-- lines (reset/oct/rate/quantize); the scale page is root + 12 keys.
+local LINES_PER_PAGE = {1 + #PARAMS, 1 + #B_PARAMS, 4, 9, 13, 9}
 local PAGE_PERF, PAGE_PROB, PAGE_SCALE, PAGE_MIX = 3, 4, 5, 6
 
 local NOTE_NAMES = {'c','c#','d','d#','e','f','f#','g','g#','a','a#','b'}
@@ -416,15 +416,26 @@ local function step_table(cur, tbl, d)
   return tbl[clamp(idx + d, 1, #tbl)]
 end
 
--- MIX page cursor: line 1 = channel level, lines 2..5 = op1..op4 level, each
--- stepping the 0..1 grid. (All four op ratios are sequenced — edited on the
--- main/alt seq pages, not here.)
+-- MIX page cursor: line 1 = channel level, lines 2..5 = op1..op4 level (0..1 grid),
+-- then lines 6/7/8/9 = mod index / amp punch / FM feedback / FM algorithm voice
+-- scalars, each stepping its own grid. (All four op ratios are sequenced — edited on
+-- the seq pages, not here.)
 function Screen:_edit_mix(d)
   local ch = self.sel_ch
   local c = self.engine.channels[ch + 1]
   local line = self.sel_line[PAGE_MIX]
-  local field = (line == 1) and 'level' or ('opLevel' .. (line - 1))  -- line 2->op1 .. 5->op4
-  self.ctl:set_scalar(ch, field, step_table(c[field], GridUI.OP_LEVEL_VALUES, d))
+  if line == 6 then
+    self.ctl:set_scalar(ch, 'modIndex', step_table(c.modIndex, GridUI.MOD_INDEX_VALUES, d))
+  elseif line == 7 then
+    self.ctl:set_scalar(ch, 'ampPunch', step_table(c.ampPunch, GridUI.AMP_PUNCH_VALUES, d))
+  elseif line == 8 then
+    self.ctl:set_scalar(ch, 'fmFeedback', step_table(c.fmFeedback, GridUI.FM_FEEDBACK_VALUES, d))
+  elseif line == 9 then
+    self.ctl:set_scalar(ch, 'algo', step_table(c.algo, GridUI.ALGO_VALUES, d))
+  else
+    local field = (line == 1) and 'level' or ('opLevel' .. (line - 1))  -- line 2->op1 .. 5->op4
+    self.ctl:set_scalar(ch, field, step_table(c[field], GridUI.OP_LEVEL_VALUES, d))
+  end
 end
 
 function Screen:_edit_prob(d)
@@ -438,9 +449,13 @@ function Screen:_edit_prob(d)
     self.ctl:set_scalar(ch, 'probHit', not c.probHit)
   elseif line == 3 then
     self.ctl:set_scalar(ch, 'altTrig', clamp(c.altTrig + d, 0, #GridUI.ALT_TRIG_MODE_NAMES - 1))
-  else
+  elseif line >= 4 and line <= 7 then
     -- lines 4..7 = op1/2/3/4 ratio-sequence trig (hold/step), same toggle feel
     local field = 'opRatio' .. (line - 3) .. 'Trig'  -- line 4->op1 .. 7->op4
+    self.ctl:set_scalar(ch, field, clamp(c[field] + d, 0, 1))
+  else
+    -- lines 8/9 = amp/mod env shape-sequence trig (hold/step)
+    local field = (line == 8) and 'ampShapeTrig' or 'modShapeTrig'
     self.ctl:set_scalar(ch, field, clamp(c[field] + d, 0, 1))
   end
 end
@@ -607,14 +622,19 @@ function Screen:page_lines()
   end
   local lines
   if self.page == PAGE_MIX then
-    -- channel level + the four static op levels. All four op ratios are sequenced
-    -- (shown/edited on the main/alt seq pages), so they're absent here.
+    -- channel level + four static op levels + the mod index / amp punch / FM feedback
+    -- / FM algorithm voice scalars. All four op ratios are sequenced (shown/edited on
+    -- the main/alt seq pages), so they're absent here.
     lines = {
       {'level', string.format('%.2f', c.level)},
       {'op1 l', string.format('%.2f', c.opLevel1)},
       {'op2 l', string.format('%.2f', c.opLevel2)},
       {'op3 l', string.format('%.2f', c.opLevel3)},
       {'op4 l', string.format('%.2f', c.opLevel4)},
+      {'index', string.format('%d', c.modIndex)},
+      {'punch', string.format('%d', c.ampPunch)},
+      {'fm fb', string.format('%.2f', c.fmFeedback)},
+      {'alg',   GridUI.ALGO_NAMES[c.algo] or '?'},
     }
   elseif self.page == PAGE_PROB then
     local function trig(v) return GridUI.ALT_TRIG_MODE_NAMES[v + 1] end
@@ -626,6 +646,8 @@ function Screen:page_lines()
       {'op2',  trig(c.opRatio2Trig)},
       {'op3',  trig(c.opRatio3Trig)},
       {'op4',  trig(c.opRatio4Trig)},
+      {'amp',  trig(c.ampShapeTrig)},     -- amp/mod env shape-seq trig
+      {'mod',  trig(c.modShapeTrig)},
     }
   else  -- PAGE_PERF
     local iv = c.resetInterval

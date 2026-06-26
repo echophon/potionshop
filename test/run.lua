@@ -258,6 +258,37 @@ check('alt-trig step arpeggiates the B pitch per hit',
   and approx(step[2], scales.degree_to_freq(5, major))
   and approx(step[3], scales.degree_to_freq(7, major)))
 
+-- env-shape trig: 'hold' draws the ampShape once per burst (every hit shares its
+-- contour); 'step' advances the ampShape A sequins per hit so the envelope shape
+-- arpeggiates. A 3-hit burst with ampShape {1,3,6} (distinct decay muls) yields, via
+-- the amp-decay trig arg (arg 9, = decMul*gap in shape envMode): hold => three equal
+-- decays; step => three distinct decays. (Shapes have no B layer — step walks A.)
+local function shape_step_decays(trig_mode)
+  clock._reset()
+  local saved = engine
+  local decs = {}
+  engine = { trig = function(...) local a = {...}; decs[#decs + 1] = a[9] end }
+  local e = Burst.new()
+  set_quant(e, 0)
+  e.channels[1].div  = seqx.new{4}
+  e.channels[1].reps = seqx.new{3}          -- single 3-hit burst
+  e.channels[1].note = seqx.new{0}
+  e.channels[1].ampShape = seqx.new{1, 3, 6}  -- click/tap/pluck: distinct decMul
+  e.channels[1].ampShapeTrig = trig_mode
+  e:launch(1)
+  clock._run_until(4)
+  engine = saved
+  return decs
+end
+check('env-shape trig defaults to hold', Burst.new().channels[1].ampShapeTrig == 0)
+local sh_hold = shape_step_decays(0)
+check('env-shape hold holds one shape across the burst',
+  #sh_hold == 3 and approx(sh_hold[1], sh_hold[2]) and approx(sh_hold[2], sh_hold[3]))
+local sh_step = shape_step_decays(1)
+check('env-shape step arpeggiates the shape per hit',
+  #sh_step == 3 and not approx(sh_step[1], sh_step[2])
+  and not approx(sh_step[2], sh_step[3]) and not approx(sh_step[1], sh_step[3]))
+
 -- all four op ratios are sequenced (A value + B offset, drawn per burst). The drawn
 -- op2/3/4 values pass straight to trig args 4/5/6 (r2/r3/r4); op1's drawn value rides
 -- as r1 at arg 20.
@@ -504,7 +535,7 @@ local slow, fast = amp_decay_for_div(2), amp_decay_for_div(8)
 check('amp decay scales with division (4x faster ~= 1/4 the hit)',
   slow and fast and approx(fast, slow / 4))
 
--- the global FM algorithm reaches trig arg 3 (4-op engine routing selector).
+-- the per-channel FM algorithm reaches trig arg 3 (4-op engine routing selector).
 local function algo_trig(algo)
   clock._reset()
   local saved = engine
@@ -514,13 +545,13 @@ local function algo_trig(algo)
   set_quant(e, 0)
   e.channels[1].div = seqx.new{4}
   e.channels[1].reps = seqx.new{1}
-  e.algo = algo
+  e.channels[1].algo = algo
   e:launch(1)
   clock._run_until(2)
   engine = saved
   return cap and cap[3]
 end
-check('global algo feeds trig arg 3', algo_trig(5) == 5)
+check('per-channel algo feeds trig arg 3', algo_trig(5) == 5)
 
 -- the channel index rides along as trig arg 14 so the SC engine can keep each
 -- channel monophonic (a new hit releases the previous voice, no droning overlap).
@@ -563,12 +594,14 @@ end
 local d = macro_trig()
 check('voice macro defaults: modIndex=2, amp-dec curve=-4, feedback=0, drive=1',
   d and approx(d[7], 2) and approx(d[10], -4) and approx(d[12], 0) and approx(d[13], 1))
--- the global voice macros feed the trig args directly (fmDecay was retired; the
--- modulator decay is now sequenced -> arg 11, with modulator attack at arg 19).
+-- mod index, amp punch and FM feedback are now per-channel static scalars (MIX page);
+-- they feed the trig args directly (drive stays an engine-wide macro). The modulator
+-- decay is sequenced -> arg 11, with modulator attack at arg 19.
 local gv = macro_trig(function(e)
-  e.modIndex, e.ampPunch, e.fmFeedback, e.drive = 12, 8, 1.5, 4
+  e.channels[1].modIndex, e.channels[1].ampPunch, e.channels[1].fmFeedback = 12, 8, 1.5
+  e.drive = 4
 end)
-check('voice macros feed trig: modIndex, ampPunch->curve, feedback, drive',
+check('voice scalars feed trig: modIndex, ampPunch->curve, feedback, drive',
   gv and approx(gv[7], 12) and approx(gv[10], -8) and approx(gv[12], 1.5) and approx(gv[13], 4))
 -- per-operator levels ride trig args 15..18; op1 default 1, op2..4 default 15/31.
 check('op levels default: op1=1, op2..4=15/31 (args 15-18)',
@@ -892,6 +925,15 @@ ctl:press(4, 0)
 ctl:press(6, 0)   -- col6 -> op4 trig toggle
 check('op4 trig button (col6) sets step', geng.channels[1].opRatio4Trig == 1)
 ctl:press(6, 0)
+-- amp/mod env shape-seq trig toggles (cols 8-9): single button, hold (0) <-> step (1)
+check('amp env trig defaults to hold', geng.channels[1].ampShapeTrig == 0)
+ctl:press(8, 0)   -- col8 -> amp env trig toggle
+check('amp env trig button (col8) sets step', geng.channels[1].ampShapeTrig == 1)
+ctl:press(8, 0)
+check('amp env trig button toggles back to hold', geng.channels[1].ampShapeTrig == 0)
+ctl:press(9, 0)   -- col9 -> mod env trig toggle
+check('mod env trig button (col9) sets step', geng.channels[1].modShapeTrig == 1)
+ctl:press(9, 0)
 ctl:press(13, 6)
 check('PROB mode exited', ctl.probMode == false)
 
@@ -939,8 +981,9 @@ check('PERF rate col14 sets 2x', geng.channels[1].rate == 2)
 ctl:press(12, 6)
 check('PERF mode exited', ctl.perfMode == false)
 
--- FM algorithm is now a global engine scalar, not a per-channel field or grid page.
-check('algo is a global engine field, not per-channel', geng.algo ~= nil and geng.channels[1].algo == nil)
+-- FM algorithm is a per-channel static scalar (MIX page col 15), not a global engine
+-- field or a dedicated grid page/mode.
+check('algo is a per-channel field, not global', geng.algo == nil and geng.channels[1].algo ~= nil)
 check('no ALG grid mode exists', ctl.algoMode == nil)
 
 -- ---- screen_ui: pages, edits, fire reactivity --------------------------
@@ -999,6 +1042,16 @@ sui:enc(3, 1)
 check('prob page op2 trig line steps to step', seng.channels[1].opRatio2Trig == 1)
 sui:enc(3, -1)
 check('prob page op2 trig line steps back to hold', seng.channels[1].opRatio2Trig == 0)
+sui.sel_line[4] = 8   -- amp env shape-seq trig
+sui:enc(3, 1)
+check('prob page amp env trig line steps to step', seng.channels[1].ampShapeTrig == 1)
+sui:enc(3, -1)
+check('prob page amp env trig line steps back to hold', seng.channels[1].ampShapeTrig == 0)
+sui.sel_line[4] = 9   -- mod env shape-seq trig
+sui:enc(3, 1)
+check('prob page mod env trig line steps to step', seng.channels[1].modShapeTrig == 1)
+sui:enc(3, -1)
+check('prob page mod env trig line steps back to hold', seng.channels[1].modShapeTrig == 0)
 
 -- mix page: line 1 = channel level, lines 2..5 = op1..op4 level. All four op ratios
 -- are sequenced now (edited on the main/alt seq pages), so they're absent here.
@@ -1358,6 +1411,16 @@ fake:set('ch1_op2_trig', 2)  -- option 2 = step
 check('op2 ratio trig param sets step', peng.channels[1].opRatio2Trig == 1)
 fake:set('ch1_op2_trig', 1)  -- option 1 = hold
 check('op2 ratio trig param sets hold', peng.channels[1].opRatio2Trig == 0)
+
+-- amp/mod env shape trig mode params (hold/step option, like the op-ratio trigs)
+fake:set('ch1_ampShape_trig', 2)  -- option 2 = step
+check('amp env trig param sets step', peng.channels[1].ampShapeTrig == 1)
+fake:set('ch1_ampShape_trig', 1)  -- option 1 = hold
+check('amp env trig param sets hold', peng.channels[1].ampShapeTrig == 0)
+fake:set('ch1_modShape_trig', 2)
+check('mod env trig param sets step', peng.channels[1].modShapeTrig == 1)
+fake:set('ch1_modShape_trig', 1)
+check('mod env trig param sets hold', peng.channels[1].modShapeTrig == 0)
 
 -- reps rest tokens: rN <-> reps (1-N), so r1=0, r2=-1, r4=-3
 fake:set('ch1_reps_a', '2 r1 r4')

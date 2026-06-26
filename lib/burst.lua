@@ -291,6 +291,13 @@ local function default_channel()
     -- OP page — not sequenced. levels: FM depth when the op is a modulator, mix gain
     -- when it's a carrier.
     opLevel1 = 1, opLevel2 = 15/31, opLevel3 = 15/31, opLevel4 = 15/31,  -- ~0.48, grid-exact on the i/31 OP page
+    -- per-channel STATIC voice macros, edited on the MIX page after the op levels (no
+    -- grid page / sequence): FM mod index (1..32, brightness depth), amp punch (0..31,
+    -- carrier env-curve exaggeration, /4 = 1.0 neutral), FM feedback (0..4 rad,
+    -- modulator self-feedback) and FM algo (1..16, DX-style operator routing, MIX col
+    -- 15). Like level/opLevel they're exempt from randomize/mutate and survive
+    -- clear/copy/paste. Drawn straight at fire time.
+    modIndex = 2, ampPunch = 4, fmFeedback = 0, algo = 1,
     burstProb = 1,
     probHit = false,
     resetInterval = 0,
@@ -302,6 +309,11 @@ local function default_channel()
     -- per burst, held for every hit) 1=step (advance the opRatioN B index lane per
     -- hit, so the ratio arpeggiates within a burst). Mirrors altTrig for the note B.
     opRatio1Trig = 0, opRatio2Trig = 0, opRatio3Trig = 0, opRatio4Trig = 0,
+    -- per-envelope-shape sequence trig mode (prob page): 0=hold (the shape is drawn
+    -- once per burst) 1=step (advance the ampShape/modShape A sequins per hit, so the
+    -- envelope shape arpeggiates within a burst). Same hold/step mechanism, but since
+    -- shapes have no B layer it walks the A lane itself (op-ratio step walks B).
+    ampShapeTrig = 0, modShapeTrig = 0,
   }
 end
 
@@ -324,14 +336,13 @@ function Burst.new()
   -- engine-wide voice timbre macros (lib/params_sync.lua 'VOICE' group). Global,
   -- not per-channel: the non-audio output types can't render them. Read straight
   -- at fire time; these ARE the values handed to the SC voice.
-  self.algo = 1         -- FM algorithm (1..16): DX-style operator routing, engine-wide
   self.envMode = 0      -- amp decay timing (0=shape 1=burst 2=hit): engine-wide
   self.geodeMode = 1    -- amp per-hit geode (0=transient 1=sustain 2=cycle): engine-wide, default sustain
-  self.modIndex = 2     -- FM modulation index (low default = clean, ~2-op tone; up to 24 = bright)
-  -- (FM body length is no longer a global macro: the per-channel modShape sequence
-  -- owns the modulator envelope; the old self.fmDecay was retired.)
-  self.ampPunch = 4     -- perc-curve magnitude (-> Env.perc curve = -ampPunch); 0 = linear
-  self.fmFeedback = 0   -- SinOscFB feedback (radians): 0 = pure sine modulator
+  -- (FM algorithm, mod index, amp punch and FM feedback used to be engine-wide globals
+  -- too; they are now per-channel static MIX-page scalars — see default_channel. FM
+  -- body length
+  -- is no longer a macro either: the per-channel modShape sequence owns the modulator
+  -- envelope; the old self.fmDecay was retired.)
   self.drive = 1        -- tanh soft-clip drive: 1 = clean, higher = saturated
   -- per-operator output levels are NOT global anymore: each channel sequences its
   -- own op1..op4 (A/B) sequins (see default_channel), drawn per burst in run_burst.
@@ -519,8 +530,11 @@ function Burst:run_burst(ch, token, target_in)
     local ratio2 = op_ratio(ratio2A, ratio2B)
     local ratio3 = op_ratio(ratio3A, ratio3B)
     local ratio4 = op_ratio(ratio4A, ratio4B)
-    local amp_shape = c.ampShape()  -- carrier envelope shape index (paired, A-only)
-    local mod_shape = c.modShape()  -- modulator envelope shape index (paired, A-only)
+    -- carrier/modulator envelope shape indices (paired, A-only). Drawn once per burst
+    -- (held for every hit) unless the per-shape trig mode is 'step', which advances the
+    -- A sequins per hit in the loop below so the shape arpeggiates through its sequence.
+    local amp_shape = c.ampShape()
+    local mod_shape = c.modShape()
     local freq = scales.degree_to_freq(degreeA + degreeB, self.scale, self.root)
 
     -- REST: reps <= 0 fires nothing but still consumes (1 - reps) div-steps of
@@ -580,6 +594,15 @@ function Burst:run_burst(ch, token, target_in)
         if c.opRatio4Trig == 1 then ratio4 = op_ratio(ratio4A, c.opRatio4B()) end
       end
 
+      -- SHAPE STEP MODE: ampShape/modShape have no B layer, so 'step' advances their
+      -- A sequins per hit (the envelope shape arpeggiates through its sequence within
+      -- the burst); 'hold' keeps the per-burst draw. Same placement/rationale as the
+      -- op-ratio step above — past the i > 0 guard so a skipped hit still advances.
+      if i > 0 then
+        if c.ampShapeTrig == 1 then amp_shape = c.ampShape() end
+        if c.modShapeTrig == 1 then mod_shape = c.modShape() end
+      end
+
       if c.probHit and math.random() > c.burstProb then
         -- per-hit skip: advance the playhead but don't trigger a voice.
         self:emit{ type = 'fire', ch = ch, beat = target,
@@ -628,7 +651,7 @@ function Burst:fire(ch, beat, freq, level, amp_shape, mod_shape, div, total, hit
   -- stand-in for the old harm.
   local ratios = {ratio1, ratio2, ratio3, ratio4}
   local bright_ratio = 0
-  for _, op in ipairs(ALGO_MODULATORS[self.algo] or {}) do
+  for _, op in ipairs(ALGO_MODULATORS[c.algo] or {}) do
     if ratios[op] > bright_ratio then bright_ratio = ratios[op] end
   end
   if bright_ratio == 0 then bright_ratio = ratios[1] end  -- additive: no modulators
@@ -668,11 +691,11 @@ function Burst:fire(ch, beat, freq, level, amp_shape, mod_shape, div, total, hit
   local amp_dec = decay_time(amp_sh[2])
   local mod_attack = attack_time(mod_sh[1])
   local mod_dec    = decay_time(mod_sh[2])
-  -- per-segment Env curves. The carrier curves are scaled by the global `ampPunch`
-  -- VOICE macro (ampPunch/4 = 1.0 neutral, so the boot 'tail' shape's -4 stays -4),
-  -- which now reads as a global "flatten <-> exaggerate the contour" control rather
+  -- per-segment Env curves. The carrier curves are scaled by the per-channel `ampPunch`
+  -- MIX scalar (ampPunch/4 = 1.0 neutral, so the boot 'tail' shape's -4 stays -4),
+  -- which reads as a per-channel "flatten <-> exaggerate the contour" control rather
   -- than a fixed perc curve. The modulator keeps the shape's own curves.
-  local punch = self.ampPunch / 4
+  local punch = c.ampPunch / 4
   local amp_atk_curve = amp_sh[3] * punch
   local amp_dec_curve = amp_sh[4] * punch
   local mod_atk_curve = mod_sh[3]
@@ -682,15 +705,15 @@ function Burst:fire(ch, beat, freq, level, amp_shape, mod_shape, div, total, hit
   -- internal voice; midi/crow get the same final freq/level/length it would
   -- have played. Hook lives here (not on emit) because the per-hit prob skip
   -- emits a 'fire' event for the playhead without sounding anything.
-  -- global voice timbre macros (lib/params_sync.lua 'VOICE' group).
-  local mod_index = self.modIndex
-  local feedback  = self.fmFeedback
+  -- per-channel static voice macros (MIX page) + the engine-wide drive macro.
+  local mod_index = c.modIndex
+  local feedback  = c.fmFeedback
   local drive     = self.drive
   -- per-channel static operator levels, passed straight to the voice.
   local ol = {c.opLevel1, c.opLevel2, c.opLevel3, c.opLevel4}
   local out = self.outputs
   if engine and engine.trig and ((not out) or out:wants_audio(ch)) then
-    -- 4-op FM (lib/Engine_Potionshop.sc): the engine-wide algorithm selects the
+    -- 4-op FM (lib/Engine_Potionshop.sc): the per-channel algorithm selects the
     -- operator routing; r2/r3/r4 are the per-burst sequenced op2/3/4 ratios; the
     -- carrier/modulator envelopes come from the two sequenced SHAPE indices,
     -- resolved above to times (args 8/9 carrier, 11/19 modulator) + per-segment
@@ -698,7 +721,7 @@ function Burst:fire(ch, beat, freq, level, amp_shape, mod_shape, div, total, hit
     -- ol[1..4] are this channel's static operator levels, geode-shaped per hit
     -- above. ratio1 (op1's per-burst sequenced fundamental) rides as r1 (arg 20).
     -- New curve args are appended (21..23) so the older positional args keep theirs.
-    engine.trig(geo_freq, actual_level, self.algo,
+    engine.trig(geo_freq, actual_level, c.algo,
                 ratio2, ratio3, ratio4, mod_index,
                 attack, amp_dec, amp_dec_curve, mod_dec, feedback, drive, ch,
                 ol[1], ol[2], ol[3], ol[4], mod_attack, ratio1,

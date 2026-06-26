@@ -35,12 +35,15 @@
 --   CLR clears BOTH layers (A + the B/alt layer where present) of the tapped
 --   channel; COPY/PASTE act on the MAIN (A-layer) sequins only, leaving the B (alt)
 --   layer intact so it can keep variating the copied sequins.
---   MIX:   rows 0-5 = channel LEVEL (col 7) + per-op LEVEL (cols 8-11). Tap a cell
---          to open its value picker on rows 6-7. (All four op ratios are sequenced —
---          edited on their row-7 pages, not here, so cols 0-6 of the MIX page are dark.)
+--   MIX:   rows 0-5 = channel LEVEL (col 7) + per-op LEVEL (cols 8-11) + voice
+--          scalars mod index (12) / amp punch (13) / FM feedback (14) / FM ALGORITHM
+--          (15, per-channel). Tap a cell to open its value picker on rows 6-7. (All
+--          four op ratios are sequenced — edited on their row-7 pages, not here, so
+--          cols 0-6 of the MIX channel rows are dark.)
 --   PROB:  rows 0-5 = note alt-trig hold/step (cols 0-1)
 --          · op1/2/3/4 ratio-seq trig toggles (cols 3-6, single button each:
 --            off=hold, on=step)
+--          · amp/mod env shape-seq trig toggles (cols 8-9, single button each)
 --          · prob 25/50/75/100% (cols 11-14, right-justified)
 --          · col 15 burst/hit toggle
 --   PERF:  rows 0-5 = reset off/1/2/4 bars (cols 0..3) · octave -2..+2 (cols 5..9)
@@ -115,10 +118,15 @@ local ROW6_PROB_COL = 13
 local ROW6_SCALE_COL = 14 -- opens the scale picker (scale preset / degrees / root)
 local ROW6_QNT_COL = 15   -- per-channel QNT page (event snap grid, curated set)
 -- MIX page channel-row layout: channel LEVEL on col 7, op1..4 LEVEL on cols 8..11
--- (one contiguous strip). All four op ratios are sequenced (row-7 pages), not here,
--- so cols 0..6 of the MIX page are dark.
+-- (one contiguous strip), then the three per-channel voice scalars — FM mod index
+-- (col 12), amp punch (col 13), FM feedback (col 14). All four op ratios are sequenced
+-- (row-7 pages), not here, so cols 0..6 of the MIX page are dark.
 local MIX_LEVEL_COL = 7
 local OP_LEVEL_COL0 = 8
+local MOD_INDEX_COL = 12
+local AMP_PUNCH_COL = 13
+local FM_FEEDBACK_COL = 14
+local ALGO_COL = 15
 -- The step picker's 32-value grid renders on the control rows (6-7) while a pick
 -- is in progress, leaving all six channel rows visible so the step being edited
 -- is never hidden behind the picker. (The scale picker still owns rows 0-5.)
@@ -148,14 +156,19 @@ local OCTAVE_VALUES = {-2, -1, 0, 1, 2}
 local OCTAVE_COLS   = {5, 6, 7, 8, 9}
 local RATE_VALUES = {0.25, 0.5, 1, 2, 4}
 local RATE_COLS   = {11, 12, 13, 14, 15}
--- PROB page: note alt-trig mode packed left (cols 0-1), the three op-ratio sequence
--- trig toggles next to it (cols 3-5), prob options right-justified (cols 11-14), hit
--- toggle at the far right (col 15). burstProb is a discrete 4-value set.
+-- PROB page: note alt-trig mode packed left (cols 0-1), the four op-ratio sequence
+-- trig toggles next to it (cols 3-6), the two envelope-shape trig toggles after them
+-- (cols 8-9), prob options right-justified (cols 11-14), hit toggle at the far right
+-- (col 15). burstProb is a discrete 4-value set.
 local ALT_TRIG_COLS  = {0, 1}                -- note alt(B) layer: hold / step
 -- op1/2/3/4 ratio-sequence trig: ONE button each (off=hold, on=step), to save grid
 -- space (vs the note pair). Cols 3/4/5/6 -> opRatio1/2/3/4 trig.
 local OP_TRIG_COLS   = {3, 4, 5, 6}
 local OP_TRIG_FIELDS = {'opRatio1Trig', 'opRatio2Trig', 'opRatio3Trig', 'opRatio4Trig'}
+-- amp/mod envelope-shape sequence trig: ONE button each (off=hold, on=step), same as
+-- the op-ratio toggles. Cols 8/9 -> ampShape/modShape trig (step walks the A lane).
+local SHAPE_TRIG_COLS   = {8, 9}
+local SHAPE_TRIG_FIELDS = {'ampShapeTrig', 'modShapeTrig'}
 local PROB_VALUES   = {0.25, 0.5, 0.75, 1.0}
 local PROB_COLS     = {11, 12, 13, 14}
 local PROB_HIT_COL  = 15
@@ -261,6 +274,13 @@ end
 -- OP-page op-level picker: 0..1 in 1/31 steps (same layout the old op sequins
 -- used), so every operator level stays grid-reachable.
 local OP_LEVEL_VALUES = range(32, function(i) return i / 31 end)
+-- MIX-page voice-scalar pickers (after the op levels). Each is a full 32-value grid
+-- (two grid rows) the chN_mod_index / chN_amp_punch / chN_fm_feedback params map onto
+-- exactly — integer ranges so the 2/4 defaults stay grid-exact.
+local MOD_INDEX_VALUES  = range(32, function(i) return i end)            -- 1..32 (brightness depth)
+local AMP_PUNCH_VALUES  = range(32, function(i) return i - 1 end)        -- 0..31 (curve exaggeration)
+local FM_FEEDBACK_VALUES = range(32, function(i) return (i - 1) * 4 / 31 end) -- 0..4 rad, 1/31-of-4 steps
+local ALGO_VALUES = range(16, function(i) return i end)  -- 1..16 FM algorithm (per-channel)
 -- Curated per-channel quantize grids (events per whole note). Mirrors
 -- Burst.QUANTIZE_VALUES — keep in sync. Edited on the per-channel QNT page.
 local QUANTIZE_VALUES = {3, 4, 6, 8, 12, 16, 24, 32}
@@ -367,6 +387,10 @@ GridUI.RATIO_PICKER = RATIO_PICKER          -- first-32 grid-picker range (op1 +
 GridUI.OP_RATIO_OFFSETS = OP_RATIO_OFFSETS  -- op ratio B index-offset layout (0..31)
 GridUI.picker_layout = picker_layout        -- layer-aware step-picker layout
 GridUI.OP_LEVEL_VALUES = OP_LEVEL_VALUES
+GridUI.MOD_INDEX_VALUES = MOD_INDEX_VALUES
+GridUI.AMP_PUNCH_VALUES = AMP_PUNCH_VALUES
+GridUI.FM_FEEDBACK_VALUES = FM_FEEDBACK_VALUES
+GridUI.ALGO_VALUES = ALGO_VALUES
 
 -- opts.on_status(string): pushed status text (for screen). opts.on_redraw():
 -- called after any state change so the screen can refresh too. opts.on_edit(ev):
@@ -505,6 +529,7 @@ function GridUI:handle_normal_press(x, y)
     if self.probMode then
       local trig_idx = index_of(ALT_TRIG_COLS, x)
       local op_trig_idx = index_of(OP_TRIG_COLS, x)
+      local shape_trig_idx = index_of(SHAPE_TRIG_COLS, x)
       local prob_idx = index_of(PROB_COLS, x)
       if x == PROB_HIT_COL then
         self:set_scalar(y, 'probHit', not self:chan(y).probHit)
@@ -514,6 +539,10 @@ function GridUI:handle_normal_press(x, y)
         -- single-button toggle: hold (0) <-> step (1)
         local field = OP_TRIG_FIELDS[op_trig_idx + 1]
         self:set_scalar(y, field, (self:chan(y)[field] == 1) and 0 or 1)
+      elseif shape_trig_idx ~= -1 then
+        -- amp/mod env shape trig, same single-button toggle
+        local field = SHAPE_TRIG_FIELDS[shape_trig_idx + 1]
+        self:set_scalar(y, field, (self:chan(y)[field] == 1) and 0 or 1)
       elseif prob_idx ~= -1 then
         self:set_scalar(y, 'burstProb', PROB_VALUES[prob_idx + 1])
       end
@@ -521,10 +550,19 @@ function GridUI:handle_normal_press(x, y)
       return
     end
     if self.mixMode then
-      -- channel level on col 7, op1..op4 levels on cols 8..11 (one contiguous strip).
+      -- channel level on col 7, op1..op4 levels on cols 8..11 (one contiguous strip),
+      -- then the three voice scalars (mod index 12, amp punch 13, FM feedback 14).
       -- All four op ratios are sequenced now (their own row-7 pages), so cols 0..6 are dark.
       if x == MIX_LEVEL_COL then                -- channel level
         self:open_scalar_picker(y, 'level', OP_LEVEL_VALUES, 'level')
+      elseif x == MOD_INDEX_COL then            -- FM mod index
+        self:open_scalar_picker(y, 'modIndex', MOD_INDEX_VALUES, 'index')
+      elseif x == AMP_PUNCH_COL then            -- amp punch
+        self:open_scalar_picker(y, 'ampPunch', AMP_PUNCH_VALUES, 'punch')
+      elseif x == FM_FEEDBACK_COL then          -- FM feedback
+        self:open_scalar_picker(y, 'fmFeedback', FM_FEEDBACK_VALUES, 'fb')
+      elseif x == ALGO_COL then                 -- FM algorithm (per-channel)
+        self:open_scalar_picker(y, 'algo', ALGO_VALUES, 'algo')
       else
         local lvi = x - OP_LEVEL_COL0
         if lvi >= 0 and lvi <= 3 then           -- op1..op4 level
@@ -1014,20 +1052,30 @@ function GridUI:render_channel_row(ch)
   end
 end
 
--- MIX page: channel level (col 7) + per-op level (cols 8..11), each cell's
--- brightness encoding its value; picker opens on tap. All four op ratios are
--- sequenced (their own row-7 pages), so cols 0..6 stay dark here.
+-- MIX page: channel level (col 7) + per-op level (cols 8..11) + the voice scalars
+-- mod index/amp punch/FM feedback (cols 12..14) + per-channel FM algorithm (col 15),
+-- each cell's brightness encoding its value (normalised to its own range); picker
+-- opens on tap. All four op ratios are sequenced (their own row-7 pages), so cols
+-- 0..6 stay dark here.
 function GridUI:render_mix_row(ch)
   local c = self:chan(ch)
+  local function bright(frac) return math.max(2, round(2 + clamp(frac, 0, 1) * 11)) end
   for x = 0, GRID_W - 1 do self.g:set_led(x, ch, 0); self.g:set_strobe(x, ch, 'off') end
-  self.g:set_led(MIX_LEVEL_COL, ch, math.max(2, round(2 + (c.level or 0) * 11)))
+  self.g:set_led(MIX_LEVEL_COL, ch, bright(c.level or 0))
   for op = 1, 4 do
-    local lvl = c['opLevel' .. op] or 1
-    self.g:set_led(OP_LEVEL_COL0 + (op - 1), ch, math.max(2, round(2 + lvl * 11)))
+    self.g:set_led(OP_LEVEL_COL0 + (op - 1), ch, bright(c['opLevel' .. op] or 1))
   end
+  self.g:set_led(MOD_INDEX_COL, ch, bright(((c.modIndex or 1) - 1) / 31))
+  self.g:set_led(AMP_PUNCH_COL, ch, bright((c.ampPunch or 0) / 31))
+  self.g:set_led(FM_FEEDBACK_COL, ch, bright((c.fmFeedback or 0) / 4))
+  self.g:set_led(ALGO_COL, ch, bright(((c.algo or 1) - 1) / 15))
   if self.picker and self.picker.kind == 'scalar' and self.picker.ch == ch then
     local f = self.picker.field
     if f == 'level' then self.g:set_led(MIX_LEVEL_COL, ch, 15)
+    elseif f == 'modIndex' then self.g:set_led(MOD_INDEX_COL, ch, 15)
+    elseif f == 'ampPunch' then self.g:set_led(AMP_PUNCH_COL, ch, 15)
+    elseif f == 'fmFeedback' then self.g:set_led(FM_FEEDBACK_COL, ch, 15)
+    elseif f == 'algo' then self.g:set_led(ALGO_COL, ch, 15)
     elseif f:match('^opLevel') then self.g:set_led(OP_LEVEL_COL0 + (tonumber(f:sub(-1)) - 1), ch, 15) end
   end
 end
@@ -1039,11 +1087,17 @@ function GridUI:render_prob_row(ch)
   for i = 1, #ALT_TRIG_MODE_NAMES do
     self.g:set_led(ALT_TRIG_COLS[i], ch, c.altTrig == (i - 1) and 15 or 4)
   end
-  -- op2/3/4 ratio-seq trig toggles (cols 3-5): on (step) bright+strobe, off (hold) dim
+  -- op1/2/3/4 ratio-seq trig toggles (cols 3-6): on (step) bright+strobe, off (hold) dim
   for i = 1, #OP_TRIG_COLS do
     local on = c[OP_TRIG_FIELDS[i]] == 1
     self.g:set_led(OP_TRIG_COLS[i], ch, on and 14 or 4)
     self.g:set_strobe(OP_TRIG_COLS[i], ch, on and 'slow' or 'off')
+  end
+  -- amp/mod env shape-seq trig toggles (cols 8-9): same on/off treatment
+  for i = 1, #SHAPE_TRIG_COLS do
+    local on = c[SHAPE_TRIG_FIELDS[i]] == 1
+    self.g:set_led(SHAPE_TRIG_COLS[i], ch, on and 14 or 4)
+    self.g:set_strobe(SHAPE_TRIG_COLS[i], ch, on and 'slow' or 'off')
   end
   -- prob options (right-justified): nearest discrete value highlighted
   local sel = nearest_index(PROB_VALUES, c.burstProb)
@@ -1328,18 +1382,24 @@ function GridUI:_status()
   elseif self.perfMode then
     s = 'PERF — cols0-3 reset, cols5-9 oct, cols11-15 rate'
   elseif self.probMode then
-    s = 'PROB — 0-1 note trig, 3-6 op trig, 11-14 prob%, 15 hit'
+    s = 'PROB — 0-1 note 3-6 op 8-9 env trig, 11-14 prob, 15 hit'
   elseif self.qntMode then
     s = 'QNT — cols0-7 per-channel quantize (1/3..1/32)'
   elseif self.mixMode then
-    s = 'MIX — col7 level, cols8-11 op level (ratios sequenced)'
+    s = 'MIX — 7 lvl, 8-11 op, 12 idx 13 punch 14 fb 15 alg'
   elseif self.actionMode then
     s = string.upper(self.actionMode) .. ' — tap a channel'
   elseif self.picker and self.picker.kind == 'scalar' then
     local f = self.picker.field
-    local lbl = f:match('^opLevel') and ('op' .. f:sub(-1) .. ' level') or 'level'
-    s = 'edit ch' .. (self.picker.ch + 1) .. ' ' .. lbl ..
-        '=' .. tostring(self:chan(self.picker.ch)[f])
+    local val = self:chan(self.picker.ch)[f]
+    if f == 'algo' then
+      s = 'edit ch' .. (self.picker.ch + 1) .. ' algo=' .. (ALGO_NAMES[val] or '?')
+    else
+      local lbl = f:match('^opLevel') and ('op' .. f:sub(-1) .. ' level')
+        or ({modIndex = 'mod index', ampPunch = 'amp punch', fmFeedback = 'fm fb'})[f]
+        or 'level'
+      s = 'edit ch' .. (self.picker.ch + 1) .. ' ' .. lbl .. '=' .. tostring(val)
+    end
   elseif self.picker and self.picker.kind == 'step' then
     local pp = self.picker.param
     local raw = seqx.values(self:seq_ref(self.picker.ch, pp, self.picker.layer))[self.picker.col + 1]
