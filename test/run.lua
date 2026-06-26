@@ -94,6 +94,7 @@ local eng = Burst.new()
 local LEVEL_CONST = 16 / 31  -- the fixed init volume (default_channel), not randomized
 local ok_div, ok_reps, ok_note, ok_ratio, ok_ad, ok_len, ok_level_const, ok_op1 =
   true, true, true, true, true, true, true, true
+local ok_single = true  -- shapes + op2/3/4 randomize to a SINGLE held step
 for _ = 1, 200 do
   eng:randomize(1)
   local c = eng.channels[1]
@@ -107,12 +108,11 @@ for _ = 1, 200 do
       if not in_set(v, Burst.RATIO_PICKER) then ok_ratio = false end
     end
   end
-  -- carrier (attack/decay) and modulator (modatk/moddec) envelope shapes must
-  -- all land on the i/31 picker grid.
-  for _, seq in ipairs({c.attack, c.decay, c.modatk, c.moddec}) do
+  -- carrier (ampShape) and modulator (modShape) envelope shapes are sequenced as
+  -- shape INDICES: every step must be an integer in 1..#Burst.SHAPES (the picker).
+  for _, seq in ipairs({c.ampShape, c.modShape}) do
     for _, v in ipairs(seqx.values(seq)) do
-      local k = v * 31
-      if not (approx(k, math.floor(k + 0.5)) and k >= 0 and k <= 31) then ok_ad = false end
+      if not (v == math.floor(v) and v >= 1 and v <= #Burst.SHAPES) then ok_ad = false end
     end
   end
   -- volume is a constant: randomize must leave it at the init value, length 1.
@@ -124,15 +124,20 @@ for _ = 1, 200 do
   if #o1 ~= 1 or not approx(o1[1], 1) then ok_op1 = false end
   local dl = seqx.len(c.div)
   if not (dl >= 2 and dl <= 4) then ok_len = false end
+  -- the two env shapes + op2/3/4 ratios randomize to ONE held step (stable timbre)
+  for _, seq in ipairs({c.ampShape, c.modShape, c.opRatio2, c.opRatio3, c.opRatio4}) do
+    if seqx.len(seq) ~= 1 then ok_single = false end
+  end
 end
 check('div values all in MUSICAL_DIVS', ok_div)
 check('reps values all in {1,2,3,4}', ok_reps)
 check('note values 0..15 integer', ok_note)
 check('sequenced op2/3/4 ratio steps land on the curated RATIO_VALUES set', ok_ratio)
 check('randomize keeps op1 ratio at the 1.0 anchor', ok_op1)
-check('carrier+mod env values land on picker grid (i/31)', ok_ad)
+check('carrier+mod shape indices land in 1..#SHAPES', ok_ad)
 check('randomize leaves volume at the fixed init constant', ok_level_const)
 check('lengths: div/reps/note 2..4', ok_len)
+check('shapes + op2/3/4 randomize to a single held step', ok_single)
 
 -- mutate must also leave volume untouched (a constant), even with a custom level,
 -- and keep per-op ratios on the curated set.
@@ -242,7 +247,8 @@ check('alt-trig step arpeggiates the B pitch per hit',
 -- op2/3/4 values pass straight to trig args 4/5/6 (r2/r3/r4); op1's drawn value rides
 -- as r1 at arg 20.
 -- engine.trig(freq, amp, algo, r2, r3, r4, modIndex,
---             atk, aDec, ampCurve, mDec, feedback, drive, ch, op1..op4, modAtk, r1).
+--             atk, aDec, ampDecCurve, mDec, feedback, drive, ch, op1..op4, modAtk, r1,
+--             ampAtkCurve, modAtkCurve, modDecCurve).
 local function first_trig()
   clock._reset()
   local saved = engine
@@ -399,9 +405,31 @@ check('op1 ratio trig step walks the index UP per hit on arg 20',
   and step_r1[2] > step_r1[1] and step_r1[3] > step_r1[2])
 check('op1 ratio trig defaults to hold (0)', Burst.new().channels[1].opRatio1Trig == 0)
 
--- envelope shape from the paired attack/decay sequences. attack -> absolute time
--- (0.001 + a^2*0.4) at trig arg 8; decay -> gap-relative amp decay at trig arg 9.
-local function env_trig(attack_n, decay_n)
+-- envelope SHAPES: each sequenced shape INDEX resolves (in fire) to attack/decay
+-- times scaled to the inter-hit gap + per-segment Env curves. The carrier shape
+-- (ampShape) feeds trig args 8 (attack) / 9 (ampDecay) / 10 (ampDecCurve) /
+-- 21 (ampAtkCurve); the modulator shape (modShape) feeds 19 (modAttack) /
+-- 11 (modDecay) / 22 (modAtkCurve) / 23 (modDecCurve). div 4 @ 120bpm => gap 0.5s.
+-- Expectations are derived from Burst.SHAPES so this survives table tuning/reordering.
+local GAP = 0.5
+local function exp_atk(sh) return math.max(0.001, GAP * sh[1]) end
+local function shp(i) return Burst.SHAPES[i] end
+-- pick representative carrier shapes BY their contour, not by a hard-coded index,
+-- so this survives reordering the table:
+--   I_INSTANT = the SHORTEST instant-attack shape (atkMul 0, min decMul)
+--   I_LONGATK = the longest-attack shape (max atkMul)
+--   I_LONGDEC = the longest-decay shape (max decMul)
+local I_INSTANT, I_LONGATK, I_LONGDEC
+do
+  local bestdec, maxatk, maxdec
+  for i, s in ipairs(Burst.SHAPES) do
+    if s[1] == 0 and (bestdec == nil or s[2] < Burst.SHAPES[bestdec][2]) then bestdec = i end
+    if maxatk == nil or s[1] >= Burst.SHAPES[maxatk][1] then maxatk = i end
+    if maxdec == nil or s[2] >= Burst.SHAPES[maxdec][2] then maxdec = i end
+  end
+  I_INSTANT, I_LONGATK, I_LONGDEC = bestdec, maxatk, maxdec
+end
+local function shape_trig(amp_i, mod_i)
   clock._reset()
   local saved = engine
   local cap
@@ -410,47 +438,36 @@ local function env_trig(attack_n, decay_n)
   set_quant(e, 0)
   e.channels[1].div = seqx.new{4}
   e.channels[1].reps = seqx.new{1}
-  e.channels[1].attack = seqx.new{attack_n}
-  e.channels[1].decay  = seqx.new{decay_n}
+  e.channels[1].ampShape = seqx.new{amp_i}
+  e.channels[1].modShape = seqx.new{mod_i}
   e:launch(1)
   clock._run_until(2)
   engine = saved
   return cap
 end
-local e_lo = env_trig(0, 0)
-local e_hi = env_trig(1, 1)
-check('attack 0 -> ~instant (trig arg 8)', e_lo and approx(e_lo[8], 0.001))
-check('attack 1 -> ~0.4s absolute (trig arg 8)', e_hi and approx(e_hi[8], 0.401))
-check('higher decay -> longer amp decay (trig arg 9)', e_lo and e_hi and e_hi[9] > e_lo[9])
+local s_inst = shape_trig(I_INSTANT, I_INSTANT)
+local s_atk  = shape_trig(I_LONGATK, I_INSTANT)
+local s_dec  = shape_trig(I_LONGDEC, I_INSTANT)
+check('instant-attack shape -> ~0.001s attack (trig arg 8)', s_inst and approx(s_inst[8], 0.001))
+check('longer-attack shape -> longer gap-relative attack (trig arg 8)',
+  s_atk and s_inst and s_atk[8] > s_inst[8] and approx(s_atk[8], exp_atk(shp(I_LONGATK))))
+check('longer-decay shape -> longer amp decay (trig arg 9)', s_dec and s_inst and s_dec[9] > s_inst[9])
+-- ampPunch default 4 => punch scale 1.0, so the carrier curves pass through unscaled.
+check('carrier shape feeds amp-decay curve (trig arg 10)', s_inst and approx(s_inst[10], shp(I_INSTANT)[4]))
+check('carrier shape feeds amp-attack curve (trig arg 21)', s_inst and approx(s_inst[21], shp(I_INSTANT)[3]))
 
--- modulator envelope: a second paired sequence (modatk/moddec) mapped exactly
--- like the carrier env, but feeding the FM-brightness env. modAttack -> trig arg
--- 19 (appended last); modDecay -> trig arg 11. Independent of the carrier env.
-local function mod_env_trig(modatk_n, moddec_n)
-  clock._reset()
-  local saved = engine
-  local cap
-  engine = { trig = function(...) cap = cap or {...} end }
-  local e = Burst.new()
-  set_quant(e, 0)
-  e.channels[1].div = seqx.new{4}
-  e.channels[1].reps = seqx.new{1}
-  e.channels[1].modatk = seqx.new{modatk_n}
-  e.channels[1].moddec = seqx.new{moddec_n}
-  e:launch(1)
-  clock._run_until(2)
-  engine = saved
-  return cap
-end
-local m_lo = mod_env_trig(0, 0)
-local m_hi = mod_env_trig(1, 1)
-check('mod attack 0 -> ~instant (trig arg 19)', m_lo and approx(m_lo[19], 0.001))
-check('mod attack 1 -> ~0.4s absolute (trig arg 19)', m_hi and approx(m_hi[19], 0.401))
-check('higher mod decay -> longer FM body (trig arg 11)', m_lo and m_hi and m_hi[11] > m_lo[11])
--- the modulator env is independent of the carrier env: changing modatk/moddec
--- must not move the carrier attack/decay (args 8/9).
-check('mod env does not disturb carrier env (args 8/9 stable)',
-  m_lo and m_hi and approx(m_lo[8], m_hi[8]) and approx(m_lo[9], m_hi[9]))
+-- modulator envelope: the modShape index feeds the FM-brightness env independently
+-- of the carrier (ampShape held constant). instant vs longest-decay mod shape.
+local m_inst = shape_trig(I_INSTANT, I_INSTANT)
+local m_dec  = shape_trig(I_INSTANT, I_LONGDEC)
+check('modulator shape feeds mod attack (trig arg 19)', m_inst and approx(m_inst[19], exp_atk(shp(I_INSTANT))))
+check('longer mod shape -> longer FM body (trig arg 11)', m_dec and m_inst and m_dec[11] > m_inst[11])
+check('modulator shape feeds mod-attack curve (trig arg 22)', m_inst and approx(m_inst[22], shp(I_INSTANT)[3]))
+check('modulator shape feeds mod-decay curve (trig arg 23)', m_inst and approx(m_inst[23], shp(I_INSTANT)[4]))
+-- the modulator env is independent of the carrier env: changing modShape must not
+-- move the carrier attack/decay (args 8/9).
+check('mod shape does not disturb carrier env (args 8/9 stable)',
+  m_inst and m_dec and approx(m_inst[8], m_dec[8]) and approx(m_inst[9], m_dec[9]))
 
 -- shape-mode amp decay tracks the inter-hit gap: 4x faster division -> ~1/4
 -- the decay, so dense/fast channels self-shorten instead of piling up.
@@ -509,8 +526,9 @@ end
 check('channel index feeds trig arg 14', chan_arg(3) == 3)
 
 -- VOICE macros: engine-wide globals read straight at fire time. trig args
--- 10/12/13 = ampCurve, feedback, drive; arg 7 = modIndex. (mod decay arg 11 and
--- mod attack arg 19 are now per-channel sequenced, not globals.)
+-- 10/12/13 = amp-decay curve, feedback, drive; arg 7 = modIndex. The amp-decay
+-- curve = the carrier shape's decCurve scaled by ampPunch/4 (default shape 'tail'
+-- decCurve -4 * ampPunch 4/4 = -4). (mod env args 11/19/22/23 are per-channel.)
 -- `setup(e)` mutates the engine before launch; returns the first trig.
 local function macro_trig(setup)
   clock._reset()
@@ -528,7 +546,7 @@ local function macro_trig(setup)
   return cap
 end
 local d = macro_trig()
-check('voice macro defaults: modIndex=2, ampCurve=-4, feedback=0, drive=1',
+check('voice macro defaults: modIndex=2, amp-dec curve=-4, feedback=0, drive=1',
   d and approx(d[7], 2) and approx(d[10], -4) and approx(d[12], 0) and approx(d[13], 1))
 -- the global voice macros feed the trig args directly (fmDecay was retired; the
 -- modulator decay is now sequenced -> arg 11, with modulator attack at arg 19).
@@ -623,16 +641,16 @@ erb.channels[3].note = seqx.new{0}
 erb:bar_reset(3)
 check('bar_reset does not launch a stopped channel', erb:is_running(3) == false)
 
--- reset_channel must rewind EVERY sequence (hardcoded list), including the new
--- modulator envelope, or modatk/moddec drift out of phase on a bar reset.
+-- reset_channel must rewind EVERY sequence (hardcoded list), including the
+-- envelope shapes, or ampShape/modShape drift out of phase on a bar reset.
 local rzc = Burst.new()
-rzc.channels[1].modatk = seqx.new{0.1, 0.2, 0.3}
-rzc.channels[1].moddec = seqx.new{0.4, 0.5}
-rzc.channels[1].modatk(); rzc.channels[1].modatk()  -- advance the playheads
-rzc.channels[1].moddec()
+rzc.channels[1].ampShape = seqx.new{1, 5, 9}
+rzc.channels[1].modShape = seqx.new{2, 6}
+rzc.channels[1].ampShape(); rzc.channels[1].ampShape()  -- advance the playheads
+rzc.channels[1].modShape()
 rzc:reset_channel(1)
-check('reset_channel rewinds modatk/moddec to step 1',
-  approx(rzc.channels[1].modatk(), 0.1) and approx(rzc.channels[1].moddec(), 0.4))
+check('reset_channel rewinds ampShape/modShape to step 1',
+  rzc.channels[1].ampShape() == 1 and rzc.channels[1].modShape() == 2)
 
 -- ---- grid_ui: controller wiring ---------------------------------------
 local GridUI = require 'grid_ui'
@@ -753,34 +771,27 @@ check('hit-count cells (top row) do not strobe',
   mg.strobes[6 * 16 + 0] == nil and mg.strobes[6 * 16 + 15] == nil)
 ctl:close_picker()
 
--- attack/decay is a second paired page on a SINGLE button (col 3); selecting it
--- lights only that button, not div/reps (pair-scoped highlight)
-ctl:press(3, 7)  -- col 3 = attack/decay page
-check('attack/decay page selected', ctl.selectedParam == 'attack')
-check('attack page shows attack | decay lanes',
-  ctl:row_lanes()[1].param == 'attack' and ctl:row_lanes()[2].param == 'decay')
+-- SHP page on a SINGLE button (col 3): the one envelope page, paired
+-- ampShape | modShape lanes (replaced the old carrier attack/decay + modulator
+-- modatk/moddec pages). Selecting it lights only that button, not div/reps.
+ctl:press(3, 7)  -- col 3 = SHP page
+check('SHP page selected', ctl.selectedParam == 'ampShape')
+check('SHP page shows ampShape | modShape lanes',
+  ctl:row_lanes()[1].param == 'ampShape' and ctl:row_lanes()[2].param == 'modShape')
 ctl:render_all()
-check('row7 lights only the attack/decay button (col3), not div/reps (col0)',
+check('row7 lights only the SHP button (col3), not div/reps (col0)',
   mg.leds[7 * 16 + 3] == 15 and mg.leds[7 * 16 + 0] ~= 15)
-ctl:press(8, 0)  -- right half -> decay A
-check('attack page right half edits decay',
-  ctl.picker.param == 'decay' and ctl.picker.layer == 'A')
+ctl:press(8, 0)  -- right half -> modShape A
+check('SHP page right half edits modShape',
+  ctl.picker.param == 'modShape' and ctl.picker.layer == 'A')
+ctl:press(2, 6)  -- value grid row 6 col 2 -> shape index 3
+check('SHP picker writes a shape index step',
+  seqx.values(geng.channels[1].modShape)[1] == GridUI.STEP_PICKER_VALUES.modShape[3])
 ctl:close_picker()
 
--- modulator envelope page (col 4): paired modatk | moddec lanes, mirroring the
--- carrier attack/decay page above.
-ctl:press(4, 7)  -- col 4 = modatk/moddec page
-check('mod-env page selected', ctl.selectedParam == 'modatk')
-check('mod-env page shows modatk | moddec lanes',
-  ctl:row_lanes()[1].param == 'modatk' and ctl:row_lanes()[2].param == 'moddec')
-ctl:press(8, 0)  -- right half -> moddec A
-check('mod-env page right half edits moddec',
-  ctl.picker.param == 'moddec' and ctl.picker.layer == 'A')
-ctl:close_picker()
-
--- sequenced op ratio pages (row7 cols 5/6/7/8 = op1/2/3/4): an A|B sequence like
--- note/level (left half = A value, right half = B index offset).
-ctl:press(5, 7)  -- col 5 = op1 ratio page
+-- sequenced op ratio pages (row7 cols 4/5/6/7 = op1/2/3/4; they follow the single
+-- SHP page now): an A|B sequence like note/level (left = A value, right = B offset).
+ctl:press(4, 7)  -- col 4 = op1 ratio page
 check('op1 ratio page selected', ctl.selectedParam == 'opRatio1')
 check('op1 ratio page shows opRatio1 A | B lanes',
   ctl:row_lanes()[1].param == 'opRatio1' and ctl:row_lanes()[1].layer == 'A'
@@ -795,12 +806,12 @@ ctl:press(8, 0)  -- right half step 0 -> opRatio1 B (offset) picker
 check('op1 ratio right half edits the B (offset) layer',
   ctl.picker.param == 'opRatio1' and ctl.picker.layer == 'B')
 ctl:close_picker()
-ctl:press(6, 7)  -- col 6 = op2 ratio page
+ctl:press(5, 7)  -- col 5 = op2 ratio page
 check('op2 ratio page selected', ctl.selectedParam == 'opRatio2')
 check('op2 ratio page shows opRatio2 A | B lanes',
   ctl:row_lanes()[1].param == 'opRatio2' and ctl:row_lanes()[1].layer == 'A'
   and ctl:row_lanes()[2].param == 'opRatio2' and ctl:row_lanes()[2].layer == 'B')
-ctl:press(8, 7)  -- col 8 = op4 ratio page
+ctl:press(7, 7)  -- col 7 = op4 ratio page
 check('op4 ratio page selected', ctl.selectedParam == 'opRatio4')
 -- back to the note page so later tests start from a known selection
 ctl:press(1, 7)
@@ -981,7 +992,7 @@ check('op page level line steps opLevel1 down the 0..1 grid',
 -- op1/2/3/4 ratios are now sequenced — editable on the main seq page like any lane.
 sui:set_page(1)
 sui.sel_ch = 0
-sui.sel_line[1] = 1 + 10  -- run(1) + params 1..8 + opRatio1(9) + opRatio2(10) = line 11
+sui.sel_line[1] = 1 + 8   -- run(1) + params 1..6 + opRatio1(7) + opRatio2(8) = line 9
 sui:enc(2, 0)             -- sync grid selected param to the focused line
 check('main page line reaches the sequenced opRatio2 lane', sui:main_param() == 'opRatio2')
 seng.channels[1].opRatio2 = seqx.new{1}
@@ -1585,13 +1596,14 @@ engine.trig = function() engine.trigs = engine.trigs + 1 end
 local oeng = Burst.new()
 oeng.outputs = outs
 midi_log = {}
-oeng:fire(1, 0, 440, 0.5, 0, 4, 0, 0, 4, 1, 0)  -- ch1 is midi: external only (note_on + modwheel cc)
+-- fire(ch, beat, freq, level, ampShape, modShape, div, total, hit_idx)
+oeng:fire(1, 0, 440, 0.5, 4, 3, 4, 1, 0)  -- ch1 is midi: external only (note_on + modwheel cc)
 check('fire on midi channel skips engine.trig', engine.trigs == 0 and #midi_log == 2)
 ofake:set('ch1_output', Outputs.DEST.AUDIO_MIDI)
 midi_log = {}
-oeng:fire(1, 0, 440, 0.5, 0, 4, 0, 0, 4, 1, 0)
+oeng:fire(1, 0, 440, 0.5, 4, 3, 4, 1, 0)
 check('audio+midi fires both', engine.trigs == 1 and #midi_log == 2)
-oeng:fire(2, 0, 440, 0.5, 0, 4, 0, 0, 4, 1, 0)  -- ch2 is on crow 3+4
+oeng:fire(2, 0, 440, 0.5, 4, 3, 4, 1, 0)  -- ch2 is on crow 3+4
 check('fire on crow channel skips engine.trig', engine.trigs == 1)
 engine = nil
 

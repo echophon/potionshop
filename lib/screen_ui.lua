@@ -45,9 +45,9 @@ local GridUI = require 'grid_ui'
 
 local SEQ_LEN = GridUI.SEQ_LEN  -- max steps per sequence (shared cap with the grid)
 -- the full sequenced-param list (shared with the grid/params so it can't drift):
--- div/reps/note/level/attack/decay/modatk/moddec + the sequenced op1/2/3/4 ratios.
+-- div/reps/note/level/ampShape/modShape + the sequenced op1/2/3/4 ratios.
 local PARAMS = GridUI.PARAMS
--- alt (B-layer) page: div/reps, attack/decay and modatk/moddec have no B layer
+-- alt (B-layer) page: div/reps and ampShape/modShape have no B layer
 -- (see GridUI.has_b), so it carries only the params that take an additive offset
 -- (note, level, opRatio1/2/3/4).
 local B_PARAMS = {}
@@ -92,9 +92,8 @@ local nearest_index = GridUI.nearest_index
 
 -- compact value formatting for the lines (envelope axes on the 0..31 grid scale).
 local function fmt(param, v)
-  if param == 'attack' or param == 'decay'
-      or param == 'modatk' or param == 'moddec' then
-    return tostring(math.floor(v * 31 + 0.5))
+  if param == 'ampShape' or param == 'modShape' then
+    return GridUI.SHAPE_NAMES[math.floor(v + 0.5)] or tostring(v)
   end
   if param == 'level' then return string.format('%.2f', v) end
   if param:match('^opRatio') then return (v % 1 == 0) and tostring(math.floor(v)) or tostring(v) end

@@ -58,12 +58,15 @@ defs = [
 		c1 = 1, c2 = 0, c3 = 0, c4 = 0,
 		lvl1 = 1, lvl2 = 1, lvl3 = 1, lvl4 = 1,
 		modIndex = 4, feedback = 0,
-		attack = 0.001, ampDecay = 0.4, ampCurve = -4,
-		modAttack = 0.001, modDecay = 0.2, drive = 1, gate = 1;
+		attack = 0.001, ampDecay = 0.4, ampAtkCurve = -4, ampDecCurve = -4,
+		modAttack = 0.001, modDecay = 0.2, modAtkCurve = -4, modDecCurve = -4,
+		drive = 1, gate = 1;
 		var ampEnv, cut, modEnv, o1, o2, o3, o4, sig, driveMix;
-		modEnv = modIndex * EnvGen.kr(Env.perc(modAttack, max(0.01, modDecay), 1.0, -4));
+		modEnv = modIndex * EnvGen.kr(
+			Env.new([0, 1, 0], [modAttack, max(0.01, modDecay)], [modAtkCurve, modDecCurve])
+		);
 		ampEnv = EnvGen.kr(
-			Env.perc(attack, max(0.01, ampDecay), 1.0, ampCurve),
+			Env.new([0, 1, 0], [attack, max(0.01, ampDecay)], [ampAtkCurve, ampDecCurve]),
 			doneAction: Done.freeSelf
 		);
 		cut = EnvGen.kr(Env.asr(0, 1, 0.006, \lin), gate, doneAction: Done.freeSelf);

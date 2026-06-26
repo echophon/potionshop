@@ -84,20 +84,27 @@ Engine_Potionshop : CroneEngine {
 			c1 = 1, c2 = 0, c3 = 0, c4 = 0,                 // carrier gains
 			lvl1 = 1, lvl2 = 1, lvl3 = 1, lvl4 = 1,         // per-operator output levels
 			modIndex = 4, feedback = 0,                     // global PM depth (rad), op4 self-FB (rad)
-			attack = 0.001, ampDecay = 0.4, ampCurve = -4,  // carrier amp env (perc)
-			modAttack = 0.001, modDecay = 0.2,              // modulator brightness env (perc atk+dec)
+			attack = 0.001, ampDecay = 0.4,                 // carrier amp env attack/decay times
+			ampAtkCurve = -4, ampDecCurve = -4,             // carrier env per-segment Env curves
+			modAttack = 0.001, modDecay = 0.2,              // modulator brightness env atk/dec times
+			modAtkCurve = -4, modDecCurve = -4,             // modulator env per-segment Env curves
 			drive = 1, gate = 1;                            // soft-clip, voice gate
 			var ampEnv, cut, modEnv, o1, o2, o3, o4, sig, driveMix;
 
 			// modulator brightness envelope: scales every modulation depth so the
-			// timbre brightens over its own attack and fades over its own decay --
-			// both per-channel sequenced (grid mod-env page), independent of the
-			// carrier amp env above.
-			modEnv = modIndex * EnvGen.kr(Env.perc(modAttack, max(0.01, modDecay), 1.0, -4));
+			// timbre brightens over its own attack and fades over its own decay. Both
+			// axes + the per-segment curves come from the per-channel sequenced
+			// modShape, independent of the carrier amp env below. Env.new (vs the old
+			// Env.perc) lets attack + decay carry independent curves -- the whole point
+			// of the SHAPE control (lib/burst.lua SHAPES).
+			modEnv = modIndex * EnvGen.kr(
+				Env.new([0, 1, 0], [modAttack, max(0.01, modDecay)], [modAtkCurve, modDecCurve])
+			);
 
-			// percussive carrier amp env; frees the synth on completion.
+			// carrier amp env from the per-channel sequenced ampShape (atk/dec times +
+			// independent per-segment curves); frees the synth on completion.
 			ampEnv = EnvGen.kr(
-				Env.perc(attack, max(0.01, ampDecay), 1.0, ampCurve),
+				Env.new([0, 1, 0], [attack, max(0.01, ampDecay)], [ampAtkCurve, ampDecCurve]),
 				doneAction: Done.freeSelf
 			);
 
@@ -153,29 +160,32 @@ Engine_Potionshop : CroneEngine {
 		]);
 
 		// trig(freq, amp, algo, r2, r3, r4, modIndex,
-		//      attack, ampDecay, ampCurve, modDecay, feedback, drive, ch,
-		//      lvl1, lvl2, lvl3, lvl4, modAttack, r1)
+		//      attack, ampDecay, ampDecCurve, modDecay, feedback, drive, ch,
+		//      lvl1, lvl2, lvl3, lvl4, modAttack, r1,
+		//      ampAtkCurve, modAtkCurve, modDecCurve)
 		//
 		// `algo` (1..16) selects the routing/carrier data; the rest are the final
 		// per-hit values Burst:fire already computes. The handler expands `algo`
 		// into the SynthDef's edge weights + carrier gains (static per note). `ch`
 		// (1..6) is the channel: each channel is monophonic, so a new hit releases
 		// the previous voice on that channel before spawning the new one. lvl1..4
-		// are the global per-operator output levels. modAttack/modDecay are the
-		// per-channel sequenced modulator-envelope axes; r1 is op1's per-channel
-		// ratio (default 1.0, now editable). Both appended so the older positional
-		// args keep their indices (order: ... modAttack[19], r1[20]).
-		this.addCommand("trig", "ffffffffffffffffffff", { arg msg;
+		// are the global per-operator output levels. The carrier + modulator
+		// envelopes come from the per-channel sequenced SHAPE indices, resolved in
+		// Burst:fire to attack/decay times + per-segment curves; r1 is op1's
+		// per-channel ratio. modAttack[19], r1[20] and the three curve args[21..23]
+		// are appended so the older positional args keep their indices.
+		this.addCommand("trig", "fffffffffffffffffffffff", { arg msg;
 			var freq = msg[1], amp = msg[2];
 			var algo = msg[3].asInteger.clip(1, 16);
 			var r2 = msg[4], r3 = msg[5], r4 = msg[6];
 			var modIndex = msg[7];
-			var attack = msg[8], ampDecay = msg[9], ampCurve = msg[10], modDecay = msg[11];
+			var attack = msg[8], ampDecay = msg[9], ampDecCurve = msg[10], modDecay = msg[11];
 			var feedback = msg[12], drive = msg[13];
 			var ch = msg[14].asInteger.clip(1, numChannels);
 			var lvl1 = msg[15], lvl2 = msg[16], lvl3 = msg[17], lvl4 = msg[18];
 			var modAttack = msg[19];
 			var r1 = msg[20];
+			var ampAtkCurve = msg[21], modAtkCurve = msg[22], modDecCurve = msg[23];
 			var spec, edges, carriers, cgain, weights, pmIndex, voice;
 
 			spec = algorithms[algo - 1];
@@ -211,8 +221,11 @@ Engine_Potionshop : CroneEngine {
 				\c4, carriers.includes(4).if(cgain, 0),
 				\lvl1, lvl1, \lvl2, lvl2, \lvl3, lvl3, \lvl4, lvl4,
 				\modIndex, pmIndex, \feedback, feedback,
-				\attack, attack, \ampDecay, ampDecay, \ampCurve, ampCurve,
-				\modAttack, modAttack, \modDecay, modDecay, \drive, drive
+				\attack, attack, \ampDecay, ampDecay,
+				\ampAtkCurve, ampAtkCurve, \ampDecCurve, ampDecCurve,
+				\modAttack, modAttack, \modDecay, modDecay,
+				\modAtkCurve, modAtkCurve, \modDecCurve, modDecCurve,
+				\drive, drive
 			], fmGroup);
 			voices[ch - 1] = voice;
 			// clear the slot when the voice frees itself (perc done or gate release)

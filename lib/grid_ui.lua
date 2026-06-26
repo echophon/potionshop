@@ -23,13 +23,14 @@
 --               (SCALE opens the scale picker; QNT is the per-channel quantize
 --               page. KB page disabled; FM algorithm, env mode and geode are
 --               global params, not grid pages -- the old SND page was reclaimed)
---   row 7     = 0 div/reps · 1 note · 2 level · 3 attack/decay · 4 modatk/moddec
---             · 5 op1 ratio · 6 op2 ratio · 7 op3 ratio · 8 op4 ratio · 9..10 dark
+--   row 7     = 0 div/reps · 1 note · 2 level · 3 SHP (ampShape/modShape)
+--             · 4 op1 ratio · 5 op2 ratio · 6 op3 ratio · 7 op4 ratio · 8..10 dark
 --             · 11 CLR · 12 COPY · 13 PASTE · 14 RANDOMIZE · 15 MUTATE
---             (one page-select button each; div/reps, attack/decay and
---             modatk/moddec are paired pages showing two A-layer lanes. The two
---             envelope pages are the carrier amp env and the modulator/FM-bright
---             env. All four op ratios are sequenced pages (A value | B offset, like
+--             (one page-select button each; div/reps and ampShape/modShape are
+--             paired pages showing two A-layer lanes. The SHP page is the single
+--             envelope page: left lane = carrier amp shape, right lane = modulator/
+--             FM-bright shape, each a 1-based index into the curated shape table.
+--             All four op ratios are sequenced pages (A value | B offset, like
 --             note/level); op levels stay static on the OP page)
 --   CLR clears BOTH layers (A + the B/alt layer where present) of the tapped
 --   channel; COPY/PASTE act on the MAIN (A-layer) sequins only, leaving the B (alt)
@@ -75,14 +76,14 @@ local NUM_CHANNELS = 6
 -- All sequenced params (the row-7 page buttons are a separate, smaller list —
 -- ROW7_PAGES — one per page). All four op FM ratios are sequenced (A value + B index
 -- offset, like note/level); op levels stay static on the OP page.
-local PARAMS = {'div', 'reps', 'note', 'level', 'attack', 'decay', 'modatk', 'moddec',
+local PARAMS = {'div', 'reps', 'note', 'level', 'ampShape', 'modShape',
                 'opRatio1', 'opRatio2', 'opRatio3', 'opRatio4'}
 -- Paired params share one page as two A-layer lanes (left|right) instead of a
 -- param's own A|B layers: div|reps (an additive offset on division/repeats isn't
--- musical), attack|decay (the carrier envelope shape) and modatk|moddec (the
--- modulator/FM-brightness envelope shape). A paired param therefore has no B
--- layer; every other param shows its A layer left, B right.
-local PAIRS = { {'div', 'reps'}, {'attack', 'decay'}, {'modatk', 'moddec'} }
+-- musical) and ampShape|modShape (the carrier vs modulator envelope shape, each a
+-- single index into the shape table). A paired param therefore has no B layer;
+-- every other param shows its A layer left, B right.
+local PAIRS = { {'div', 'reps'}, {'ampShape', 'modShape'} }
 local PAIRED, PAIR_OF = {}, {}
 for _, pr in ipairs(PAIRS) do
   PAIRED[pr[1]] = true; PAIRED[pr[2]] = true
@@ -91,9 +92,9 @@ end
 local function has_b(param) return not PAIRED[param] end
 -- row-7 page-select buttons: ONE per page. A paired page is represented by its
 -- first member (selecting it shows both lanes via row_lanes); singles are
--- themselves. The four op-ratio pages (opRatio1/2/3/4) follow the env pages.
--- Cols 0..#ROW7_PAGES-1 (now 0..8).
-local ROW7_PAGES = {'div', 'note', 'level', 'attack', 'modatk',
+-- themselves. The single SHP page (ampShape|modShape) replaced the two env pages,
+-- so the four op-ratio pages follow it. Cols 0..#ROW7_PAGES-1 (now 0..7).
+local ROW7_PAGES = {'div', 'note', 'level', 'ampShape',
                     'opRatio1', 'opRatio2', 'opRatio3', 'opRatio4'}
 
 -- row 7
@@ -199,9 +200,23 @@ table.sort(RATIO_VALUES)
 local OP_RATIO_OFFSETS = {}
 for i = 0, 31 do OP_RATIO_OFFSETS[i + 1] = i end
 
-local DEFAULT_VALUE   = {div = 8, reps = 3, note = 0, level = 0.5, attack = 0, decay = 16 / 31, modatk = 0, moddec = 8 / 31,
+-- Envelope shape names, mirroring Burst.SHAPES order/count (keep in sync). The
+-- ampShape/modShape sequences and pickers index 1..#SHAPE_NAMES; the actual contour
+-- data (attack/decay muls + per-segment curves) lives only in lib/burst.lua (the SC
+-- engine never sees a shape -- fire() resolves it). The grid needs just count + labels.
+-- ordered by attack length (see Burst.SHAPES): row 1 = instant attack, row 2 = growing.
+local SHAPE_NAMES = {'click', 'snap', 'tap', 'pip', 'pop', 'pluck', 'drum', 'body',
+                     'exp', 'log', 'glass', 'tail', 'bell', 'long', 'hold', 'drone',
+                     'lin', 'soft', 'round', 'fade', 'puff', 'surge', 'swell', 'arc',
+                     'ramp', 'bloom', 'huge', 'pad', 'bow', 'wedge', 'rise', 'revrs'}
+local SHAPE_COUNT = #SHAPE_NAMES
+-- defaults mirror Burst.SHAPE_CARRIER_DEFAULT / SHAPE_MOD_DEFAULT
+local SHAPE_CARRIER_DEFAULT, SHAPE_MOD_DEFAULT = 12, 8
+
+local DEFAULT_VALUE   = {div = 8, reps = 3, note = 0, level = 0.5,
+                         ampShape = SHAPE_CARRIER_DEFAULT, modShape = SHAPE_MOD_DEFAULT,
                          opRatio1 = 1, opRatio2 = 1, opRatio3 = 1, opRatio4 = 1}  -- op ratio default = unison
-local DEFAULT_VALUE_B = {div = 0, reps = 0, note = 0, level = 0, attack = 0, decay = 0, modatk = 0, moddec = 0,
+local DEFAULT_VALUE_B = {div = 0, reps = 0, note = 0, level = 0,
                          opRatio1 = 0, opRatio2 = 0, opRatio3 = 0, opRatio4 = 0}  -- op ratio offset default = 0 (none)
 
 -- 1-based value layouts for the step picker / KB bands. Index 1..32 maps to
@@ -221,10 +236,10 @@ local STEP_PICKER_VALUES = {
   end)(),
   note = range(32, function(i) return i end),
   level = range(32, function(i) return i / 31 end),
-  attack = range(32, function(i) return i / 31 end),
-  decay  = range(32, function(i) return i / 31 end),
-  modatk = range(32, function(i) return i / 31 end),
-  moddec = range(32, function(i) return i / 31 end),
+  -- envelope shapes: a flat 1..#SHAPES index list (the curated shape table); both
+  -- the carrier (ampShape) and modulator (modShape) lanes pick from it.
+  ampShape = range(SHAPE_COUNT, function(i) return i + 1 end),
+  modShape = range(SHAPE_COUNT, function(i) return i + 1 end),
   -- sequenced op1/2/3/4 FM ratios: the A lane snaps to the 32-value grid-picker range
   -- (RATIO_PICKER); the B lane (an index offset) uses OP_RATIO_OFFSETS — see
   -- picker_layout, which is layer-aware for op ratios.
@@ -313,9 +328,10 @@ local function value_brightness(param, value, layer)
   elseif param == 'harm' then
     local norm = (value - 2) / 23.25
     b = clamp(round(4 + norm * 9), 4, VALUE_MAX)
-  elseif param == 'attack' or param == 'decay'
-      or param == 'modatk' or param == 'moddec' then
-    local norm = clamp(value, 0, 1)
+  elseif param == 'ampShape' or param == 'modShape' then
+    -- shape index 1..#SHAPES: brightness ramps with the index so the sequence row
+    -- reads as a contour gradient (low index = dim/short, high = bright).
+    local norm = clamp((value - 1) / math.max(1, SHAPE_COUNT - 1), 0, 1)
     b = clamp(round(2 + norm * 11), 2, VALUE_MAX)
   else
     b = 6
@@ -343,6 +359,7 @@ GridUI.QUANTIZE_VALUES = QUANTIZE_VALUES
 GridUI.PROB_VALUES = PROB_VALUES
 GridUI.ALT_TRIG_MODE_NAMES = ALT_TRIG_MODE_NAMES
 GridUI.RATIO_VALUES = RATIO_VALUES
+GridUI.SHAPE_NAMES = SHAPE_NAMES            -- envelope shape labels (mirror Burst.SHAPES)
 GridUI.RATIO_PICKER = RATIO_PICKER          -- first-32 grid-picker range (op1 + op ratio A)
 GridUI.OP_RATIO_OFFSETS = OP_RATIO_OFFSETS  -- op ratio B index-offset layout (0..31)
 GridUI.picker_layout = picker_layout        -- layer-aware step-picker layout
@@ -898,7 +915,10 @@ function GridUI:render_step_picker(p)
     for x = 0, GRID_W - 1 do
       local v = layout[y * GRID_W + x + 1]
       local b
-      if eq(v, focused) then b = 15
+      -- a layout shorter than the 32-cell grid (e.g. the shape picker = 16 values)
+      -- leaves the trailing cells empty: draw them dark and skip the value logic.
+      if v == nil then b = 0
+      elseif eq(v, focused) then b = 15
       else
         local present = false
         for _, sv in ipairs(vals) do if eq(sv, v) then present = true break end end
@@ -906,7 +926,7 @@ function GridUI:render_step_picker(p)
       end
       self.g:set_led(x, PICKER_ROW0 + y, b)
       -- rests (reps <= 0) pulse to set them apart from the hit-count cells.
-      if p.param == 'reps' and v <= 0 then
+      if p.param == 'reps' and v ~= nil and v <= 0 then
         self.g:set_strobe(x, PICKER_ROW0 + y, 'slow')
       end
     end
@@ -1314,7 +1334,9 @@ function GridUI:_status()
   elseif self.picker and self.picker.kind == 'step' then
     local pp = self.picker.param
     local raw = seqx.values(self:seq_ref(self.picker.ch, pp, self.picker.layer))[self.picker.col + 1]
-    local v = (pp == 'attack' or pp == 'decay' or pp == 'modatk' or pp == 'moddec') and round(raw * 31) or raw
+    -- envelope shapes show their name; everything else its raw value
+    local v = raw
+    if (pp == 'ampShape' or pp == 'modShape') and raw then v = SHAPE_NAMES[raw] or raw end
     s = 'edit ch' .. (self.picker.ch + 1) .. ' step ' .. self.picker.col .. ' ' ..
         pp .. (self.picker.layer == 'B' and 'B' or '') .. '=' .. tostring(v)
   elseif self.picker and self.picker.kind == 'scale' then

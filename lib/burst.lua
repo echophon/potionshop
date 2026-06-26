@@ -3,14 +3,22 @@
 -- ports er301_geode.lua). Scheduling is a 1:1 port of the web app's
 -- runChannel/runBurst coroutines onto norns `clock`: each launched channel runs
 -- a `clock.run` coroutine that pulls the next value from each sequins per burst,
--- waits until the (quantized) target beat via `clock.sleep`, fires, and advances.
+-- waits until the (quantized) target beat, fires, and advances.
 --
 -- Quantization: every event's target beat is snapped FORWARD to that channel's
 -- own quantize grid (`quantize.snap_beat`, channels[ch].quantize from
--- QUANTIZE_VALUES) before sleeping, so each channel locks to its chosen sub-beat
--- grid regardless of its division. (This was a single global grid in the web app;
--- it is now per-channel.) quantize = 0 would disable snapping, but the curated
--- set has no 0 — every channel always snaps.
+-- QUANTIZE_VALUES), so each channel locks to its chosen sub-beat grid regardless
+-- of its division. (This was a single global grid in the web app; it is now
+-- per-channel.) quantize = 0 would disable snapping, but the curated set has no
+-- 0 — every channel always snaps.
+--
+-- The wait itself (`wait_until_beat`) uses `clock.sync` to walk that quantize grid
+-- to the snapped beat, NOT a one-shot `clock.sleep(seconds)`. clock.sync locks each
+-- wakeup to the clock thread's absolute beat grid, so individual hits don't inherit
+-- the scheduler jitter a latency-relative sleep target carries — the difference
+-- becomes audible as the inter-hit slot shrinks at high tempo/density. (The web app
+-- uses a sleep-style waitUntilBeat because the browser's AudioContext has its own
+-- sample-accurate lookahead; norns Lua does not, so clock.sync is the tighter port.)
 --
 -- Cancellation uses a per-channel token (bumped on launch/stop) AND
 -- clock.cancel, mirroring the web's token check so a stale coroutine exits at
@@ -105,6 +113,77 @@ local ALGO_MODULATORS = {
 }
 Burst.ALGO_MODULATORS = ALGO_MODULATORS
 
+-- Envelope SHAPES. Each is a normalized contour scaled at fire time to the channel's
+-- *known* inter-hit slot (gap_sec), so every shape "fits the schedule" automatically.
+-- A single shape index replaces the old attack|decay (and modatk|moddec) pairs: one
+-- value picks the whole contour. Fields:
+--   atkMul/decMul = attack / decay length as a fraction of the inter-hit gap. The
+--                   amp decay is still grid-locked by env_mode (burst/hit) just like
+--                   the old `decay` was; in shape mode it is decMul*gap.
+--   atkCurve/decCurve = SC `Env` curve per segment (0 = linear, negative = fast-start
+--                   exp 'pluck', positive = slow-start 'log'). Independent per segment,
+--                   which the old single Env.perc curve couldn't express.
+-- DEFAULTS: carrier = SHAPE_CARRIER_DEFAULT ('tail', ~the old decay 16/31 contour),
+-- modulator = SHAPE_MOD_DEFAULT ('body', ~the old moddec 8/31). Mirrored by name +
+-- count in lib/grid_ui.lua (GridUI.SHAPE_NAMES) -- keep the two in sync. (The SC
+-- engine never sees a shape: fire() resolves the index to times + curves.)
+--
+-- ORDERED BY ATTACK LENGTH (atkMul ascending) so the picker reads left-to-right /
+-- top-to-bottom as a short -> long attack gradient (and the LED/screen brightness
+-- ramp tracks it). row 1 (1..16) is the INSTANT-attack family (atkMul 0, percussive),
+-- ordered by decay length within it; row 2 (17..32) is the GROWING-attack family
+-- (atkMul 0.05 -> 1.00), swells through ramps. Every entry is a single attack-decay
+-- contour -- deliberately NO ratchets / LFO-style cycling, which would fight the
+-- engine's own rhythm; the variety is in decay length + the per-segment curve family
+-- (exp / linear / log).
+local SHAPES = {
+  -- {atkMul, decMul, atkCurve, decCurve, name}
+  -- row 1: instant attack (atkMul 0), ordered by decay length, curve variety:
+  {0.00, 0.10, -8, -8, 'click'},  -- 1  tiniest transient
+  {0.00, 0.18, -8, -8, 'snap'},   -- 2  very short, steep
+  {0.00, 0.25, -4, -4, 'tap'},    -- 3  short pluck
+  {0.00, 0.30, -2, -2, 'pip'},    -- 4  gentle short
+  {0.00, 0.38, -2, -8, 'pop'},    -- 5  soft-ish in, steep out
+  {0.00, 0.45, -4, -4, 'pluck'},  -- 6
+  {0.00, 0.55, -6, -6, 'drum'},   -- 7  punchy mid
+  {0.00, 0.70, -4, -4, 'body'},   -- 8  (modulator default; ~old moddec 8/31)
+  {0.00, 0.80, -4, -8, 'exp'},    -- 9  steep exponential decay
+  {0.00, 0.85, -4,  4, 'log'},    -- 10 logarithmic decay (slow then fast)
+  {0.00, 1.00, -1,  8, 'glass'},  -- 11 hold then a log (slow-start) drop
+  {0.00, 1.10, -4, -4, 'tail'},   -- 12 (carrier default; ~old decay 16/31)
+  {0.00, 1.40, -2, -6, 'bell'},   -- 13 long bell-like ring
+  {0.00, 1.70, -4, -3, 'long'},   -- 14 nearly fills the slot
+  {0.00, 2.00,  0, -8, 'hold'},   -- 15 flat sustain then a fast drop
+  {0.00, 2.40, -1, -2, 'drone'},  -- 16 very long tail (cut by next hit; clamped 3s)
+  -- row 2: growing attack (atkMul 0.05 -> 1.00), swells through ramps:
+  {0.05, 0.80,  0,  0, 'lin'},    -- 17 linear attack + decay
+  {0.10, 0.55, -2, -2, 'soft'},   -- 18 gentle pluck w/ a touch of attack
+  {0.15, 0.50, -1, -2, 'round'},  -- 19
+  {0.15, 1.60,  0, -2, 'fade'},   -- 20 soft in, long near-linear fade
+  {0.20, 0.45,  2, -3, 'puff'},   -- 21 gentle log blip
+  {0.25, 1.30,  3, -5, 'surge'},  -- 22 log attack + long tail
+  {0.30, 0.55,  4, -4, 'swell'},  -- 23 soft (log) attack
+  {0.35, 0.55,  4,  4, 'arc'},    -- 24 soft symmetric (log in + out)
+  {0.40, 0.30, -4, -4, 'ramp'},   -- 25 exp attack, short
+  {0.45, 0.90,  6, -4, 'bloom'},  -- 26 slow swell + medium tail
+  {0.50, 1.50,  5, -4, 'huge'},   -- 27 big swell pad
+  {0.60, 0.55, -2, -2, 'pad'},    -- 28 slow symmetric
+  {0.70, 0.80,  2, -2, 'bow'},    -- 29 bowed: slow in, medium out
+  {0.85, 0.40, -3, -3, 'wedge'},  -- 30 attack nearly fills the slot
+  {1.00, 0.10,  3, -2, 'rise'},   -- 31 reverse: rises into the next hit
+  {1.00, 0.05,  0, -8, 'revrs'},  -- 32 pure ramp into the next hit, click off
+}
+Burst.SHAPES = SHAPES
+Burst.SHAPE_CARRIER_DEFAULT = 12  -- 'tail'
+Burst.SHAPE_MOD_DEFAULT     = 8   -- 'body'
+
+-- Resolve a 1-based shape index to its contour entry (clamped to the table).
+function Burst.shape(i)
+  i = math.floor((i or 1) + 0.5)
+  if i < 1 then i = 1 elseif i > #SHAPES then i = #SHAPES end
+  return SHAPES[i]
+end
+
 local function round(x) return math.floor(x + 0.5) end
 local function clamp(v, lo, hi) return math.max(lo, math.min(hi, v)) end
 
@@ -180,20 +259,14 @@ local function default_channel()
     -- volume is a fixed constant (no longer randomized/mutated). 16/31 ≈ 0.52 is
     -- the grid-exact form of the old 0.5 neutral, so it stays picker-editable.
     level = seqx.new{16 / 31},
-    -- envelope SHAPE is sequenced as a paired param (like div/reps): `attack`
-    -- (A/left lane) and `decay` (B/right lane), each normalized 0..1 mapped to
-    -- time in fire. attack default = 0 (instant); decay default = medium.
-    attack = seqx.new{0},
-    decay  = seqx.new{16 / 31},
-    -- MODULATOR envelope SHAPE, sequenced as a second paired param (mirrors the
-    -- carrier attack/decay above): modatk (A/left) + moddec (B/right), each
-    -- normalized 0..1 mapped to time in fire. Drives the FM brightness env
-    -- independently of the amp env. modatk default = 0 (instant, matching the old
-    -- fixed 0.001s); moddec default = 8/31 (a short FM body so brightness plucks
-    -- shorter than the note, in the spirit of the retired fmDecay 0.4 macro).
-    modatk = seqx.new{0},
-    moddec = seqx.new{8 / 31},
-    -- div/reps/attack/decay/modatk/moddec have no B layer; note/level keep one.
+    -- envelope SHAPE is sequenced. ampShape (carrier amp env) and modShape
+    -- (modulator/FM-brightness env) are a single PAIR sharing one page (like
+    -- div/reps): each is a 1-based index into Burst.SHAPES, resolved per hit in
+    -- fire() to attack/decay times (scaled to the inter-hit gap) + per-segment
+    -- curves. One index replaces the old attack|decay and modatk|moddec pairs.
+    ampShape = seqx.new{Burst.SHAPE_CARRIER_DEFAULT},
+    modShape = seqx.new{Burst.SHAPE_MOD_DEFAULT},
+    -- div/reps/ampShape/modShape have no B layer; note/level keep one.
     noteB  = seqx.new{0},
     levelB = seqx.new{0},
     -- per-operator FM ratios. ALL four are SEQUENCED (their own grid pages, A value
@@ -244,8 +317,8 @@ function Burst.new()
   self.envMode = 0      -- amp decay timing (0=shape 1=burst 2=hit): engine-wide
   self.geodeMode = 1    -- amp per-hit geode (0=transient 1=sustain 2=cycle): engine-wide, default sustain
   self.modIndex = 2     -- FM modulation index (low default = clean, ~2-op tone; up to 24 = bright)
-  -- (FM body length is no longer a global macro: the per-channel modatk/moddec
-  -- sequences own the modulator envelope; the old self.fmDecay was retired.)
+  -- (FM body length is no longer a global macro: the per-channel modShape sequence
+  -- owns the modulator envelope; the old self.fmDecay was retired.)
   self.ampPunch = 4     -- perc-curve magnitude (-> Env.perc curve = -ampPunch); 0 = linear
   self.fmFeedback = 0   -- SinOscFB feedback (radians): 0 = pure sine modulator
   self.drive = 1        -- tanh soft-clip drive: 1 = clean, higher = saturated
@@ -283,8 +356,7 @@ end
 
 function Burst:reset_channel(ch)
   local c = self.channels[ch]
-  for _, k in ipairs{'div','reps','note','level','attack','decay',
-                     'modatk','moddec',                          -- modulator envelope (paired, A-only)
+  for _, k in ipairs{'div','reps','note','level','ampShape','modShape',  -- envelope shapes (paired, A-only)
                      'opRatio1','opRatio2','opRatio3','opRatio4',  -- sequenced op ratios (A)
                      'noteB','levelB',                            -- note/level keep a B layer
                      'opRatio1B','opRatio2B','opRatio3B','opRatio4B'} do  -- op ratios keep a B layer
@@ -357,9 +429,28 @@ end
 -- note); tempo is preserved — target progresses at the natural rate, the snap
 -- only nudges the firing instant. (Direct port of clock.ts waitUntilBeat.)
 function Burst:wait_until_beat(target, q)
+  -- q <= 0 disables snapping (not reachable from the curated picker, but the math
+  -- honours it): there's no grid to lock to, so fall back to a direct sleep to the
+  -- absolute target.
+  if q <= 0 then
+    local wait_secs = (target - get_beats()) * (60 / get_tempo())
+    if wait_secs > 0 then clock.sleep(wait_secs) end
+    return
+  end
+  -- Grid-locked wait: walk the quantize grid up to the snapped `fire` beat with
+  -- clock.sync, which schedules each wakeup against the clock thread's ABSOLUTE
+  -- beat grid rather than `now + computed_seconds`. A clock.sleep target inherits
+  -- the scheduler/CPU jitter present at the instant it's called (worse as the
+  -- inter-hit slot shrinks at high tempo/density); clock.sync's target is the same
+  -- phase-locked grid point every time, so wakeups don't accumulate that jitter.
+  -- When we're already at/past `fire` (hit density finer than q, so successive
+  -- targets snap to the same point) the loop body never runs and we fire
+  -- immediately — identical catch-up semantics to the old `wait_secs > 0` guard.
   local fire = quantize.snap_beat(target, q)
-  local wait_secs = (fire - get_beats()) * (60 / get_tempo())
-  if wait_secs > 0 then clock.sleep(wait_secs) end
+  local step = 4 / q
+  while get_beats() < fire - 1e-9 do
+    clock.sync(step)
+  end
 end
 
 -- Outer loop: keep firing bursts until cancelled, or until a single-shot burst
@@ -417,10 +508,8 @@ function Burst:run_burst(ch, token, target_in)
     local ratio2 = op_ratio(ratio2A, ratio2B)
     local ratio3 = op_ratio(ratio3A, ratio3B)
     local ratio4 = op_ratio(ratio4A, ratio4B)
-    local attack_n = c.attack()  -- normalized carrier-env shape (paired, A-only)
-    local decay_n = c.decay()
-    local modatk_n = c.modatk()  -- normalized modulator-env shape (paired, A-only)
-    local moddec_n = c.moddec()
+    local amp_shape = c.ampShape()  -- carrier envelope shape index (paired, A-only)
+    local mod_shape = c.modShape()  -- modulator envelope shape index (paired, A-only)
     local freq = scales.degree_to_freq(degreeA + degreeB, self.scale, self.root)
 
     -- REST: reps <= 0 fires nothing but still consumes (1 - reps) div-steps of
@@ -485,7 +574,7 @@ function Burst:run_burst(ch, token, target_in)
         self:emit{ type = 'fire', ch = ch, beat = target,
                    freq = freq, level = level }
       else
-        self:fire(ch, target, freq, level, attack_n, decay_n, modatk_n, moddec_n, div, total, i,
+        self:fire(ch, target, freq, level, amp_shape, mod_shape, div, total, i,
                   ratio1, ratio2, ratio3, ratio4)
       end
       target = target + (4 / div) / c.rate
@@ -498,9 +587,14 @@ function Burst:run_burst(ch, token, target_in)
   return nil
 end
 
-function Burst:fire(ch, beat, freq, level, attack_n, decay_n, modatk_n, moddec_n, div, total, hit_idx,
+function Burst:fire(ch, beat, freq, level, amp_shape, mod_shape, div, total, hit_idx,
                     ratio1, ratio2, ratio3, ratio4)
   local c = self.channels[ch]
+  -- carrier + modulator envelope contours, resolved from their sequenced shape
+  -- indices (drawn per burst in run_burst). Default to the channel defaults when
+  -- called directly (tests / external callers).
+  local amp_sh = Burst.shape(amp_shape or Burst.SHAPE_CARRIER_DEFAULT)
+  local mod_sh = Burst.shape(mod_shape or Burst.SHAPE_MOD_DEFAULT)
   -- all four op ratios are sequenced and passed in (drawn per burst in run_burst).
   -- Default to unison when called directly (tests).
   ratio1 = ratio1 or 1; ratio2 = ratio2 or 1; ratio3 = ratio3 or 1; ratio4 = ratio4 or 1
@@ -510,9 +604,9 @@ function Burst:fire(ch, beat, freq, level, attack_n, decay_n, modatk_n, moddec_n
   freq = freq * (2 ^ c.octave)
   -- geodeMode is engine-wide (VOICE group), 0-based {transient,sustain,cycle};
   -- geode_mod wants 1/2/3, so +1 at the call site. The amp geode is always on (no
-  -- 'off'). decay_n gates the geode's 0.7 build-up clamp (a longer decay overlaps
-  -- more, like the old env).
-  local actual_level = Burst.burst_level_for_hit(level, self.geodeMode + 1, decay_n, hit_idx, total)
+  -- 'off'). The amp shape's decay length (decMul) gates the geode's 0.7 build-up
+  -- clamp (a longer decay overlaps more, like the old env decay_n did).
+  local actual_level = Burst.burst_level_for_hit(level, self.geodeMode + 1, amp_sh[2], hit_idx, total)
 
   -- geo_freq stays at the target pitch (this voice has no pitch envelope).
   local geo_freq = freq
@@ -542,29 +636,36 @@ function Burst:fire(ch, beat, freq, level, attack_n, decay_n, modatk_n, moddec_n
     end
   end
 
-  -- envelope shape from a sequenced attack/decay pair (each normalized 0..1).
-  -- Two independent envelopes share this mapping: the CARRIER amp env (attack_n/
-  -- decay_n) and the MODULATOR brightness env (modatk_n/moddec_n).
-  --   attack -> absolute time 0.001..0.4 s (a^2 curve: low values stay snappy),
-  --             so a slow attack reads the same regardless of tempo (pads etc).
-  --   decay  -> gap-RELATIVE (inter-hit gap / rate), 0.15x..1.85x the gap, so
-  --             dense/fast channels self-shorten and a 6-voice mix stays legible
-  --             (this is the behaviour the old `env` had, widened). burst/hit
-  --             envMode still override the decay timing to lock it to the grid --
-  --             applied to both envelopes so they track the same beat grid.
+  -- envelope contours from the two sequenced SHAPE indices, scaled to this hit's
+  -- inter-hit slot. Two independent envelopes share this mapping: the CARRIER amp
+  -- env (amp_sh) and the MODULATOR brightness env (mod_sh). Each shape is
+  -- {atkMul, decMul, atkCurve, decCurve}:
+  --   attack -> gap-RELATIVE (atkMul * gap), floored at 0.001 s so an 'instant'
+  --             shape stays snappy; a swell/ramp shape fills more of the slot. This
+  --             is the deliberate trade vs the old absolute attack: every shape now
+  --             tracks the schedule (gap shrinks with tempo/density).
+  --   decay  -> gap-RELATIVE (decMul * gap); dense/fast channels self-shorten so a
+  --             6-voice mix stays legible. burst/hit envMode still override the
+  --             decay timing to lock it to the grid -- applied to both envelopes.
   local gap_sec = interval_sec / math.max(0.01, c.rate)
-  local function attack_time(norm) local a = clamp(norm, 0, 1); return 0.001 + a * a * 0.4 end
-  local function decay_time(norm)
+  local function attack_time(mul) return math.max(0.001, gap_sec * mul) end
+  local function decay_time(mul)
     if decay_sec ~= nil then return math.max(0.01, decay_sec) end
-    local d = clamp(norm, 0, 1)
-    return clamp(gap_sec * (0.15 + d * 1.85), 0.02, 3.0)
+    return clamp(gap_sec * mul, 0.02, 3.0)
   end
-  local attack  = attack_time(attack_n)
-  local amp_dec = decay_time(decay_n)
-  -- modulator (FM body) envelope: its own attack + decay, no longer derived from
-  -- the amp decay (the global fmDecay macro was retired in favour of this).
-  local mod_attack = attack_time(modatk_n)
-  local mod_dec    = decay_time(moddec_n)
+  local attack  = attack_time(amp_sh[1])
+  local amp_dec = decay_time(amp_sh[2])
+  local mod_attack = attack_time(mod_sh[1])
+  local mod_dec    = decay_time(mod_sh[2])
+  -- per-segment Env curves. The carrier curves are scaled by the global `ampPunch`
+  -- VOICE macro (ampPunch/4 = 1.0 neutral, so the boot 'tail' shape's -4 stays -4),
+  -- which now reads as a global "flatten <-> exaggerate the contour" control rather
+  -- than a fixed perc curve. The modulator keeps the shape's own curves.
+  local punch = self.ampPunch / 4
+  local amp_atk_curve = amp_sh[3] * punch
+  local amp_dec_curve = amp_sh[4] * punch
+  local mod_atk_curve = mod_sh[3]
+  local mod_dec_curve = mod_sh[4]
 
   -- output routing (lib/outputs.lua): non-audio destinations replace the
   -- internal voice; midi/crow get the same final freq/level/length it would
@@ -572,7 +673,6 @@ function Burst:fire(ch, beat, freq, level, attack_n, decay_n, modatk_n, moddec_n
   -- emits a 'fire' event for the playhead without sounding anything.
   -- global voice timbre macros (lib/params_sync.lua 'VOICE' group).
   local mod_index = self.modIndex
-  local amp_curve = -self.ampPunch
   local feedback  = self.fmFeedback
   local drive     = self.drive
   -- per-channel static operator levels, passed straight to the voice.
@@ -581,14 +681,17 @@ function Burst:fire(ch, beat, freq, level, attack_n, decay_n, modatk_n, moddec_n
   if engine and engine.trig and ((not out) or out:wants_audio(ch)) then
     -- 4-op FM (lib/Engine_Potionshop.sc): the engine-wide algorithm selects the
     -- operator routing; r2/r3/r4 are the per-burst sequenced op2/3/4 ratios; the
-    -- rest are the final hit envelope; ol[1..4] are this channel's static operator
-    -- levels, geode-shaped per hit above. ratio1 (op1's per-burst sequenced
-    -- fundamental) rides as r1 (arg 20, appended) so the older positional args keep
-    -- their indices.
+    -- carrier/modulator envelopes come from the two sequenced SHAPE indices,
+    -- resolved above to times (args 8/9 carrier, 11/19 modulator) + per-segment
+    -- curves (arg 10 amp-decay, 21 amp-attack, 22 mod-attack, 23 mod-decay).
+    -- ol[1..4] are this channel's static operator levels, geode-shaped per hit
+    -- above. ratio1 (op1's per-burst sequenced fundamental) rides as r1 (arg 20).
+    -- New curve args are appended (21..23) so the older positional args keep theirs.
     engine.trig(geo_freq, actual_level, self.algo,
                 ratio2, ratio3, ratio4, mod_index,
-                attack, amp_dec, amp_curve, mod_dec, feedback, drive, ch,
-                ol[1], ol[2], ol[3], ol[4], mod_attack, ratio1)
+                attack, amp_dec, amp_dec_curve, mod_dec, feedback, drive, ch,
+                ol[1], ol[2], ol[3], ol[4], mod_attack, ratio1,
+                amp_atk_curve, mod_atk_curve, mod_dec_curve)
   end
   if out then
     -- external voices can't render FM timbre; hand them the channel's brightness
@@ -619,21 +722,21 @@ function Burst:randomize(ch)
   c.note = seqx.new(fill(len, function() return ri(16) end))
   -- volume (level) is intentionally NOT randomized: it stays the channel's fixed
   -- constant so the mix loudness is stable.
-  -- envelope shape: snappy-biased attack, medium-spread decay (grid-reachable k/31)
-  c.attack = seqx.new(fill(len, function() return ri(8) / 31 end))
-  c.decay  = seqx.new(fill(len, function() return (8 + ri(16)) / 31 end))
-  -- modulator envelope shape, same grid-reachable k/31 spread as the carrier
-  c.modatk = seqx.new(fill(len, function() return ri(8) / 31 end))
-  c.moddec = seqx.new(fill(len, function() return (8 + ri(16)) / 31 end))
-  -- op2/3/4 FM ratios ARE scrambled (timbral variety): each gets a fresh A-layer
-  -- sequence picked from the curated grid-reachable set (the picker can still
-  -- highlight/edit them; the reachability test asserts it). The B (offset) layer is
-  -- left intact, like noteB/levelB. op1 is ALSO sequenced now, but randomize leaves
-  -- it alone (A stays at the 1.0 anchor) so a randomized channel keeps a fundamental
-  -- and stays pitched — op1 would usually be the carrier (mutate likewise).
-  c.opRatio2 = seqx.new(fill(len, function() return pick(RATIO_PICKER) end))
-  c.opRatio3 = seqx.new(fill(len, function() return pick(RATIO_PICKER) end))
-  c.opRatio4 = seqx.new(fill(len, function() return pick(RATIO_PICKER) end))
+  -- envelope shapes: a SINGLE random shape index per envelope (held for the whole
+  -- pattern, not stepped) -- a stable per-channel timbre rather than a morphing one.
+  -- Indices are inherently grid-reachable (1..#SHAPES is exactly the picker).
+  c.ampShape = seqx.new{math.random(1, #SHAPES)}
+  c.modShape = seqx.new{math.random(1, #SHAPES)}
+  -- op2/3/4 FM ratios ARE scrambled (timbral variety): each gets a SINGLE random A
+  -- value from the curated grid-reachable set (held, not stepped — like the shapes
+  -- above; the picker can still highlight/edit it; the reachability test asserts it).
+  -- The B (offset) layer is left intact, like noteB/levelB. op1 is ALSO sequenced
+  -- now, but randomize leaves it alone (A stays at the 1.0 anchor) so a randomized
+  -- channel keeps a fundamental and stays pitched — op1 is usually the carrier
+  -- (mutate likewise).
+  c.opRatio2 = seqx.new{pick(RATIO_PICKER)}
+  c.opRatio3 = seqx.new{pick(RATIO_PICKER)}
+  c.opRatio4 = seqx.new{pick(RATIO_PICKER)}
   -- The engine-wide modes (envMode/geodeMode) and per-op LEVELS are
   -- left untouched: a randomized op1 = 0 would silently kill the channel (op1 is
   -- usually the carrier), so the operator level balance stays a deliberate,
@@ -666,10 +769,10 @@ function Burst:mutate(ch, amount)
   end)
   c.note  = map(c.note,  function(v) return round(v + jitter(amount * 4)) end)
   -- volume (level) left untouched: a constant, never jittered (see randomize).
-  c.attack = map(c.attack, function(v) return clamp(v + jitter(amount * 0.6), 0, 1) end)
-  c.decay  = map(c.decay,  function(v) return clamp(v + jitter(amount * 0.6), 0, 1) end)
-  c.modatk = map(c.modatk, function(v) return clamp(v + jitter(amount * 0.6), 0, 1) end)
-  c.moddec = map(c.moddec, function(v) return clamp(v + jitter(amount * 0.6), 0, 1) end)
+  -- nudge each shape index to a neighbouring shape (stays grid-exact in 1..#SHAPES).
+  local function nudge_shape(v) return clamp(round(v + jitter(amount * 4)), 1, #SHAPES) end
+  c.ampShape = map(c.ampShape, nudge_shape)
+  c.modShape = map(c.modShape, nudge_shape)
   -- nudge each sequenced op ratio A step to a neighbouring picker value (keeps them
   -- grid-exact AND within the first-32 A-picker range; the B offset lane is left
   -- untouched). op2/3/4 are nudged; op1 is left at its anchor (see randomize).

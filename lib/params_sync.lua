@@ -10,8 +10,8 @@
 -- channel ("CHANNEL 1".."CHANNEL 6"). Each group holds the channel scalars
 -- (run, rate, quantize, prob, alt trig, op1/2/3/4 ratio trig, reset, per-op
 -- levels, clear/copy/paste + action triggers) and, per sequence parameter x layer (div/reps/note/level/
--- attack/decay/modatk/moddec/opRatio1/opRatio2/opRatio3/opRatio4 x A/B, where div/reps,
--- attack/decay and modatk/moddec are A-only),
+-- ampShape/modShape/opRatio1/opRatio2/opRatio3/opRatio4 x A/B, where div/reps and
+-- ampShape/modShape are A-only),
 -- a 3-param block:
 --   chN_<p>_<a|b>        text — the whole sequence as a space-separated string
 --   chN_<p>_<a|b>_step   number — cursor into the sequence (1-based)
@@ -23,8 +23,8 @@
 -- per-channel scalars.
 --
 -- String tokens use the display units the grid/screen use: div/note/reps as
--- integers ('rN' for an N-step rest, reps <= 0), level/attack/decay on the 0..31 grid scale
--- (value = n/31). Parsing snaps
+-- integers ('rN' for an N-step rest, reps <= 0), level on the 0..31 grid scale
+-- (value = n/31), ampShape/modShape as shape names (or a bare index). Parsing snaps
 -- every token to the nearest picker value (the same nearest-index rule
 -- screen_ui edits use), so any menu edit stays grid-reachable.
 --
@@ -34,7 +34,7 @@
 -- side effects (on_edit reflection, clipboard) behave identically;
 -- engine/UI -> params only ever happens via SILENT params:set
 -- (third arg true), which never fires actions. Reflection of off-grid engine
--- values (e.g. mutate's attack/decay jitter) snaps for display only — the engine
+-- values (e.g. mutate's shape-index nudge) snaps for display only — the engine
 -- keeps its exact value until the user actually edits that param.
 --
 -- The module is dependency-injected (engine, controller, params table) so the
@@ -44,7 +44,7 @@
 local seqx   = require 'seqx'
 local GridUI = require 'grid_ui'
 
-local SEQ_PARAMS = GridUI.PARAMS  -- div/reps/note/level/attack/decay/modatk/moddec/opRatio1..4
+local SEQ_PARAMS = GridUI.PARAMS  -- div/reps/note/level/ampShape/modShape/opRatio1..4
 local SPV        = GridUI.STEP_PICKER_VALUES
 local OP_OFFSETS = GridUI.OP_RATIO_OFFSETS  -- op-ratio B index-offset layout (0..31)
 local MAX_STEPS  = GridUI.SEQ_LEN  -- 8-step cap, shared with grid/screen
@@ -78,13 +78,19 @@ for nm, pc in pairs({db = 1, eb = 3, gb = 6, ab = 8, bb = 10}) do NAME_TO_PC[nm]
 local function round(x) return math.floor(x + 0.5) end
 local function clamp(v, lo, hi) return math.max(lo, math.min(hi, v)) end
 
--- sequenced params shown/parsed on the 0..31 grid scale (value = n/31): the amp
--- `level`, the carrier `attack`/`decay` axes and the modulator `modatk`/`moddec`
--- envelope axes.
+-- sequenced params shown/parsed on the 0..31 grid scale (value = n/31): just the amp
+-- `level` now (the envelope axes became shape indices — see is_shape).
 local function is_level_like(p)
-  return p == 'level' or p == 'attack' or p == 'decay'
-      or p == 'modatk' or p == 'moddec'
+  return p == 'level'
 end
+
+-- envelope SHAPE params (ampShape/modShape): a 1-based index into the curated shape
+-- table, shown/parsed as a shape NAME (GridUI.SHAPE_NAMES) for readability, falling
+-- back to the bare index. Distinct from the level-like 0..31 axes they replaced.
+local SHAPE_NAMES = GridUI.SHAPE_NAMES
+local SHAPE_INDEX = {}
+for i, nm in ipairs(SHAPE_NAMES) do SHAPE_INDEX[string.lower(nm)] = i end
+local function is_shape(p) return p == 'ampShape' or p == 'modShape' end
 
 local M = {}
 M.__index = M
@@ -108,6 +114,7 @@ end
 -- engine value -> display token (the units the grid/screen show).
 function M.fmt_value(p, v)
   if p == 'reps' and v <= 0 then return 'r' .. (1 - v) end  -- rest: r1..r16 = 1..16 steps
+  if is_shape(p) then return SHAPE_NAMES[round(v)] or tostring(round(v)) end
   if is_level_like(p) then return tostring(round(v * 31)) end
   if p:match('^opRatio') then
     -- curated ratios incl. thirds/eighths (0.125..14): 3 decimals then trim, so
@@ -128,6 +135,14 @@ function M.parse_token(p, layer, tok)
   if p == 'reps' then
     local rn = tok:match('^r(%d+)$')  -- rest token r1..rN -> reps 1-N (0,-1,-2,..)
     if rn then return SPV[p][GridUI.nearest_index(SPV[p], 1 - tonumber(rn))] end
+  end
+  if is_shape(p) then
+    -- accept a shape name (case-insensitive) or a bare index, snapped to 1..#shapes
+    local byname = SHAPE_INDEX[string.lower(tok)]
+    if byname then return byname end
+    local n = tonumber(tok)
+    if n == nil then return nil end
+    return SPV[p][GridUI.nearest_index(SPV[p], round(n))]
   end
   local n = tonumber(tok)
   if n == nil then return nil end
@@ -269,8 +284,9 @@ function M:add_globals()
   -- non-audio output types can't render them; these are the actual values the SC
   -- voice receives at fire time. Percent where the underlying value is fractional.
   local function pct() return function(p) return p:get() .. '%' end end
-  -- (FM decay retired: the modulator-envelope decay is now per-channel sequenced
-  -- via the chN_moddec_a block, not a global macro.)
+  -- (both envelopes are per-channel sequenced via the SHAPE indices chN_ampShape_a /
+  -- chN_modShape_a, not global macros; amp_punch below now scales the carrier
+  -- shape's contour curves rather than setting a fixed perc curve.)
   params:add_group('voice', 'VOICE', 7)
   -- FM algorithm (1..16, 1-based): engine-wide operator routing. Was per-channel
   -- (chN_algorithm + grid ALG page); now a single global timbre macro.
