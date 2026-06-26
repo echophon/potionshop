@@ -109,10 +109,11 @@ for _ = 1, 200 do
     end
   end
   -- carrier (ampShape) and modulator (modShape) envelope shapes are sequenced as
-  -- shape INDICES: every step must be an integer in 1..#Burst.SHAPES (the picker).
+  -- shape INDICES; randomize draws only from the instant-attack family, so every
+  -- step must be an integer in 1..Burst.SHAPE_PERC_COUNT (a subset of the picker).
   for _, seq in ipairs({c.ampShape, c.modShape}) do
     for _, v in ipairs(seqx.values(seq)) do
-      if not (v == math.floor(v) and v >= 1 and v <= #Burst.SHAPES) then ok_ad = false end
+      if not (v == math.floor(v) and v >= 1 and v <= Burst.SHAPE_PERC_COUNT) then ok_ad = false end
     end
   end
   -- volume is a constant: randomize must leave it at the init value, length 1.
@@ -134,7 +135,7 @@ check('reps values all in {1,2,3,4}', ok_reps)
 check('note values 0..15 integer', ok_note)
 check('sequenced op2/3/4 ratio steps land on the curated RATIO_VALUES set', ok_ratio)
 check('randomize keeps op1 ratio at the 1.0 anchor', ok_op1)
-check('carrier+mod shape indices land in 1..#SHAPES', ok_ad)
+check('carrier+mod randomize shapes land in the instant-attack family (1..PERC)', ok_ad)
 check('randomize leaves volume at the fixed init constant', ok_level_const)
 check('lengths: div/reps/note 2..4', ok_len)
 check('shapes + op2/3/4 randomize to a single held step', ok_single)

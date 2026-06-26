@@ -176,6 +176,15 @@ local SHAPES = {
 Burst.SHAPES = SHAPES
 Burst.SHAPE_CARRIER_DEFAULT = 12  -- 'tail'
 Burst.SHAPE_MOD_DEFAULT     = 8   -- 'body'
+-- Count of the leading INSTANT-attack shapes (atkMul 0). Because the table is
+-- attack-ordered they're contiguous at the front (the row-1 / first-16 percussive
+-- family). randomize draws env shapes only from this range, so a scrambled channel
+-- stays punchy rather than getting a slow swell/pad that smears the rhythm.
+local SHAPE_PERC_COUNT = 0
+for _, s in ipairs(SHAPES) do
+  if s[1] == 0 then SHAPE_PERC_COUNT = SHAPE_PERC_COUNT + 1 else break end
+end
+Burst.SHAPE_PERC_COUNT = SHAPE_PERC_COUNT
 
 -- Resolve a 1-based shape index to its contour entry (clamped to the table).
 function Burst.shape(i)
@@ -724,9 +733,11 @@ function Burst:randomize(ch)
   -- constant so the mix loudness is stable.
   -- envelope shapes: a SINGLE random shape index per envelope (held for the whole
   -- pattern, not stepped) -- a stable per-channel timbre rather than a morphing one.
-  -- Indices are inherently grid-reachable (1..#SHAPES is exactly the picker).
-  c.ampShape = seqx.new{math.random(1, #SHAPES)}
-  c.modShape = seqx.new{math.random(1, #SHAPES)}
+  -- Drawn only from the instant-attack family (1..SHAPE_PERC_COUNT) so a randomized
+  -- channel stays punchy; the slow-attack swells/pads stay deliberate, hand-picked
+  -- choices. Indices are inherently grid-reachable (a subset of the picker range).
+  c.ampShape = seqx.new{math.random(1, SHAPE_PERC_COUNT)}
+  c.modShape = seqx.new{math.random(1, SHAPE_PERC_COUNT)}
   -- op2/3/4 FM ratios ARE scrambled (timbral variety): each gets a SINGLE random A
   -- value from the curated grid-reachable set (held, not stepped — like the shapes
   -- above; the picker can still highlight/edit it; the reachability test asserts it).
