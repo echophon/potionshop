@@ -46,6 +46,22 @@ check('root transposes tonic up by semitones',
     require('musicutil').note_num_to_freq(26)))
 check('root defaults to 0 (no transposition)',
   approx(scales.degree_to_freq(0, major, 0), scales.degree_to_freq(0, major)))
+-- JUST INTONATION: the in-between intervals are pure ratios, not 12-TET. The
+-- tonic (degree 0) and octaves stay exact; degrees in between ring as rationals.
+local tonic = scales.degree_to_freq(0, major)
+check('JI table is one octave [1,2)', scales.JI_RATIOS[0] == 1
+  and scales.JI_RATIOS[7] == 3/2 and scales.JI_RATIOS[11] == 15/8)
+check('major 3rd (degree 2) = pure 5/4 above tonic',
+  approx(scales.degree_to_freq(2, major), tonic * 5/4))
+check('perfect 5th (degree 4) = pure 3/2 above tonic',
+  approx(scales.degree_to_freq(4, major), tonic * 3/2))
+check('JI fifth is sharper than the 12-TET fifth',
+  scales.degree_to_freq(4, major) > tonic * 2^(7/12))
+check('chromatic degree 4 = pure major third (5/4)',
+  approx(scales.degree_to_freq(4, scales.by_name.chromatic), tonic * 5/4))
+check('octave of any degree is exact 2:1',
+  approx(scales.degree_to_freq(2 + #major, major),
+         2 * scales.degree_to_freq(2, major)))
 
 -- ---- seqx / sequins ----------------------------------------------------
 local seqx = require 'seqx'

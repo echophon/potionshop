@@ -8,14 +8,47 @@
 --
 -- Frequency is rooted at C1 = MIDI note 24 (32.70 Hz). The web app chose this
 -- sub-bass register so the picker's full degree range stays in usable
--- percussive territory. musicutil.note_num_to_freq(24) == 32.70 Hz exactly,
--- so degree_to_freq matches the browser version to floating-point precision.
+-- percussive territory. musicutil.note_num_to_freq(24) == 32.70 Hz exactly.
+--
+-- TUNING IS JUST INTONATION, not 12-TET. The scale mask still selects pitch
+-- classes from the 12 semitone slots (the grid keyboard is unchanged), but each
+-- pitch class resolves through JI_RATIOS — a curated 5-limit table of real
+-- rational ratios against the tonic — exactly mirroring how the op-ratio
+-- system resolves a coarse index into a real RATIO_VALUES entry (burst.lua).
+-- This makes the played notes ring in pure ratios, phase-coherent with the FM
+-- voice (whose operators are already locked to rational ratios). The web app
+-- (12-TET) is no longer the tuning reference; degree 0 (1/1) and every octave
+-- (2:1) still match it exactly, the in-between intervals are now pure.
 
 local musicutil = require 'musicutil'
 
 local scales = {}
 
 local ROOT_NOTE = 24 -- C1
+
+-- 5-limit just-intonation ratios for the 12 pitch classes against the tonic.
+-- Indexed by semitone-from-root (0..11). The diatonic 5-limit scale extended to
+-- all 12 chromatic steps; the two ambiguous slots use the textbook symmetric
+-- 5-limit choices (tritone 45/32, minor seventh 16/9 — alts noted). Octaves are
+-- handled separately (exact 2:1), so this table only spans one octave [1, 2).
+-- This is the note-lane analogue of Burst.RATIO_VALUES: a discrete grid index
+-- (here the pitch class) -> a real curated ratio. Eastern/maqam scales that were
+-- already semitone APPROXIMATIONS stay approximations, now JI-flavored.
+local JI_RATIOS = {
+  [0]  = 1 / 1,    -- unison
+  [1]  = 16 / 15,  -- just minor second
+  [2]  = 9 / 8,    -- just major second
+  [3]  = 6 / 5,    -- just minor third
+  [4]  = 5 / 4,    -- just major third
+  [5]  = 4 / 3,    -- just perfect fourth
+  [6]  = 45 / 32,  -- just augmented fourth (alt 5-limit tritone: 64/45, or 7/5)
+  [7]  = 3 / 2,    -- just perfect fifth
+  [8]  = 8 / 5,    -- just minor sixth
+  [9]  = 5 / 3,    -- just major sixth
+  [10] = 16 / 9,   -- just minor seventh (alt: 9/5, the greater just m7)
+  [11] = 15 / 8,   -- just major seventh
+}
+scales.JI_RATIOS = JI_RATIOS
 
 -- Find a scale's semitone interval array in musicutil.SCALES by (alt-)name.
 -- Returns a fresh copy, or nil if musicutil doesn't define it.
@@ -88,12 +121,20 @@ function scales.degree_to_semitones(degree, intervals)
   return oct * 12 + intervals[idx]
 end
 
--- Scale degree -> frequency in Hz, via musicutil rooted at C1 transposed by
--- `root` semitones (0..11; 0 = C1, the historical default). Root shifts the
--- whole scale's tonic up by that pitch class within the base octave.
+-- Scale degree -> frequency in Hz, in JUST INTONATION. The mask resolves the
+-- degree to a semitone-from-tonic (octave-aware) exactly as before; we then split
+-- that into a pitch class (0..11) and an octave, multiply the tonic frequency by
+-- the pitch class's JI ratio (JI_RATIOS) and the exact 2^octave. The tonic itself
+-- sits at a 12-TET position (C1 transposed by `root` semitones), so the whole pure
+-- structure simply shifts with the root — every key is identically tuned (no wolf
+-- intervals), at the cost of the classic JI "modulation drift" (a deliberate trade
+-- for a rooted-percussive instrument). Root 0 = C1; degree 0 = the tonic (1/1).
 function scales.degree_to_freq(degree, intervals, root)
-  local note = ROOT_NOTE + (root or 0) + scales.degree_to_semitones(degree, intervals)
-  return musicutil.note_num_to_freq(note)
+  local semis = scales.degree_to_semitones(degree, intervals)
+  local pc  = semis % 12              -- floor-mod -> 0..11, correct for negatives
+  local oct = math.floor(semis / 12)  -- octaves above/below the tonic
+  local tonic = musicutil.note_num_to_freq(ROOT_NOTE + (root or 0))
+  return tonic * JI_RATIOS[pc] * (2 ^ oct)
 end
 
 return scales
