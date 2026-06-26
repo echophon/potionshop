@@ -265,9 +265,11 @@ local function default_channel()
     div   = seqx.new{4, 8},
     reps  = seqx.new{2, 2},
     note  = seqx.new{0},
-    -- volume is a fixed constant (no longer randomized/mutated). 16/31 ≈ 0.52 is
-    -- the grid-exact form of the old 0.5 neutral, so it stays picker-editable.
-    level = seqx.new{16 / 31},
+    -- channel level is a per-channel STATIC scalar (no longer sequenced) edited on
+    -- the MIX page alongside the four op levels — it never varied (randomize/mutate
+    -- left it alone), so it sequenced nothing. 16/31 ≈ 0.52 is the grid-exact form
+    -- of the old 0.5 neutral, kept reachable on the 1/31 MIX picker.
+    level = 16 / 31,
     -- envelope SHAPE is sequenced. ampShape (carrier amp env) and modShape
     -- (modulator/FM-brightness env) are a single PAIR sharing one page (like
     -- div/reps): each is a 1-based index into Burst.SHAPES, resolved per hit in
@@ -275,9 +277,9 @@ local function default_channel()
     -- curves. One index replaces the old attack|decay and modatk|moddec pairs.
     ampShape = seqx.new{Burst.SHAPE_CARRIER_DEFAULT},
     modShape = seqx.new{Burst.SHAPE_MOD_DEFAULT},
-    -- div/reps/ampShape/modShape have no B layer; note/level keep one.
+    -- div/reps/ampShape/modShape have no B layer; only note keeps one now (level
+    -- became a static MIX-page scalar, so its old additive B layer is gone too).
     noteB  = seqx.new{0},
-    levelB = seqx.new{0},
     -- per-operator FM ratios. ALL four are SEQUENCED (their own grid pages, A value
     -- + B index offset, like note/level) so every operator's voicing can morph per
     -- step. op1 is the fundamental — its A defaults to 1.0 (a pitch anchor that
@@ -365,9 +367,9 @@ end
 
 function Burst:reset_channel(ch)
   local c = self.channels[ch]
-  for _, k in ipairs{'div','reps','note','level','ampShape','modShape',  -- envelope shapes (paired, A-only)
+  for _, k in ipairs{'div','reps','note','ampShape','modShape',  -- envelope shapes (paired, A-only)
                      'opRatio1','opRatio2','opRatio3','opRatio4',  -- sequenced op ratios (A)
-                     'noteB','levelB',                            -- note/level keep a B layer
+                     'noteB',                                     -- only note keeps a B layer
                      'opRatio1B','opRatio2B','opRatio3B','opRatio4B'} do  -- op ratios keep a B layer
     c[k]:reset()
   end
@@ -501,7 +503,7 @@ function Burst:run_burst(ch, token, target_in)
     -- B (alt) pitch sequins per hit while the A degree stays held for the burst.
     local degreeA = note_seq()
     local degreeB = note_seqB()
-    local level = c.level() + c.levelB()
+    local level = c.level  -- per-channel static MIX scalar (no longer sequenced)
     -- sequenced op1/2/3/4 FM ratios: A = base ratio (first-32 grid range), B = integer
     -- index offset that walks UP RATIO_VALUES (the only route into the 33..63 extended
     -- range). A is the per-burst value (drawn once, held for every hit, like the note
@@ -741,7 +743,7 @@ function Burst:randomize(ch)
   -- op2/3/4 FM ratios ARE scrambled (timbral variety): each gets a SINGLE random A
   -- value from the curated grid-reachable set (held, not stepped — like the shapes
   -- above; the picker can still highlight/edit it; the reachability test asserts it).
-  -- The B (offset) layer is left intact, like noteB/levelB. op1 is ALSO sequenced
+  -- The B (offset) layer is left intact, like noteB. op1 is ALSO sequenced
   -- now, but randomize leaves it alone (A stays at the 1.0 anchor) so a randomized
   -- channel keeps a fundamental and stays pitched — op1 is usually the carrier
   -- (mutate likewise).

@@ -19,25 +19,25 @@
 --               div/reps the halves are div (left) and reps (right), both A
 --               (div/reps have no B layer). The lane you edit is the half you
 --               press; there is no A/B flip (no double-press). See row_lanes.
---   row 6     = 0..5 launch · 6..10 dark · 11 OP · 12 PERF · 13 PROB · 14 SCALE · 15 QNT
+--   row 6     = 0..5 launch · 6..10 dark · 11 MIX · 12 PERF · 13 PROB · 14 SCALE · 15 QNT
 --               (SCALE opens the scale picker; QNT is the per-channel quantize
 --               page. KB page disabled; FM algorithm, env mode and geode are
 --               global params, not grid pages -- the old SND page was reclaimed)
---   row 7     = 0 div/reps · 1 note · 2 level · 3 SHP (ampShape/modShape)
---             · 4 op1 ratio · 5 op2 ratio · 6 op3 ratio · 7 op4 ratio · 8..10 dark
+--   row 7     = 0 div/reps · 1 note · 2 SHP (ampShape/modShape)
+--             · 3 op1 ratio · 4 op2 ratio · 5 op3 ratio · 6 op4 ratio · 7..10 dark
 --             · 11 CLR · 12 COPY · 13 PASTE · 14 RANDOMIZE · 15 MUTATE
 --             (one page-select button each; div/reps and ampShape/modShape are
 --             paired pages showing two A-layer lanes. The SHP page is the single
 --             envelope page: left lane = carrier amp shape, right lane = modulator/
 --             FM-bright shape, each a 1-based index into the curated shape table.
 --             All four op ratios are sequenced pages (A value | B offset, like
---             note/level); op levels stay static on the OP page)
+--             note); channel level + op levels stay static on the MIX page)
 --   CLR clears BOTH layers (A + the B/alt layer where present) of the tapped
 --   channel; COPY/PASTE act on the MAIN (A-layer) sequins only, leaving the B (alt)
 --   layer intact so it can keep variating the copied sequins.
---   OP:    rows 0-5 = per-op LEVEL (cols 8-11). Tap a cell to open its value picker
---          on rows 6-7. (All four op ratios are sequenced — edited on their row-7
---          pages, not here, so the left side of the OP page is dark.)
+--   MIX:   rows 0-5 = channel LEVEL (col 7) + per-op LEVEL (cols 8-11). Tap a cell
+--          to open its value picker on rows 6-7. (All four op ratios are sequenced —
+--          edited on their row-7 pages, not here, so cols 0-6 of the MIX page are dark.)
 --   PROB:  rows 0-5 = note alt-trig hold/step (cols 0-1)
 --          · op1/2/3/4 ratio-seq trig toggles (cols 3-6, single button each:
 --            off=hold, on=step)
@@ -59,7 +59,7 @@
 --                 to set it. On the channel rows: tap another step to hop the
 --                 picker there, or re-tap the open step to cancel/close.
 --   scalar picker: same rows-6-7 value grid, but writes a per-channel static
---                 scalar (OP-page op ratio / op level) instead of a sequence step.
+--                 scalar (MIX-page channel level / op level) instead of a sequence step.
 --   KB mode: DISABLED — entry (row6 col 11) is commented out, so the mode is
 --            unreachable; its handle_kb_press / render_kb_mode code remains in
 --            place and can be restored by un-commenting the entry points.
@@ -75,8 +75,8 @@ local B_COL0 = 8
 local NUM_CHANNELS = 6
 -- All sequenced params (the row-7 page buttons are a separate, smaller list —
 -- ROW7_PAGES — one per page). All four op FM ratios are sequenced (A value + B index
--- offset, like note/level); op levels stay static on the OP page.
-local PARAMS = {'div', 'reps', 'note', 'level', 'ampShape', 'modShape',
+-- offset, like note); channel level + op levels stay static on the MIX page.
+local PARAMS = {'div', 'reps', 'note', 'ampShape', 'modShape',
                 'opRatio1', 'opRatio2', 'opRatio3', 'opRatio4'}
 -- Paired params share one page as two A-layer lanes (left|right) instead of a
 -- param's own A|B layers: div|reps (an additive offset on division/repeats isn't
@@ -94,7 +94,7 @@ local function has_b(param) return not PAIRED[param] end
 -- first member (selecting it shows both lanes via row_lanes); singles are
 -- themselves. The single SHP page (ampShape|modShape) replaced the two env pages,
 -- so the four op-ratio pages follow it. Cols 0..#ROW7_PAGES-1 (now 0..7).
-local ROW7_PAGES = {'div', 'note', 'level', 'ampShape',
+local ROW7_PAGES = {'div', 'note', 'ampShape',
                     'opRatio1', 'opRatio2', 'opRatio3', 'opRatio4'}
 
 -- row 7
@@ -109,13 +109,15 @@ local MUTATE_BUTTON_COL = 15
 -- place so the mode can be restored by un-commenting. Col 15 (the old SND page) is
 -- likewise dark now that env mode + geode are global VOICE params.
 -- local ROW6_KB_COL = 11
-local ROW6_OP_COL = 11    -- per-channel OP page (took the old ALG slot; per-op ratio + level statics)
+local ROW6_MIX_COL = 11   -- per-channel MIX page (took the old ALG slot; channel level + op level statics)
 local ROW6_PERF_COL = 12
 local ROW6_PROB_COL = 13
 local ROW6_SCALE_COL = 14 -- opens the scale picker (scale preset / degrees / root)
 local ROW6_QNT_COL = 15   -- per-channel QNT page (event snap grid, curated set)
--- OP page channel-row layout: op1..4 LEVEL on cols 8..11. All four op ratios are
--- sequenced (row-7 pages), not here, so the left side of the OP page is dark.
+-- MIX page channel-row layout: channel LEVEL on col 7, op1..4 LEVEL on cols 8..11
+-- (one contiguous strip). All four op ratios are sequenced (row-7 pages), not here,
+-- so cols 0..6 of the MIX page are dark.
+local MIX_LEVEL_COL = 7
 local OP_LEVEL_COL0 = 8
 -- The step picker's 32-value grid renders on the control rows (6-7) while a pick
 -- is in progress, leaving all six channel rows visible so the step being edited
@@ -213,10 +215,10 @@ local SHAPE_COUNT = #SHAPE_NAMES
 -- defaults mirror Burst.SHAPE_CARRIER_DEFAULT / SHAPE_MOD_DEFAULT
 local SHAPE_CARRIER_DEFAULT, SHAPE_MOD_DEFAULT = 12, 8
 
-local DEFAULT_VALUE   = {div = 8, reps = 3, note = 0, level = 0.5,
+local DEFAULT_VALUE   = {div = 8, reps = 3, note = 0,
                          ampShape = SHAPE_CARRIER_DEFAULT, modShape = SHAPE_MOD_DEFAULT,
                          opRatio1 = 1, opRatio2 = 1, opRatio3 = 1, opRatio4 = 1}  -- op ratio default = unison
-local DEFAULT_VALUE_B = {div = 0, reps = 0, note = 0, level = 0,
+local DEFAULT_VALUE_B = {div = 0, reps = 0, note = 0,
                          opRatio1 = 0, opRatio2 = 0, opRatio3 = 0, opRatio4 = 0}  -- op ratio offset default = 0 (none)
 
 -- 1-based value layouts for the step picker / KB bands. Index 1..32 maps to
@@ -235,7 +237,8 @@ local STEP_PICKER_VALUES = {
     return t
   end)(),
   note = range(32, function(i) return i end),
-  level = range(32, function(i) return i / 31 end),
+  -- (channel level is no longer a sequenced param — it's a MIX-page scalar using
+  -- OP_LEVEL_VALUES, the same 0..1 in 1/31 layout the op levels use.)
   -- envelope shapes: a flat 1..#SHAPES index list (the curated shape table); both
   -- the carrier (ampShape) and modulator (modShape) lanes pick from it.
   ampShape = range(SHAPE_COUNT, function(i) return i + 1 end),
@@ -392,7 +395,7 @@ function GridUI.new(engine, grid, opts)
   self.probMode = false
   self.perfMode = false
   self.qntMode = false         -- QNT page: per-channel event snap grid (curated set)
-  self.opMode = false          -- OP page: per-channel per-op ratio + level statics
+  self.mixMode = false          -- MIX page: per-channel channel level + op level statics
   self.actionMode = nil        -- 'randomize'|'mutate'|'clear'|'copy'|'paste'|nil
   self.clipboard = nil         -- {param = {vals...}} snapshot of a channel's A layer
   self.status = ''
@@ -410,7 +413,7 @@ function GridUI.new(engine, grid, opts)
 
   engine:on(function(ev)
     if ev.type == 'fire' then
-      if self.kbMode or self.probMode or self.perfMode or self.qntMode or self.opMode then return end
+      if self.kbMode or self.probMode or self.perfMode or self.qntMode or self.mixMode then return end
       -- the scale picker repurposes the channel rows; a step picker does not
       -- (it lives on rows 6-7), so let its channel-row playheads keep animating
       if self.picker and self.picker.kind == 'scale' then return end
@@ -517,12 +520,16 @@ function GridUI:handle_normal_press(x, y)
       self:render_channel_row(y); self.g:refresh()
       return
     end
-    if self.opMode then
-      -- op1..op4 levels on cols 8..11. All four op ratios are sequenced now (their own
-      -- row-7 pages), so the left side of the OP page is dark.
-      local lvi = x - OP_LEVEL_COL0
-      if lvi >= 0 and lvi <= 3 then          -- op1..op4 level
-        self:open_scalar_picker(y, 'opLevel' .. (lvi + 1), OP_LEVEL_VALUES, 'level')
+    if self.mixMode then
+      -- channel level on col 7, op1..op4 levels on cols 8..11 (one contiguous strip).
+      -- All four op ratios are sequenced now (their own row-7 pages), so cols 0..6 are dark.
+      if x == MIX_LEVEL_COL then                -- channel level
+        self:open_scalar_picker(y, 'level', OP_LEVEL_VALUES, 'level')
+      else
+        local lvi = x - OP_LEVEL_COL0
+        if lvi >= 0 and lvi <= 3 then           -- op1..op4 level
+          self:open_scalar_picker(y, 'opLevel' .. (lvi + 1), OP_LEVEL_VALUES, 'level')
+        end
       end
       return
     end
@@ -698,9 +705,9 @@ function GridUI:open_step_picker(ch, col, param, layer)
   self:render_all()
 end
 
--- OP-page scalar picker: edits a per-channel static field (opRatioN / opLevelN)
+-- MIX-page scalar picker: edits a per-channel static field (level / opLevelN)
 -- by tapping a value on the rows-6-7 grid. `layout` is the value array, `valkind`
--- ('ratio'|'level') is for the status string.
+-- ('level') is for the status string.
 function GridUI:open_scalar_picker(ch, field, layout, valkind)
   self:_focus(ch)
   self.picker = {kind = 'scalar', ch = ch, field = field, layout = layout, valkind = valkind}
@@ -810,7 +817,7 @@ end
 -- clear every row-6 latch mode + action mode (so only one page is ever active).
 function GridUI:_clear_latches()
   self.probMode = false; self.perfMode = false
-  self.qntMode = false; self.opMode = false; self.actionMode = nil
+  self.qntMode = false; self.mixMode = false; self.actionMode = nil
 end
 
 function GridUI:handle_row6(x)
@@ -818,7 +825,7 @@ function GridUI:handle_row6(x)
   -- FM algorithm is a global param, no longer a grid page).
   -- if x == ROW6_KB_COL then self:enter_kb_mode(); return end
   local LATCH = {[ROW6_PERF_COL] = 'perfMode', [ROW6_PROB_COL] = 'probMode',
-                 [ROW6_QNT_COL] = 'qntMode', [ROW6_OP_COL] = 'opMode'}
+                 [ROW6_QNT_COL] = 'qntMode', [ROW6_MIX_COL] = 'mixMode'}
   if LATCH[x] then
     local was = self[LATCH[x]]
     self:_clear_latches()
@@ -975,7 +982,7 @@ function GridUI:render_channel_row(ch)
   if self.probMode then self:render_prob_row(ch); return end
   if self.perfMode then self:render_perf_row(ch); return end
   if self.qntMode then self:render_qnt_row(ch); return end
-  if self.opMode then self:render_op_row(ch); return end
+  if self.mixMode then self:render_mix_row(ch); return end
   local running = self.engine:is_running(ch + 1)
   -- two lanes side by side: left half (cols 0..SEQ_LEN-1) then right half
   -- (cols B_COL0..15). Normally A/B of the selected param; div/reps shows
@@ -1007,19 +1014,21 @@ function GridUI:render_channel_row(ch)
   end
 end
 
--- OP page: per-op level (cols 8..11), each cell's brightness encoding its value;
--- picker opens on tap. All four op ratios are sequenced (their own row-7 pages), so
--- the left side of the OP page stays dark here.
-function GridUI:render_op_row(ch)
+-- MIX page: channel level (col 7) + per-op level (cols 8..11), each cell's
+-- brightness encoding its value; picker opens on tap. All four op ratios are
+-- sequenced (their own row-7 pages), so cols 0..6 stay dark here.
+function GridUI:render_mix_row(ch)
   local c = self:chan(ch)
   for x = 0, GRID_W - 1 do self.g:set_led(x, ch, 0); self.g:set_strobe(x, ch, 'off') end
+  self.g:set_led(MIX_LEVEL_COL, ch, math.max(2, round(2 + (c.level or 0) * 11)))
   for op = 1, 4 do
     local lvl = c['opLevel' .. op] or 1
     self.g:set_led(OP_LEVEL_COL0 + (op - 1), ch, math.max(2, round(2 + lvl * 11)))
   end
   if self.picker and self.picker.kind == 'scalar' and self.picker.ch == ch then
     local f = self.picker.field
-    if f:match('^opLevel') then self.g:set_led(OP_LEVEL_COL0 + (tonumber(f:sub(-1)) - 1), ch, 15) end
+    if f == 'level' then self.g:set_led(MIX_LEVEL_COL, ch, 15)
+    elseif f:match('^opLevel') then self.g:set_led(OP_LEVEL_COL0 + (tonumber(f:sub(-1)) - 1), ch, 15) end
   end
 end
 
@@ -1088,7 +1097,7 @@ function GridUI:render_action_mode()
     self.g:set_strobe(x, 6, (mark_running and self.engine:is_running(x + 1)) and 'slow' or 'off')
   end
   for x = 6, 10 do self.g:set_led(x, 6, 0) end
-  self.g:set_led(ROW6_OP_COL, 6, 8)
+  self.g:set_led(ROW6_MIX_COL, 6, 8)
   self.g:set_led(ROW6_PERF_COL, 6, 8)
   self.g:set_led(ROW6_PROB_COL, 6, 8)
   self.g:set_led(ROW6_SCALE_COL, 6, 8)
@@ -1114,8 +1123,8 @@ function GridUI:render_row6()
   self.g:set_strobe(ROW6_SCALE_COL, 6, scale_open and 'fast' or 'off')
   self.g:set_led(ROW6_QNT_COL, 6, self.qntMode and 15 or 8)
   self.g:set_strobe(ROW6_QNT_COL, 6, self.qntMode and 'fast' or 'off')
-  self.g:set_led(ROW6_OP_COL, 6, self.opMode and 15 or 8)
-  self.g:set_strobe(ROW6_OP_COL, 6, self.opMode and 'fast' or 'off')
+  self.g:set_led(ROW6_MIX_COL, 6, self.mixMode and 15 or 8)
+  self.g:set_strobe(ROW6_MIX_COL, 6, self.mixMode and 'fast' or 'off')
 end
 
 function GridUI:render_row7()
@@ -1301,11 +1310,11 @@ function GridUI:current_page()
   if self.kbMode then return 'KB' end
   if self.picker and self.picker.kind == 'scale' then return 'SCALE' end
   if self.picker and self.picker.kind == 'step' then return 'PICK' end
-  if self.picker and self.picker.kind == 'scalar' then return 'OP' end
+  if self.picker and self.picker.kind == 'scalar' then return 'MIX' end
   if self.perfMode then return 'PERF' end
   if self.probMode then return 'PROB' end
   if self.qntMode then return 'QNT' end
-  if self.opMode then return 'OP' end
+  if self.mixMode then return 'MIX' end
   if self.actionMode then return string.upper(self.actionMode) end
   return 'MAIN'
 end
@@ -1322,15 +1331,15 @@ function GridUI:_status()
     s = 'PROB — 0-1 note trig, 3-6 op trig, 11-14 prob%, 15 hit'
   elseif self.qntMode then
     s = 'QNT — cols0-7 per-channel quantize (1/3..1/32)'
-  elseif self.opMode then
-    s = 'OP — cols8-11 op level (ratios are sequenced)'
+  elseif self.mixMode then
+    s = 'MIX — col7 level, cols8-11 op level (ratios sequenced)'
   elseif self.actionMode then
     s = string.upper(self.actionMode) .. ' — tap a channel'
   elseif self.picker and self.picker.kind == 'scalar' then
-    local op = tonumber(self.picker.field:sub(-1))
-    local kind = self.picker.valkind == 'ratio' and 'ratio' or 'level'
-    s = 'edit ch' .. (self.picker.ch + 1) .. ' op' .. op .. ' ' .. kind ..
-        '=' .. tostring(self:chan(self.picker.ch)[self.picker.field])
+    local f = self.picker.field
+    local lbl = f:match('^opLevel') and ('op' .. f:sub(-1) .. ' level') or 'level'
+    s = 'edit ch' .. (self.picker.ch + 1) .. ' ' .. lbl ..
+        '=' .. tostring(self:chan(self.picker.ch)[f])
   elseif self.picker and self.picker.kind == 'step' then
     local pp = self.picker.param
     local raw = seqx.values(self:seq_ref(self.picker.ch, pp, self.picker.layer))[self.picker.col + 1]

@@ -45,24 +45,24 @@ local GridUI = require 'grid_ui'
 
 local SEQ_LEN = GridUI.SEQ_LEN  -- max steps per sequence (shared cap with the grid)
 -- the full sequenced-param list (shared with the grid/params so it can't drift):
--- div/reps/note/level/ampShape/modShape + the sequenced op1/2/3/4 ratios.
+-- div/reps/note/ampShape/modShape + the sequenced op1/2/3/4 ratios.
 local PARAMS = GridUI.PARAMS
 -- alt (B-layer) page: div/reps and ampShape/modShape have no B layer
 -- (see GridUI.has_b), so it carries only the params that take an additive offset
--- (note, level, opRatio1/2/3/4).
+-- (note, opRatio1/2/3/4 — level became a static MIX-page scalar).
 local B_PARAMS = {}
 for _, p in ipairs(PARAMS) do if GridUI.has_b(p) then B_PARAMS[#B_PARAMS + 1] = p end end
--- Page order mirrors the grid's row-6 button layout (op · perf · prob · scale),
+-- Page order mirrors the grid's row-6 button layout (mix · perf · prob · scale),
 -- after the two sequence pages. K2/K3 walk this list; the grid mode buttons
 -- map onto the same pages (see _sync_page_from_grid).
-local PAGES  = {'main', 'alt', 'perf', 'prob', 'scale', 'op'}
+local PAGES  = {'main', 'alt', 'perf', 'prob', 'scale', 'mix'}
 -- main line 1 = run + all params; alt line 1 = run + the B-capable params.
--- scale = root + 12 chromatic keys = 13 stops. op = 4 op levels = 4 (all four op
--- ratios are sequenced, edited on the main/alt seq pages). prob = prob/mode/note
--- trig + op1..4 ratio-seq trig = 7. PERF carries 4 lines (reset/oct/rate/quantize);
--- the scale page dropped its quantize line (now per-channel) so it's root + 12 keys.
-local LINES_PER_PAGE = {1 + #PARAMS, 1 + #B_PARAMS, 4, 7, 13, 4}
-local PAGE_PERF, PAGE_PROB, PAGE_SCALE, PAGE_OP = 3, 4, 5, 6
+-- scale = root + 12 chromatic keys = 13 stops. mix = channel level + 4 op levels = 5
+-- (all four op ratios are sequenced, edited on the main/alt seq pages). prob =
+-- prob/mode/note trig + op1..4 ratio-seq trig = 7. PERF carries 4 lines (reset/oct/
+-- rate/quantize); the scale page dropped its quantize line so it's root + 12 keys.
+local LINES_PER_PAGE = {1 + #PARAMS, 1 + #B_PARAMS, 4, 7, 13, 5}
+local PAGE_PERF, PAGE_PROB, PAGE_SCALE, PAGE_MIX = 3, 4, 5, 6
 
 local NOTE_NAMES = {'c','c#','d','d#','e','f','f#','g','g#','a','a#','b'}
 
@@ -257,7 +257,7 @@ function Screen:set_page(p)
   c.qntMode   = false
   c.perfMode  = (self.page == PAGE_PERF)
   c.probMode  = (self.page == PAGE_PROB)
-  c.opMode    = (self.page == PAGE_OP)
+  c.mixMode   = (self.page == PAGE_MIX)
   -- the scale page shares the grid's scale picker, so the grid follows the
   -- screen onto it (and the keymask/root/quantize stay one source of truth)
   if self.page == PAGE_SCALE then
@@ -285,7 +285,7 @@ function Screen:_sync_page_from_grid()
     -- grid QNT page has no screen tab of its own; quantize lives on the screen's
     -- PERF page, so follow the grid there.
     or c.qntMode and PAGE_PERF
-    or c.opMode and PAGE_OP
+    or c.mixMode and PAGE_MIX
     or ((c.paramLayer == 'B') and 2 or 1)
 end
 
@@ -333,7 +333,7 @@ function Screen:_edit_value(d)
   elseif self.page == PAGE_PERF then self:_edit_perf(d)
   elseif self.page == PAGE_PROB then self:_edit_prob(d)
   elseif self.page == PAGE_SCALE then self:_edit_scale(d)
-  elseif self.page == PAGE_OP then self:_edit_op(d) end
+  elseif self.page == PAGE_MIX then self:_edit_mix(d) end
   self.ctl:render_all()
 end
 
@@ -416,12 +416,14 @@ local function step_table(cur, tbl, d)
   return tbl[clamp(idx + d, 1, #tbl)]
 end
 
--- OP page cursor: lines 1..4 = op1..op4 level, stepping the 0..1 grid. (All four op
--- ratios are sequenced — edited on the main/alt seq pages, not here.)
-function Screen:_edit_op(d)
+-- MIX page cursor: line 1 = channel level, lines 2..5 = op1..op4 level, each
+-- stepping the 0..1 grid. (All four op ratios are sequenced — edited on the
+-- main/alt seq pages, not here.)
+function Screen:_edit_mix(d)
   local ch = self.sel_ch
   local c = self.engine.channels[ch + 1]
-  local field = 'opLevel' .. self.sel_line[PAGE_OP]  -- line 1->op1 .. 4->op4
+  local line = self.sel_line[PAGE_MIX]
+  local field = (line == 1) and 'level' or ('opLevel' .. (line - 1))  -- line 2->op1 .. 5->op4
   self.ctl:set_scalar(ch, field, step_table(c[field], GridUI.OP_LEVEL_VALUES, d))
 end
 
@@ -604,10 +606,11 @@ function Screen:page_lines()
     return lines
   end
   local lines
-  if self.page == PAGE_OP then
-    -- the four static op levels. All four op ratios are sequenced (shown/edited on
-    -- the main/alt seq pages), so they're absent here.
+  if self.page == PAGE_MIX then
+    -- channel level + the four static op levels. All four op ratios are sequenced
+    -- (shown/edited on the main/alt seq pages), so they're absent here.
     lines = {
+      {'level', string.format('%.2f', c.level)},
       {'op1 l', string.format('%.2f', c.opLevel1)},
       {'op2 l', string.format('%.2f', c.opLevel2)},
       {'op3 l', string.format('%.2f', c.opLevel3)},

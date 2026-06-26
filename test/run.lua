@@ -132,9 +132,8 @@ for _ = 1, 200 do
       if not (v == math.floor(v) and v >= 1 and v <= Burst.SHAPE_PERC_COUNT) then ok_ad = false end
     end
   end
-  -- volume is a constant: randomize must leave it at the init value, length 1.
-  local lv = seqx.values(c.level)
-  if #lv ~= 1 or not approx(lv[1], LEVEL_CONST) then ok_level_const = false end
+  -- channel level is a static scalar: randomize must leave it at the init value.
+  if not approx(c.level, LEVEL_CONST) then ok_level_const = false end
   -- op1 ratio is sequenced but NOT scrambled: randomize keeps its A lane at the 1.0
   -- anchor (a single step), so a randomized channel stays pitched.
   local o1 = seqx.values(c.opRatio1)
@@ -152,17 +151,16 @@ check('note values 0..15 integer', ok_note)
 check('sequenced op2/3/4 ratio steps land on the curated RATIO_VALUES set', ok_ratio)
 check('randomize keeps op1 ratio at the 1.0 anchor', ok_op1)
 check('carrier+mod randomize shapes land in the instant-attack family (1..PERC)', ok_ad)
-check('randomize leaves volume at the fixed init constant', ok_level_const)
+check('randomize leaves channel level at the fixed init constant', ok_level_const)
 check('lengths: div/reps/note 2..4', ok_len)
 check('shapes + op2/3/4 randomize to a single held step', ok_single)
 
--- mutate must also leave volume untouched (a constant), even with a custom level,
--- and keep per-op ratios on the curated set.
+-- mutate must also leave the channel level untouched (a static scalar), even with a
+-- custom value, and keep per-op ratios on the curated set.
 local emut = Burst.new()
-emut.channels[1].level = seqx.new{0.42}
+emut.channels[1].level = 0.42
 for _ = 1, 50 do emut:mutate(1) end
-check('mutate leaves volume unchanged',
-  seqx.len(emut.channels[1].level) == 1 and approx(seqx.values(emut.channels[1].level)[1], 0.42))
+check('mutate leaves channel level unchanged', approx(emut.channels[1].level, 0.42))
 check('mutate keeps sequenced ratio steps on the curated set',
   in_set(seqx.values(emut.channels[1].opRatio2)[1], Burst.RATIO_VALUES)
   and in_set(seqx.values(emut.channels[1].opRatio4)[1], Burst.RATIO_VALUES))
@@ -788,16 +786,16 @@ check('hit-count cells (top row) do not strobe',
   mg.strobes[6 * 16 + 0] == nil and mg.strobes[6 * 16 + 15] == nil)
 ctl:close_picker()
 
--- SHP page on a SINGLE button (col 3): the one envelope page, paired
--- ampShape | modShape lanes (replaced the old carrier attack/decay + modulator
--- modatk/moddec pages). Selecting it lights only that button, not div/reps.
-ctl:press(3, 7)  -- col 3 = SHP page
+-- SHP page on a SINGLE button (col 2, after level moved off to the MIX page): the
+-- one envelope page, paired ampShape | modShape lanes (replaced the old carrier
+-- attack/decay + modulator modatk/moddec pages). Selecting it lights only that button.
+ctl:press(2, 7)  -- col 2 = SHP page
 check('SHP page selected', ctl.selectedParam == 'ampShape')
 check('SHP page shows ampShape | modShape lanes',
   ctl:row_lanes()[1].param == 'ampShape' and ctl:row_lanes()[2].param == 'modShape')
 ctl:render_all()
-check('row7 lights only the SHP button (col3), not div/reps (col0)',
-  mg.leds[7 * 16 + 3] == 15 and mg.leds[7 * 16 + 0] ~= 15)
+check('row7 lights only the SHP button (col2), not div/reps (col0)',
+  mg.leds[7 * 16 + 2] == 15 and mg.leds[7 * 16 + 0] ~= 15)
 ctl:press(8, 0)  -- right half -> modShape A
 check('SHP page right half edits modShape',
   ctl.picker.param == 'modShape' and ctl.picker.layer == 'A')
@@ -806,9 +804,9 @@ check('SHP picker writes a shape index step',
   seqx.values(geng.channels[1].modShape)[1] == GridUI.STEP_PICKER_VALUES.modShape[3])
 ctl:close_picker()
 
--- sequenced op ratio pages (row7 cols 4/5/6/7 = op1/2/3/4; they follow the single
--- SHP page now): an A|B sequence like note/level (left = A value, right = B offset).
-ctl:press(4, 7)  -- col 4 = op1 ratio page
+-- sequenced op ratio pages (row7 cols 3/4/5/6 = op1/2/3/4; they follow the single
+-- SHP page now): an A|B sequence like note (left = A value, right = B offset).
+ctl:press(3, 7)  -- col 3 = op1 ratio page
 check('op1 ratio page selected', ctl.selectedParam == 'opRatio1')
 check('op1 ratio page shows opRatio1 A | B lanes',
   ctl:row_lanes()[1].param == 'opRatio1' and ctl:row_lanes()[1].layer == 'A'
@@ -823,12 +821,12 @@ ctl:press(8, 0)  -- right half step 0 -> opRatio1 B (offset) picker
 check('op1 ratio right half edits the B (offset) layer',
   ctl.picker.param == 'opRatio1' and ctl.picker.layer == 'B')
 ctl:close_picker()
-ctl:press(5, 7)  -- col 5 = op2 ratio page
+ctl:press(4, 7)  -- col 4 = op2 ratio page
 check('op2 ratio page selected', ctl.selectedParam == 'opRatio2')
 check('op2 ratio page shows opRatio2 A | B lanes',
   ctl:row_lanes()[1].param == 'opRatio2' and ctl:row_lanes()[1].layer == 'A'
   and ctl:row_lanes()[2].param == 'opRatio2' and ctl:row_lanes()[2].layer == 'B')
-ctl:press(7, 7)  -- col 7 = op4 ratio page
+ctl:press(6, 7)  -- col 6 = op4 ratio page
 check('op4 ratio page selected', ctl.selectedParam == 'opRatio4')
 -- back to the note page so later tests start from a known selection
 ctl:press(1, 7)
@@ -897,20 +895,25 @@ ctl:press(6, 0)
 ctl:press(13, 6)
 check('PROB mode exited', ctl.probMode == false)
 
--- OP page (row6 col 11): per-op level (cols 8-11). All four op ratios moved to their
--- own sequence pages, so the left side of the OP page (cols 0-7) is inert here.
+-- MIX page (row6 col 11): channel level (col 7) + per-op level (cols 8-11). All four
+-- op ratios moved to their own sequence pages, so cols 0-6 of the MIX page are inert.
 ctl:press(11, 6)
-check('OP mode entered', ctl.opMode == true)
+check('MIX mode entered', ctl.mixMode == true)
 -- col0 (the old op1 ratio slot) is now inert — op ratios are sequenced.
 ctl:press(0, 0)
-check('OP col0 is inert (op1 ratio is sequenced now)', ctl.picker == nil)
+check('MIX col0 is inert (op1 ratio is sequenced now)', ctl.picker == nil)
+ctl:press(7, 0)   -- col7 -> channel level picker
+check('MIX col7 opens the channel level scalar picker',
+  ctl.picker and ctl.picker.field == 'level')
+ctl:press(0, 6)   -- value grid row 6 col 0 -> OP_LEVEL_VALUES[1] = 0
+check('MIX channel level picker sets c.level', approx(geng.channels[1].level, 0))
 ctl:press(8, 0)   -- col8 -> op1 level picker
-check('OP level cell opens a scalar picker',
+check('MIX op level cell opens a scalar picker',
   ctl.picker and ctl.picker.field == 'opLevel1')
 ctl:press(15, 7)  -- value grid row 7 col 15 -> OP_LEVEL_VALUES[32] = 1.0
-check('OP level picker sets opLevel1', approx(geng.channels[1].opLevel1, 1.0))
+check('MIX op level picker sets opLevel1', approx(geng.channels[1].opLevel1, 1.0))
 ctl:press(11, 6)
-check('OP mode exited', ctl.opMode == false)
+check('MIX mode exited', ctl.mixMode == false)
 
 -- env mode + geode are engine-wide VOICE macros now (no grid SND page, col 15 dark)
 check('geodeMode is a global engine field, not per-channel',
@@ -997,19 +1000,24 @@ check('prob page op2 trig line steps to step', seng.channels[1].opRatio2Trig == 
 sui:enc(3, -1)
 check('prob page op2 trig line steps back to hold', seng.channels[1].opRatio2Trig == 0)
 
--- op page: lines 1..4 = op1..op4 level. All four op ratios are sequenced now (edited
--- on the main/alt seq pages), so they're absent here.
+-- mix page: line 1 = channel level, lines 2..5 = op1..op4 level. All four op ratios
+-- are sequenced now (edited on the main/alt seq pages), so they're absent here.
 sui:set_page(6)
-sui.sel_line[6] = 1   -- op1 level
+sui.sel_line[6] = 1   -- channel level
+seng.channels[1].level = 1.0
+sui:enc(3, -1)
+check('mix page line 1 steps channel level down the 0..1 grid',
+  in_set(seng.channels[1].level, GridUI.OP_LEVEL_VALUES) and seng.channels[1].level < 1.0)
+sui.sel_line[6] = 2   -- op1 level
 seng.channels[1].opLevel1 = 1.0
 sui:enc(3, -1)
-check('op page level line steps opLevel1 down the 0..1 grid',
+check('mix page line 2 steps opLevel1 down the 0..1 grid',
   in_set(seng.channels[1].opLevel1, GridUI.OP_LEVEL_VALUES) and seng.channels[1].opLevel1 < 1.0)
 
 -- op1/2/3/4 ratios are now sequenced — editable on the main seq page like any lane.
 sui:set_page(1)
 sui.sel_ch = 0
-sui.sel_line[1] = 1 + 8   -- run(1) + params 1..6 + opRatio1(7) + opRatio2(8) = line 9
+sui.sel_line[1] = 1 + 7   -- run(1) + params: div..modShape(1..5) opRatio1(6) opRatio2(7) = line 8
 sui:enc(2, 0)             -- sync grid selected param to the focused line
 check('main page line reaches the sequenced opRatio2 lane', sui:main_param() == 'opRatio2')
 seng.channels[1].opRatio2 = seqx.new{1}
@@ -1084,10 +1092,10 @@ check('channel column draws note letter after fire', letter_drawn)
 
 -- grid mode buttons drive the screen tab (grid -> screen sync)
 sui:set_page(1)
-sctl:press(11, 6)  -- OP on the grid
+sctl:press(11, 6)  -- MIX on the grid
 sui:redraw()
-check('grid OP press switches screen to op page', sui.page == 6)
-sctl:press(11, 6)  -- toggle OP off
+check('grid MIX press switches screen to mix page', sui.page == 6)
+sctl:press(11, 6)  -- toggle MIX off
 sctl:press(13, 6)  -- PROB on the grid
 sui:redraw()
 check('grid PROB press switches screen to prob page', sui.page == 4)
@@ -1184,11 +1192,11 @@ sui:key(2, 1)
 check('K2 clamps at main (no wrap)', sui.page == 1 and sctl.perfMode == false)
 
 -- alt page: editing the B (offset) layer — only B-capable params appear here
--- (div/reps/harm have no B layer, so they're absent from alt)
+-- (div/reps/shapes have no B layer, so they're absent from alt)
 sui:set_page(2)
 sui.sel_ch = 0
 seng.channels[1].noteB = seqx.new{0}
-sui.sel_line[2] = 2  -- note (B_PARAMS = {note, level, env})
+sui.sel_line[2] = 2  -- note (B_PARAMS = {note, opRatio1..4})
 sui:enc(2, 0)        -- sync the grid's selected param + layer
 sui.sel_step = 0
 sui:enc(3, 1)
@@ -1268,7 +1276,7 @@ check('text default reflects randomized engine values',
   vals_eq(ParamsSync.from_text('note', 'A', fake:get('ch1_note_a')),
           seqx.values(peng.channels[1].note)))
 check('seeded noteB default round-trips', fake:get('ch1_note_b') == '3')
-check('B-layer zero default shows as 0', fake:get('ch1_level_b') == '0')
+check('B-layer zero default shows as 0', fake:get('ch1_opRatio1_b') == '0')
 
 -- bang idempotence: firing every action re-applies the same engine values
 local before = {}
@@ -1357,10 +1365,12 @@ check('reps rest tokens parse: r1->0, r4->-3',
   seqx.values(peng.channels[1].reps)[2] == 0 and seqx.values(peng.channels[1].reps)[3] == -3)
 check('reps rests format back to rN', fake:get('ch1_reps_a') == '2 r1 r4')
 
--- level/env tokens are 0..31 grid units
-fake:set('ch1_level_a', '31 0')
-check('level grid units parse to i/31', approx(seqx.values(peng.channels[1].level)[1], 1)
-  and approx(seqx.values(peng.channels[1].level)[2], 0))
+-- channel level is a static scalar on the 0..31 grid (no longer a sequenced text param)
+check('no sequenced channel-level text param', fake:lookup_param('ch1_level_a') == nil)
+fake:set('ch1_level', 0)
+check('channel level 0 -> 0.0', approx(peng.channels[1].level, 0))
+fake:set('ch1_level', 31)
+check('channel level 31 -> 1.0', approx(peng.channels[1].level, 1))
 
 -- engine/UI -> params: silent reflection only (zero action fires)
 local f0 = fake.fires
