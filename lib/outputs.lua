@@ -15,9 +15,11 @@
 -- accented level, geode-shaped harmonicity, computed envelope length), so
 -- external voices track the internal voice's dynamics exactly: MIDI velocity
 -- follows the hit level, MIDI note length and the crow envelope follow the FM
--- amp decay. Harmonicity (with its harm-geode envelope baked in) rides out too:
--- MIDI sends it on the modwheel (CC1) per hit, and ER-301 puts it on a second
--- CV port (channel + num_channels, i.e. CV 7..12) as a plain step per hit.
+-- amp decay. The MIDI path also sends two per-operator expression CCs each hit:
+-- op1's FM ratio on the modwheel (CC1) and op2's on the breath controller (CC2),
+-- so a receiving synth tracks the operator voicing. The aggregate brightness proxy
+-- (largest active modulator ratio) is no longer on MIDI; ER-301 still puts it on a
+-- second CV port (channel + num_channels, i.e. CV 7..12) as a plain step per hit.
 --
 -- MIDI *note* output goes to the single device chosen by the OUTPUTS-group
 -- `midi_device` param (a name dropdown over midi.vports). MIDI *clock* out (24
@@ -82,8 +84,10 @@ function M.harm_norm(harm) return clamp((harm - HARM_MIN) / (HARM_MAX - HARM_MIN
 -- ER-301 modulation CV: brightness over 0..5 V, a plain step per hit.
 function M.harm_to_volts(harm) return M.harm_norm(harm) * 5 end
 
--- MIDI modwheel (CC1): brightness across the full 0..127 range.
-function M.harm_to_cc(harm) return round(M.harm_norm(harm) * 127) end
+-- FM op ratio -> 0..127 CC, normalized over the curated ratio span. Used for the
+-- per-operator modwheel/breath CCs (op1 on CC1, op2 on CC2); the brightness proxy
+-- is a ratio too, so this is the same map it used on the modwheel before.
+function M.ratio_to_cc(ratio) return round(M.harm_norm(ratio) * 127) end
 
 -- ---- construction ---------------------------------------------------------
 
@@ -209,7 +213,8 @@ function M:note(ch, ev)
   if d == MIDI or d == AUDIO_MIDI then
     self:midi_bend(ch, M.bend_value(note, self.bend_range))  -- JI/geode detune
     self:midi_note(ch, round(note), M.velocity(ev.level), ev.dur)
-    self:midi_cc(ch, 1, M.harm_to_cc(harm))  -- modwheel = harmonicity
+    self:midi_cc(ch, 1, M.ratio_to_cc(ev.op1 or 1))  -- modwheel = op1 FM ratio
+    self:midi_cc(ch, 2, M.ratio_to_cc(ev.op2 or 1))  -- breath   = op2 FM ratio
   elseif d == CROW12 then
     self:crow_pair(1, 2, volts, ev)
   elseif d == CROW34 then

@@ -729,9 +729,10 @@ function Burst:fire(ch, beat, freq, level, amp_shape, mod_shape, div, total, hit
   end
   if out then
     -- external voices can't render FM timbre; hand them the channel's brightness
-    -- proxy (largest active modulator ratio) so MIDI/crow track its character.
+    -- proxy (largest active modulator ratio, used by the ER-301 brightness CV) plus
+    -- the raw op1/op2 ratios, which the MIDI path sends as modwheel/breath CCs.
     out:note(ch, { freq = geo_freq, level = actual_level, harm = bright_ratio,
-                   dur = attack + amp_dec })
+                   op1 = ratio1, op2 = ratio2, dur = attack + amp_dec })
   end
 
   self:emit{ type = 'fire', ch = ch, beat = beat,

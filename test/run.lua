@@ -1594,8 +1594,8 @@ check('velocity floors at 1', Outputs.velocity(0.001) == 1)
 check('velocity caps at 127', Outputs.velocity(1.5) == 127)
 check('harm_to_volts: min ratio = 0V', approx(Outputs.harm_to_volts(0.125), 0))
 check('harm_to_volts: max ratio = 5V', approx(Outputs.harm_to_volts(14), 5))
-check('harm_to_cc: min ratio = 0', Outputs.harm_to_cc(0.125) == 0)
-check('harm_to_cc: max ratio = 127', Outputs.harm_to_cc(14) == 127)
+check('ratio_to_cc: min ratio = 0', Outputs.ratio_to_cc(0.125) == 0)
+check('ratio_to_cc: max ratio = 127', Outputs.ratio_to_cc(14) == 127)
 check('bend_value: in-tune note is centered', Outputs.bend_value(60, 2) == 8192)
 check('bend_value: +0.25 st over ±2 range = +1/8 scale', Outputs.bend_value(60.25, 2) == 8192 + 1024)
 check('bend_value: -0.25 st over ±2 range = -1/8 scale', Outputs.bend_value(59.75, 2) == 8192 - 1024)
@@ -1616,29 +1616,33 @@ check('audio destination sends nothing external', #midi_log == 0 and #crow_log =
 ofake:set('ch1_output', Outputs.DEST.MIDI)
 ofake:set('ch1_midi_chan', 5)
 check('midi destination disables internal audio', outs:wants_audio(1) == false)
-outs:note(1, {freq = 261.6256, level = 0.5, harm = 14, dur = 0.5})
+outs:note(1, {freq = 261.6256, level = 0.5, op1 = 14, op2 = 0.125, dur = 0.5})
 check('midi pitch bend precedes the note, centered for an in-tune note',
   midi_log[1][1] == 'pb' and midi_log[1][2] == 8192 and midi_log[1][3] == 5)
 check('midi note_on: middle C, vel 64, chan 5',
   midi_log[2][1] == 'on' and midi_log[2][2] == 60
   and midi_log[2][3] == 64 and midi_log[2][4] == 5)
-check('midi modwheel (cc1) = harmonicity, per hit, on the channel',
-  #midi_log == 3 and midi_log[3][1] == 'cc' and midi_log[3][2] == 1
+check('midi modwheel (cc1) = op1 ratio, per hit, on the channel',
+  midi_log[3][1] == 'cc' and midi_log[3][2] == 1
   and midi_log[3][3] == 127 and midi_log[3][4] == 5)
+check('midi breath (cc2) = op2 ratio, per hit, on the channel',
+  #midi_log == 4 and midi_log[4][1] == 'cc' and midi_log[4][2] == 2
+  and midi_log[4][3] == 0 and midi_log[4][4] == 5)
 clock._run_until(4)  -- 0.5 s at 120 bpm = 1 beat
 check('midi note_off scheduled after dur',
-  #midi_log == 4 and midi_log[4][1] == 'off' and midi_log[4][2] == 60)
+  #midi_log == 5 and midi_log[5][1] == 'off' and midi_log[5][2] == 60)
 
 -- retrigger same pitch: old note cut first, stale timer's off dropped. Each hit
--- emits its pitch bend + modwheel cc, so the sequence is pb,on,cc / pb,off,on,cc.
+-- emits its pitch bend + two op CCs (cc1=op1, cc2=op2), so the sequence is
+-- pb,on,cc1,cc2 / pb,off,on,cc1,cc2.
 midi_log = {}
 outs:note(1, {freq = 261.6256, level = 0.5, dur = 0.5})
 outs:note(1, {freq = 261.6256, level = 0.9, dur = 0.5})
 check('retrigger cuts the held note first',
-  midi_log[2][1] == 'on' and midi_log[5][1] == 'off' and midi_log[6][1] == 'on')
+  midi_log[2][1] == 'on' and midi_log[6][1] == 'off' and midi_log[7][1] == 'on')
 clock._run_until(8)
-check('exactly one note_off after retrigger settles', #midi_log == 8
-  and midi_log[8][1] == 'off')
+check('exactly one note_off after retrigger settles', #midi_log == 10
+  and midi_log[10][1] == 'off')
 
 -- zero-level hits are silent everywhere (matches the internal voice)
 midi_log = {}
@@ -1698,12 +1702,12 @@ local oeng = Burst.new()
 oeng.outputs = outs
 midi_log = {}
 -- fire(ch, beat, freq, level, ampShape, modShape, div, total, hit_idx)
-oeng:fire(1, 0, 440, 0.5, 4, 3, 4, 1, 0)  -- ch1 is midi: external only (pitch bend + note_on + modwheel cc)
-check('fire on midi channel skips engine.trig', engine.trigs == 0 and #midi_log == 3)
+oeng:fire(1, 0, 440, 0.5, 4, 3, 4, 1, 0)  -- ch1 is midi: external only (pitch bend + note_on + op1/op2 CCs)
+check('fire on midi channel skips engine.trig', engine.trigs == 0 and #midi_log == 4)
 ofake:set('ch1_output', Outputs.DEST.AUDIO_MIDI)
 midi_log = {}
 oeng:fire(1, 0, 440, 0.5, 4, 3, 4, 1, 0)
-check('audio+midi fires both', engine.trigs == 1 and #midi_log == 3)
+check('audio+midi fires both', engine.trigs == 1 and #midi_log == 4)
 oeng:fire(2, 0, 440, 0.5, 4, 3, 4, 1, 0)  -- ch2 is on crow 3+4
 check('fire on crow channel skips engine.trig', engine.trigs == 1)
 engine = nil
