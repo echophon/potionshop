@@ -1556,9 +1556,13 @@ local fake_midi = {
   connect = function(dev)
     return {
       dev = dev,
-      note_on  = function(_, note, vel, ch) midi_log[#midi_log + 1] = {'on', note, vel, ch} end,
-      note_off = function(_, note, vel, ch) midi_log[#midi_log + 1] = {'off', note, vel, ch} end,
-      cc       = function(_, cc, val, ch) midi_log[#midi_log + 1] = {'cc', cc, val, ch} end,
+      note_on   = function(_, note, vel, ch) midi_log[#midi_log + 1] = {'on', note, vel, ch} end,
+      note_off  = function(_, note, vel, ch) midi_log[#midi_log + 1] = {'off', note, vel, ch} end,
+      cc        = function(_, cc, val, ch) midi_log[#midi_log + 1] = {'cc', cc, val, ch} end,
+      pitchbend = function(_, val, ch) midi_log[#midi_log + 1] = {'pb', val, ch} end,
+      start     = function(_) midi_log[#midi_log + 1] = {'start'} end,
+      stop      = function(_) midi_log[#midi_log + 1] = {'stop'} end,
+      clock     = function(_) midi_log[#midi_log + 1] = {'clock'} end,
     }
   end,
 }
@@ -1592,6 +1596,11 @@ check('harm_to_volts: min ratio = 0V', approx(Outputs.harm_to_volts(0.125), 0))
 check('harm_to_volts: max ratio = 5V', approx(Outputs.harm_to_volts(14), 5))
 check('harm_to_cc: min ratio = 0', Outputs.harm_to_cc(0.125) == 0)
 check('harm_to_cc: max ratio = 127', Outputs.harm_to_cc(14) == 127)
+check('bend_value: in-tune note is centered', Outputs.bend_value(60, 2) == 8192)
+check('bend_value: +0.25 st over ±2 range = +1/8 scale', Outputs.bend_value(60.25, 2) == 8192 + 1024)
+check('bend_value: -0.25 st over ±2 range = -1/8 scale', Outputs.bend_value(59.75, 2) == 8192 - 1024)
+check('bend_value: narrower range bends further', Outputs.bend_value(60.25, 1) == 8192 + 2048)
+check('bend_value: clamps to 14-bit ceiling', Outputs.bend_value(60.4, 0.3) == 16383)
 
 clock._reset()
 local ofake = Paramset.new()
@@ -1608,26 +1617,28 @@ ofake:set('ch1_output', Outputs.DEST.MIDI)
 ofake:set('ch1_midi_chan', 5)
 check('midi destination disables internal audio', outs:wants_audio(1) == false)
 outs:note(1, {freq = 261.6256, level = 0.5, harm = 14, dur = 0.5})
+check('midi pitch bend precedes the note, centered for an in-tune note',
+  midi_log[1][1] == 'pb' and midi_log[1][2] == 8192 and midi_log[1][3] == 5)
 check('midi note_on: middle C, vel 64, chan 5',
-  midi_log[1][1] == 'on' and midi_log[1][2] == 60
-  and midi_log[1][3] == 64 and midi_log[1][4] == 5)
+  midi_log[2][1] == 'on' and midi_log[2][2] == 60
+  and midi_log[2][3] == 64 and midi_log[2][4] == 5)
 check('midi modwheel (cc1) = harmonicity, per hit, on the channel',
-  #midi_log == 2 and midi_log[2][1] == 'cc' and midi_log[2][2] == 1
-  and midi_log[2][3] == 127 and midi_log[2][4] == 5)
+  #midi_log == 3 and midi_log[3][1] == 'cc' and midi_log[3][2] == 1
+  and midi_log[3][3] == 127 and midi_log[3][4] == 5)
 clock._run_until(4)  -- 0.5 s at 120 bpm = 1 beat
 check('midi note_off scheduled after dur',
-  #midi_log == 3 and midi_log[3][1] == 'off' and midi_log[3][2] == 60)
+  #midi_log == 4 and midi_log[4][1] == 'off' and midi_log[4][2] == 60)
 
 -- retrigger same pitch: old note cut first, stale timer's off dropped. Each hit
--- also emits its modwheel cc, so the sequence is on,cc / off,on,cc.
+-- emits its pitch bend + modwheel cc, so the sequence is pb,on,cc / pb,off,on,cc.
 midi_log = {}
 outs:note(1, {freq = 261.6256, level = 0.5, dur = 0.5})
 outs:note(1, {freq = 261.6256, level = 0.9, dur = 0.5})
 check('retrigger cuts the held note first',
-  midi_log[1][1] == 'on' and midi_log[3][1] == 'off' and midi_log[4][1] == 'on')
+  midi_log[2][1] == 'on' and midi_log[5][1] == 'off' and midi_log[6][1] == 'on')
 clock._run_until(8)
-check('exactly one note_off after retrigger settles', #midi_log == 6
-  and midi_log[6][1] == 'off')
+check('exactly one note_off after retrigger settles', #midi_log == 8
+  and midi_log[8][1] == 'off')
 
 -- zero-level hits are silent everywhere (matches the internal voice)
 midi_log = {}
@@ -1687,15 +1698,95 @@ local oeng = Burst.new()
 oeng.outputs = outs
 midi_log = {}
 -- fire(ch, beat, freq, level, ampShape, modShape, div, total, hit_idx)
-oeng:fire(1, 0, 440, 0.5, 4, 3, 4, 1, 0)  -- ch1 is midi: external only (note_on + modwheel cc)
-check('fire on midi channel skips engine.trig', engine.trigs == 0 and #midi_log == 2)
+oeng:fire(1, 0, 440, 0.5, 4, 3, 4, 1, 0)  -- ch1 is midi: external only (pitch bend + note_on + modwheel cc)
+check('fire on midi channel skips engine.trig', engine.trigs == 0 and #midi_log == 3)
 ofake:set('ch1_output', Outputs.DEST.AUDIO_MIDI)
 midi_log = {}
 oeng:fire(1, 0, 440, 0.5, 4, 3, 4, 1, 0)
-check('audio+midi fires both', engine.trigs == 1 and #midi_log == 2)
+check('audio+midi fires both', engine.trigs == 1 and #midi_log == 3)
 oeng:fire(2, 0, 440, 0.5, 4, 3, 4, 1, 0)  -- ch2 is on crow 3+4
 check('fire on crow channel skips engine.trig', engine.trigs == 1)
 engine = nil
+
+-- midi clock out: 24 ppqn stream bracketed by Start/Stop, gated by the param.
+-- Start is DEFERRED to the next beat grid (clock_grid), not sent at the call,
+-- so it lands on-grid in phase with the voices + bar-aligned reset Starts.
+local function count_tag(log, tag)
+  local n = 0
+  for _, e in ipairs(log) do if e[1] == tag then n = n + 1 end end
+  return n
+end
+clock._reset()
+midi_log = {}
+outs.clock_co = nil; outs.clock_started = false
+ofake:set('midi_clock_out', 1)   -- off
+outs:clock_start()
+clock._run_until(2)
+check('clock out off: clock_start is a no-op', #midi_log == 0)
+clock._reset()                   -- back to beat 0 so the deferred Start has room
+midi_log = {}
+ofake:set('midi_clock_out', 2)   -- on
+outs:clock_start()
+check('clock start defers Start off the press instant', #midi_log == 0)
+clock._run_until(3)              -- Start on the beat grid, then 24 ppqn (48 pulses / 2 beats)
+check('Start lands on the beat grid then streams 24 ppqn',
+  #midi_log == 49 and midi_log[1][1] == 'start' and midi_log[49][1] == 'clock')
+outs:clock_stop()
+check('clock stop sends MIDI Stop and halts the stream', midi_log[#midi_log][1] == 'stop')
+local n_stopped = #midi_log
+clock._run_until(8)
+check('stopped stream sends nothing further', #midi_log == n_stopped)
+
+-- start then stop INSIDE the pre-Start grid wait must not emit an orphan Stop
+clock._reset()
+midi_log = {}
+outs:clock_start()               -- parks; Start pending at the next beat
+outs:clock_stop()                -- cancel before the grid wait elapses
+check('stop during a deferred start emits no orphan Stop', #midi_log == 0)
+
+-- disabling the param mid-stream halts + emits Stop
+clock._reset()
+midi_log = {}
+outs:clock_start()
+clock._run_until(2)              -- Start has gone out
+ofake:set('midi_clock_out', 1)   -- off mid-stream
+check('disabling clock out mid-stream emits Stop', midi_log[#midi_log][1] == 'stop')
+
+-- set_transport: edge-guarded Start/Stop driven by the engine run-state. A
+-- relaunch (still running) must NOT re-arm Start; only 0<->1 edges send.
+clock._reset()
+ofake:set('midi_clock_out', 2)   -- on
+outs.transport = false; outs.clock_co = nil; outs.clock_started = false
+midi_log = {}
+outs:set_transport(true)         -- first channel: 0 -> 1 (Start deferred)
+outs:set_transport(true)         -- relaunch while running: no edge, no new arm
+clock._run_until(2)
+check('set_transport sends exactly one Start across a relaunch', count_tag(midi_log, 'start') == 1)
+outs:set_transport(false)        -- last channel stops: 1 -> 0
+check('set_transport 1->0 sends Stop', midi_log[#midi_log][1] == 'stop')
+local n_after_stop = #midi_log
+outs:set_transport(false)        -- already stopped: no edge
+check('set_transport redundant stop is silent', #midi_log == n_after_stop)
+
+-- clock_reset: re-send Start to realign downstream gear, only once the stream
+-- has actually started and `midi clock reset` is on (per-bar reset scheduler)
+clock._reset()
+ofake:set('midi_clock_out', 2)   -- on
+ofake:set('midi_clock_reset', 2) -- on
+outs.transport = false; outs.clock_co = nil; outs.clock_started = false
+midi_log = {}
+outs:clock_reset()
+check('clock_reset before the stream starts is silent', #midi_log == 0)
+outs:set_transport(true)         -- arm; Start emitted on the grid
+clock._run_until(2)
+midi_log = {}
+outs:clock_reset()
+check('clock_reset while streaming re-sends Start', #midi_log == 1 and midi_log[1][1] == 'start')
+ofake:set('midi_clock_reset', 1) -- off
+midi_log = {}
+outs:clock_reset()
+check('clock_reset disabled is silent', #midi_log == 0)
+outs:clock_stop()
 
 print('')
 if fail == 0 then print('ALL PASS') else print(fail .. ' FAILURE(S)') os.exit(1) end

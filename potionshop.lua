@@ -122,8 +122,18 @@ function init()
   psync:add_globals()
   outs:add_params()
   psync:add_channels()
+  -- MIDI clock out follows the script's OWN transport (norns is the master with
+  -- its internal clock): the first channel to start sends MIDI Start + begins the
+  -- 24 ppqn stream, the last to stop sends MIDI Stop. Guarded on the 0<->1 running
+  -- transition so a live relaunch never re-sends Start (which would snap external
+  -- sequencers back to bar 1). outs gates the whole thing on `midi clock out`.
   eng:on(function(ev)
     if ev.type == 'stop' then outs:notes_off(ev.ch) end
+    if ev.type == 'launch' or ev.type == 'stop' then
+      local any = false
+      for i = 1, Burst.NUM_CHANNELS do if eng:is_running(i) then any = true; break end end
+      outs:set_transport(any)  -- edge-guarded Start/Stop + 24 ppqn stream
+    end
   end)
 
   psync:attach()
@@ -169,7 +179,10 @@ function init()
           if bars[i] % iv == 0 then eng:bar_reset(i); did = true end
         end
       end
-      if did then controller:refresh() end
+      if did then
+        if outs then outs:clock_reset() end  -- realign downstream gear to the bar
+        controller:refresh()
+      end
     end
   end)
 
@@ -182,7 +195,7 @@ function redraw() if ui_screen then ui_screen:redraw() end end
 
 function cleanup()
   if eng then eng:stop_all() end
-  if outs then outs:all_notes_off() end
+  if outs then outs:clock_stop(); outs:all_notes_off() end
   if engine and engine.panic then engine.panic() end
   if strobe_metro then strobe_metro:stop() end
   if screen_metro then screen_metro:stop() end
