@@ -771,7 +771,8 @@ local geng = Burst.new()
 local mg = mock_grid()
 local ctl = GridUI.new(geng, mg)
 
--- param select (row 7) — both A/B halves are always shown, so a re-press only
+-- param select — pages split across rows: row 6 cols 0..4 = note + op1..4, row 7
+-- cols 0..1 = div/reps + SHP. Both A/B halves are always shown, so a re-press only
 -- keeps the param selected (no double-press A/B flip)
 check('default selected param = note', ctl.selectedParam == 'note')
 ctl:press(0, 7)
@@ -780,7 +781,7 @@ ctl:press(0, 7)
 check('re-press keeps param selected (no layer flip)', ctl.selectedParam == 'div')
 
 -- step picker edits a value
-ctl:press(1, 7)  -- col 1 = note page
+ctl:press(0, 6)  -- row 6 col 0 = note page
 check('selected note again', ctl.selectedParam == 'note')
 ctl:press(0, 0)  -- open picker on channel 0 step 0
 check('step picker opened', ctl.picker ~= nil and ctl.picker.kind == 'step')
@@ -830,7 +831,7 @@ ctl:close_picker()
 
 -- 8-step cap: the add slot stops appearing past SEQ_LEN; commit truncates
 geng.channels[1].note = seqx.new{0, 1, 2, 3, 4, 5, 6, 7}  -- exactly 8 (A half full)
-ctl:press(1, 7)  -- col 1 = note page
+ctl:press(0, 6)  -- row 6 col 0 = note page
 ctl:press(7, 0)  -- step 7 (last A col) exists; opens it
 check('8th A step is editable (full half)', ctl.picker ~= nil and ctl.picker.col == 7)
 ctl:close_picker()
@@ -865,16 +866,16 @@ check('hit-count cells (top row) do not strobe',
   mg.strobes[6 * 16 + 0] == nil and mg.strobes[6 * 16 + 15] == nil)
 ctl:close_picker()
 
--- SHP page on a SINGLE button (col 2, after level moved off to the MIX page): the
--- one envelope page, paired ampShape | modShape lanes (replaced the old carrier
--- attack/decay + modulator modatk/moddec pages). Selecting it lights only that button.
-ctl:press(2, 7)  -- col 2 = SHP page
+-- SHP page on a SINGLE button (row 7 col 1, next to div/reps): the one envelope
+-- page, paired ampShape | modShape lanes (replaced the old carrier attack/decay +
+-- modulator modatk/moddec pages). Selecting it lights only that button.
+ctl:press(1, 7)  -- row 7 col 1 = SHP page
 check('SHP page selected', ctl.selectedParam == 'ampShape')
 check('SHP page shows ampShape | modShape lanes',
   ctl:row_lanes()[1].param == 'ampShape' and ctl:row_lanes()[2].param == 'modShape')
 ctl:render_all()
-check('row7 lights only the SHP button (col2), not div/reps (col0)',
-  mg.leds[7 * 16 + 2] == 15 and mg.leds[7 * 16 + 0] ~= 15)
+check('row7 lights only the SHP button (col1), not div/reps (col0)',
+  mg.leds[7 * 16 + 1] == 15 and mg.leds[7 * 16 + 0] ~= 15)
 ctl:press(8, 0)  -- right half -> modShape A
 check('SHP page right half edits modShape',
   ctl.picker.param == 'modShape' and ctl.picker.layer == 'A')
@@ -883,9 +884,9 @@ check('SHP picker writes a shape index step',
   seqx.values(geng.channels[1].modShape)[1] == GridUI.STEP_PICKER_VALUES.modShape[3])
 ctl:close_picker()
 
--- sequenced op ratio pages (row7 cols 3/4/5/6 = op1/2/3/4; they follow the single
--- SHP page now): an A|B sequence like note (left = A value, right = B offset).
-ctl:press(3, 7)  -- col 3 = op1 ratio page
+-- sequenced op ratio pages (row 6 cols 1/2/3/4 = op1/2/3/4, following the note
+-- page at col 0): an A|B sequence like note (left = A value, right = B offset).
+ctl:press(1, 6)  -- row 6 col 1 = op1 ratio page
 check('op1 ratio page selected', ctl.selectedParam == 'opRatio1')
 check('op1 ratio page shows opRatio1 A | B lanes',
   ctl:row_lanes()[1].param == 'opRatio1' and ctl:row_lanes()[1].layer == 'A'
@@ -900,18 +901,18 @@ ctl:press(8, 0)  -- right half step 0 -> opRatio1 B (offset) picker
 check('op1 ratio right half edits the B (offset) layer',
   ctl.picker.param == 'opRatio1' and ctl.picker.layer == 'B')
 ctl:close_picker()
-ctl:press(4, 7)  -- col 4 = op2 ratio page
+ctl:press(2, 6)  -- row 6 col 2 = op2 ratio page
 check('op2 ratio page selected', ctl.selectedParam == 'opRatio2')
 check('op2 ratio page shows opRatio2 A | B lanes',
   ctl:row_lanes()[1].param == 'opRatio2' and ctl:row_lanes()[1].layer == 'A'
   and ctl:row_lanes()[2].param == 'opRatio2' and ctl:row_lanes()[2].layer == 'B')
-ctl:press(6, 7)  -- col 6 = op4 ratio page
+ctl:press(4, 6)  -- row 6 col 4 = op4 ratio page
 check('op4 ratio page selected', ctl.selectedParam == 'opRatio4')
 
 -- dynamic picker: the op2 A picker filters to the channel's role set for op2, which
 -- flips with the algorithm. Press the SAME value cell under two algos and confirm the
 -- committed ratio comes from the carrier set (algo 8) vs the modulator set (algo 1).
-ctl:press(4, 7)               -- op2 ratio page
+ctl:press(2, 6)               -- op2 ratio page
 geng.channels[1].algo = 8     -- additive -> op2 is a carrier
 ctl:press(0, 0)               -- open op2 A picker on ch1 step 0
 ctl:press(3, 6)               -- value grid row 6 col 3 -> picker index 4
@@ -925,14 +926,34 @@ check('op2 A picker (modulator algo) writes from MODULATOR_RATIOS',
 ctl:close_picker()
 
 -- back to the note page so later tests start from a known selection
-ctl:press(1, 7)
+ctl:press(0, 6)
 check('back to note page', ctl.selectedParam == 'note')
 
--- launch toggle (row 6)
-ctl:press(0, 6)
-check('row6 col0 launches channel 1', geng:is_running(1) == true)
-ctl:press(0, 6)
+-- onboarding: BEFORE the first-ever launch, idle launch buttons 'pulse' (breathing
+-- cue inviting a first press)
+check('fresh controller has not launched', ctl.hasLaunched == false)
+ctl:render_all()
+check('idle launch buttons pulse before first launch', mg.strobes[6 * 16 + 8] == 'pulse')
+
+-- launch toggle: 3x2 block at cols 8..10 (row 6 = ch0,1,2; row 7 = ch3,4,5)
+ctl:press(8, 6)   -- ch0 = col 8, row 6
+check('launch block (col8,row6) launches channel 1', geng:is_running(1) == true)
+check('first launch latches hasLaunched', ctl.hasLaunched == true)
+ctl:press(8, 6)
 check('re-press stops channel 1', geng:is_running(1) == false)
+ctl:press(10, 7)  -- ch5 = col 10, row 7
+check('launch block (col10,row7) launches channel 6', geng:is_running(6) == true)
+ctl:press(10, 7)
+check('re-press stops channel 6', geng:is_running(6) == false)
+
+-- first-run gate: once any channel has ever started, the onboarding pulse is gone;
+-- a running channel is solid full-bright, an idle one a static dim (no strobe)
+geng:launch(1)  -- ch0 = col 8, row 6
+ctl:render_all()
+check('idle launch button no longer pulses after first launch', mg.strobes[6 * 16 + 9] == nil)
+check('idle launch button settles to a static dim', mg.leds[6 * 16 + 9] == 4)
+check('running launch button is solid full-bright', mg.leds[6 * 16 + 8] == 15)
+geng:stop(1)
 
 -- scale picker (row6 QNT col 14)
 ctl:press(14, 6)
@@ -1501,8 +1522,8 @@ check('channel level 31 -> 1.0', approx(peng.channels[1].level, 1))
 
 -- engine/UI -> params: silent reflection only (zero action fires)
 local f0 = fake.fires
-pctl:press(0, 7)  -- col 0 = div/reps page
-pctl:press(1, 7)  -- col 1 = note page
+pctl:press(0, 7)  -- row 7 col 0 = div/reps page
+pctl:press(0, 6)  -- row 6 col 0 = note page
 pctl:press(0, 0)  -- open step picker ch0 col0
 pctl:press(5, 6)  -- pick note value 5 (value grid on rows 6-7)
 check('grid step edit reflects into text param', fake:get('ch1_note_a') == '5 8 5')
@@ -1537,6 +1558,13 @@ check('engine stop reflects run=0 silently', fake:get('ch1_run') == 0)
 -- copy/paste: snapshot ch1's MAIN (A-layer) sequins and paste into ch5
 fake:set('ch1_div_a', '4 8 16')
 fake:set('ch1_note_a', '1 2 3 4')
+-- ...and the per-channel MIX-page static scalars travel with copy/paste too
+peng.channels[1].level = 0.7
+peng.channels[1].opLevel2 = 0.3
+peng.channels[1].modIndex = 9
+peng.channels[1].ampPunch = 7
+peng.channels[1].fmFeedback = 3
+peng.channels[1].algo = 5
 fake:set('ch1_copy', 1)
 fake:set('ch5_paste', 1)
 local cp_ok = true
@@ -1547,6 +1575,12 @@ end
 check('copy+paste duplicates all MAIN sequins across channels', cp_ok)
 check('paste reflected into dest text param',
   vals_eq(ParamsSync.from_text('note', 'A', fake:get('ch5_note_a')), {1, 2, 3, 4}))
+local mix_ok = approx(peng.channels[5].level, 0.7)
+  and approx(peng.channels[5].opLevel2, 0.3)
+  and peng.channels[5].modIndex == 9 and peng.channels[5].ampPunch == 7
+  and peng.channels[5].fmFeedback == 3 and peng.channels[5].algo == 5
+check('copy+paste duplicates MIX-page static scalars across channels', mix_ok)
+check('paste reflected into dest scalar param', fake:get('ch5_algorithm') == 5)
 
 -- clear: resets BOTH layers (A + B where present) to defaults, so the channel is blank
 fake:set('ch6_div_a', '4 8 16')

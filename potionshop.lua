@@ -52,9 +52,10 @@ local function make_grid_wrapper(dev)
   local w = {
     dev = dev,
     buf = {},        -- key (y*16+x, 0-based) -> brightness
-    strobe = {},     -- key -> 'slow' | 'fast'
+    strobe = {},     -- key -> 'slow' | 'fast' | 'pulse'
     slow_on = true,
     fast_on = true,
+    pulse_factor = 1,  -- 0..1 smooth sine, multiplies the 'pulse' base brightness
   }
   function w:set_led(x, y, b) self.buf[y * 16 + x] = b end
   function w:set_strobe(x, y, s)
@@ -67,7 +68,10 @@ local function make_grid_wrapper(dev)
     for k, b in pairs(self.buf) do
       local lvl = b
       local sp = self.strobe[k]
-      if sp then
+      if sp == 'pulse' then
+        -- smooth breathing fade (never fully dark, so the button stays legible)
+        lvl = math.floor(b * self.pulse_factor + 0.5)
+      elseif sp then
         local on = (sp == 'fast') and self.fast_on or self.slow_on
         if not on then lvl = math.floor(b * 0.2) end
       end
@@ -140,12 +144,15 @@ function init()
   params:bang()
   psync:enable_triggers()
 
-  -- strobe blink driver (~15 Hz): slow ≈ 0.6 Hz, fast ≈ 1.4 Hz
+  -- strobe blink driver (~15 Hz): slow ≈ 0.6 Hz, fast ≈ 1.4 Hz. The 'pulse' mode
+  -- (idle launch buttons) rides a smooth ≈0.4 Hz sine between 0.15x and 1.0x of
+  -- its base brightness — a breathing onboarding cue rather than a hard blink.
   strobe_metro = metro.init()
   strobe_metro.time = 1 / 15
   strobe_metro.event = function(c)
     gw.slow_on = (math.floor(c / 8) % 2) == 0
     gw.fast_on = (math.floor(c / 3) % 2) == 0
+    gw.pulse_factor = 0.15 + 0.85 * (0.5 + 0.5 * math.sin(c * 0.168))
     gw:refresh()
     if psync then psync:flush() end  -- coalesced repaint for param-menu edits
   end

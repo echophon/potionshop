@@ -19,19 +19,26 @@
 --               div/reps the halves are div (left) and reps (right), both A
 --               (div/reps have no B layer). The lane you edit is the half you
 --               press; there is no A/B flip (no double-press). See row_lanes.
---   row 6     = 0..5 launch · 6..10 dark · 11 MIX · 12 PERF · 13 PROB · 14 SCALE · 15 QNT
+--   row 6     = 0 note · 1 op1 ratio · 2 op2 ratio · 3 op3 ratio · 4 op4 ratio
+--             · 5..7 dark · 8..10 launch ch0,1,2
+--             · 11 MIX · 12 PERF · 13 PROB · 14 SCALE · 15 QNT
 --               (SCALE opens the scale picker; QNT is the per-channel quantize
 --               page. KB page disabled; FM algorithm, env mode and geode are
 --               global params, not grid pages -- the old SND page was reclaimed)
---   row 7     = 0 div/reps · 1 note · 2 SHP (ampShape/modShape)
---             · 3 op1 ratio · 4 op2 ratio · 5 op3 ratio · 6 op4 ratio · 7..10 dark
---             · 11 CLR · 12 COPY · 13 PASTE · 14 RANDOMIZE · 15 MUTATE
---             (one page-select button each; div/reps and ampShape/modShape are
---             paired pages showing two A-layer lanes. The SHP page is the single
---             envelope page: left lane = carrier amp shape, right lane = modulator/
---             FM-bright shape, each a 1-based index into the curated shape table.
---             All four op ratios are sequenced pages (A value | B offset, like
---             note); channel level + op levels stay static on the MIX page)
+--   row 7     = 0 div/reps · 1 SHP (ampShape/modShape) · 2..7 dark
+--             · 8..10 launch ch3,4,5
+--             · 11 COPY · 12 PASTE · 13 CLR · 14 RANDOMIZE · 15 MUTATE
+--   Page-select buttons (one per sequence page) are split across the two control
+--   rows: row 6 cols 0..4 = note + the four op-ratio pages; row 7 cols 0..1 =
+--   div/reps + the SHP page. div/reps and ampShape/modShape are paired pages
+--   showing two A-layer lanes; the SHP page is the single envelope page (left lane
+--   = carrier amp shape, right lane = modulator/FM-bright shape, each a 1-based
+--   index into the curated shape table). All four op ratios are sequenced pages
+--   (A value | B offset, like note); channel level + op levels stay static on the
+--   MIX page.
+--   Channel launch/stop is a 3x2 block at cols 8..10 (row 6 = ch0,1,2; row 7 =
+--   ch3,4,5). A button toggles its channel's launch/stop; when an action mode
+--   (CLR/COPY/PASTE/RANDOMIZE/MUTATE) is armed it instead targets that channel.
 --   CLR clears BOTH layers (A + the B/alt layer where present) of the tapped
 --   channel; COPY/PASTE act on the MAIN (A-layer) sequins only, leaving the B (alt)
 --   layer intact so it can keep variating the copied sequins.
@@ -93,17 +100,20 @@ for _, pr in ipairs(PAIRS) do
   PAIR_OF[pr[1]] = pr;  PAIR_OF[pr[2]] = pr
 end
 local function has_b(param) return not PAIRED[param] end
--- row-7 page-select buttons: ONE per page. A paired page is represented by its
--- first member (selecting it shows both lanes via row_lanes); singles are
--- themselves. The single SHP page (ampShape|modShape) replaced the two env pages,
--- so the four op-ratio pages follow it. Cols 0..#ROW7_PAGES-1 (now 0..7).
-local ROW7_PAGES = {'div', 'note', 'ampShape',
-                    'opRatio1', 'opRatio2', 'opRatio3', 'opRatio4'}
+-- page-select buttons: ONE per page. A paired page is represented by its first
+-- member (selecting it shows both lanes via row_lanes); singles are themselves.
+-- The pages are split across the two control rows: the note + four op-ratio pages
+-- live on ROW 6 (cols 0..4), and the timing/envelope pages (div/reps + the SHP
+-- ampShape|modShape page) live on ROW 7 (cols 0..1). Each list maps to cols
+-- 0..#list-1 on its row.
+local ROW6_PAGES = {'note', 'opRatio1', 'opRatio2', 'opRatio3', 'opRatio4'}
+local ROW7_PAGES = {'div', 'ampShape'}
 
--- row 7
-local CLR_BUTTON_COL = 11
-local COPY_BUTTON_COL = 12
-local PASTE_BUTTON_COL = 13
+-- row 7 action buttons: COPY | PASTE | CLR | RANDOMIZE | MUTATE (copy/paste sit to
+-- the left, clear immediately right of them).
+local COPY_BUTTON_COL = 11
+local PASTE_BUTTON_COL = 12
+local CLR_BUTTON_COL = 13
 local RANDOMIZE_BUTTON_COL = 14
 local MUTATE_BUTTON_COL = 15
 -- row 6 right side
@@ -117,6 +127,19 @@ local ROW6_PERF_COL = 12
 local ROW6_PROB_COL = 13
 local ROW6_SCALE_COL = 14 -- opens the scale picker (scale preset / degrees / root)
 local ROW6_QNT_COL = 15   -- per-channel QNT page (event snap grid, curated set)
+-- Channel launch/stop (and action-target) buttons: a 3-wide x 2-tall block at
+-- cols 8..10 on rows 6 & 7. Row 6 = channels 0,1,2; row 7 = channels 3,4,5
+-- (ch -> col 8 + ch%3, row 6 + ch//3). Moved here from the old row-6 cols 0..5
+-- strip so the bottom-left stays a clean continuation of the page rows.
+local LAUNCH_COL0 = 8
+local LAUNCH_COLS = 3
+-- (x, y) -> channel 0..5 if it falls in the launch block, else nil.
+local function launch_channel_at(x, y)
+  if (y == 6 or y == 7) and x >= LAUNCH_COL0 and x < LAUNCH_COL0 + LAUNCH_COLS then
+    return (y - 6) * LAUNCH_COLS + (x - LAUNCH_COL0)
+  end
+  return nil
+end
 -- MIX page channel-row layout: channel LEVEL on col 7, op1..4 LEVEL on cols 8..11
 -- (one contiguous strip), then the three per-channel voice scalars — FM mod index
 -- (col 12), amp punch (col 13), FM feedback (col 14). All four op ratios are sequenced
@@ -465,6 +488,10 @@ function GridUI.new(engine, grid, opts)
   self.actionMode = nil        -- 'randomize'|'mutate'|'clear'|'copy'|'paste'|nil
   self.clipboard = nil         -- {param = {vals...}} snapshot of a channel's A layer
   self.status = ''
+  -- onboarding: idle launch buttons breathe until the FIRST channel ever starts,
+  -- then settle to a static dim. Latches true on the first launch (session-scoped;
+  -- resets on script reload, which is a fresh start anyway).
+  self.hasLaunched = false
 
   self.customMask = {}
   for _, v in ipairs(scales.by_name.major) do self.customMask[#self.customMask + 1] = v end
@@ -486,6 +513,7 @@ function GridUI.new(engine, grid, opts)
       self:render_channel_row(ev.ch - 1)
       self.g:refresh()
     elseif ev.type == 'launch' or ev.type == 'stop' then
+      if ev.type == 'launch' then self.hasLaunched = true end  -- onboarding pulse off
       self:render_all()
     end
   end)
@@ -855,8 +883,15 @@ function GridUI:commit_step(ch, param, vals, layer)
 end
 
 -- CLR resets BOTH layers — A and (where present) the B (alt) layer — so a cleared
--- channel is fully blank. COPY/PASTE still act on the MAIN (A-layer) sequins only,
--- leaving the B (alt) layer untouched so it can keep variating the pasted sequins.
+-- channel is fully blank. COPY/PASTE act on the MAIN (A-layer) sequins only,
+-- leaving the B (alt) layer untouched so it can keep variating the pasted sequins,
+-- AND on the per-channel MIX-page static scalars (channel level, op levels, mod
+-- index, amp punch, fm feedback, algorithm) so a copied channel carries its whole
+-- voicing. CLR leaves the scalars alone (they are not in PARAMS).
+local MIX_SCALARS = {
+  'level', 'opLevel1', 'opLevel2', 'opLevel3', 'opLevel4',
+  'modIndex', 'ampPunch', 'fmFeedback', 'algo',
+}
 
 function GridUI:clear_channel(ch)
   for _, param in ipairs(PARAMS) do
@@ -876,6 +911,10 @@ function GridUI:copy_channel(ch)
     for i = 1, #cur do vals[i] = cur[i] end
     buf[param] = vals
   end
+  local scalars = {}
+  local c = self:chan(ch)
+  for _, field in ipairs(MIX_SCALARS) do scalars[field] = c[field] end
+  buf.scalars = scalars
   self.clipboard = buf
 end
 
@@ -889,6 +928,12 @@ function GridUI:paste_channel(ch)
       self:commit_step_raw(ch, param, copy, 'A')
     end
   end
+  local scalars = self.clipboard.scalars
+  if scalars then
+    for _, field in ipairs(MIX_SCALARS) do
+      if scalars[field] ~= nil then self:set_scalar(ch, field, scalars[field]) end
+    end
+  end
   self:render_all()
 end
 
@@ -898,6 +943,37 @@ end
 function GridUI:_clear_latches()
   self.probMode = false; self.perfMode = false
   self.qntMode = false; self.mixMode = false; self.actionMode = nil
+end
+
+-- A channel launch-block press: apply the active action mode to the channel, or
+-- (no action mode) toggle launch/stop. Shared by row 6 & row 7 since the block
+-- straddles both rows.
+function GridUI:handle_channel_button(ch)
+  self:_focus(ch)
+  if self.actionMode == 'randomize' then
+    self.engine:randomize(ch + 1)
+    self.on_edit{ type = 'channel', ch = ch }
+    self:render_all()
+  elseif self.actionMode == 'mutate' then
+    self.engine:mutate(ch + 1)
+    self.on_edit{ type = 'channel', ch = ch }
+    self:render_all()
+  elseif self.actionMode == 'clear' then self:clear_channel(ch)
+  elseif self.actionMode == 'copy' then self:copy_channel(ch); self:render_all()
+  elseif self.actionMode == 'paste' then self:paste_channel(ch)
+  else
+    if self.engine:is_running(ch + 1) then self.engine:stop(ch + 1)
+    else self.engine:launch(ch + 1) end
+  end
+end
+
+-- Select a sequence page (row 6 / row 7 page buttons). A paired page is
+-- represented by its first member; both A/B (or both pair) lanes are always shown
+-- — no A/B flip.
+function GridUI:select_page(page)
+  self.selectedParam = page
+  self.picker = nil
+  self:render_all()
 end
 
 function GridUI:handle_row6(x)
@@ -914,34 +990,17 @@ function GridUI:handle_row6(x)
   end
   if x == ROW6_SCALE_COL then self:open_scale_picker(); return end
 
-  if self.actionMode and x < 6 then
-    self:_focus(x)
-    if self.actionMode == 'randomize' then
-      self.engine:randomize(x + 1)
-      self.on_edit{ type = 'channel', ch = x }
-    elseif self.actionMode == 'mutate' then
-      self.engine:mutate(x + 1)
-      self.on_edit{ type = 'channel', ch = x }
-    elseif self.actionMode == 'clear' then self:clear_channel(x)
-    elseif self.actionMode == 'copy' then self:copy_channel(x)
-    elseif self.actionMode == 'paste' then self:paste_channel(x) end
-    self:render_all(); return
-  end
+  local ch = launch_channel_at(x, 6)
+  if ch then self:handle_channel_button(ch); return end
 
-  if x < 6 then
-    self:_focus(x)
-    if self.engine:is_running(x + 1) then self.engine:stop(x + 1)
-    else self.engine:launch(x + 1) end
-  end
+  if x < #ROW6_PAGES then self:select_page(ROW6_PAGES[x + 1]) end
 end
 
 function GridUI:handle_row7(x)
   if x < #ROW7_PAGES then
-    -- one button per page; a paired page is represented by its first member.
-    -- Both A/B (or both pair) lanes are always shown — no A/B flip.
-    self.selectedParam = ROW7_PAGES[x + 1]
-    self.picker = nil
-    self:render_all()
+    self:select_page(ROW7_PAGES[x + 1])
+  elseif launch_channel_at(x, 7) then
+    self:handle_channel_button(launch_channel_at(x, 7))
   elseif x == CLR_BUTTON_COL then self:_toggle_action('clear')
   elseif x == COPY_BUTTON_COL then self:_toggle_action('copy')
   elseif x == PASTE_BUTTON_COL then self:_toggle_action('paste')
@@ -983,6 +1042,7 @@ function GridUI:render_all()
   end
   self:render_row6()
   self:render_row7()
+  self:render_launch_block()
   self:_status()
   self.g:refresh()
   self.on_redraw()
@@ -1186,54 +1246,73 @@ function GridUI:render_scaled_row(ch, values, cols, cur)
   end
 end
 
-function GridUI:render_action_mode()
-  local mark_running = self.actionMode == 'randomize' or self.actionMode == 'mutate'
-  for x = 0, 5 do
-    self.g:set_led(x, 6, 10)
-    self.g:set_strobe(x, 6, (mark_running and self.engine:is_running(x + 1)) and 'slow' or 'off')
+-- The channel launch/stop block (cols 8..10, rows 6 & 7). Drawn after row 6/7 so
+-- it owns those cells regardless of which row it straddles. In an action mode the
+-- buttons dim to 10 (the channel-target affordance); randomize/mutate also slow-
+-- strobe the running channels so you can see what you're about to scramble.
+-- Outside an action mode a RUNNING channel is solid full-bright; an IDLE channel
+-- is a static dim, except on first run (before any channel has ever started) when
+-- it gently 'pulse'-oscillates (smooth sine fade, driven by the strobe metro) as
+-- an onboarding cue inviting a first press.
+function GridUI:render_launch_block()
+  local action = self.actionMode
+  local mark_running = action == 'randomize' or action == 'mutate'
+  local onboarding = not self.hasLaunched
+  for ch = 0, NUM_CHANNELS - 1 do
+    local x = LAUNCH_COL0 + (ch % LAUNCH_COLS)
+    local y = 6 + math.floor(ch / LAUNCH_COLS)
+    local running = self.engine:is_running(ch + 1)
+    if action then
+      self.g:set_led(x, y, 10)
+      self.g:set_strobe(x, y, (mark_running and running) and 'slow' or 'off')
+    elseif running then
+      self.g:set_led(x, y, 15)
+      self.g:set_strobe(x, y, 'off')
+    elseif onboarding then
+      self.g:set_led(x, y, 8)
+      self.g:set_strobe(x, y, 'pulse')
+    else
+      self.g:set_led(x, y, 4)
+      self.g:set_strobe(x, y, 'off')
+    end
   end
-  for x = 6, 10 do self.g:set_led(x, 6, 0) end
-  self.g:set_led(ROW6_MIX_COL, 6, 8)
-  self.g:set_led(ROW6_PERF_COL, 6, 8)
-  self.g:set_led(ROW6_PROB_COL, 6, 8)
-  self.g:set_led(ROW6_SCALE_COL, 6, 8)
-  self.g:set_led(ROW6_QNT_COL, 6, 8)
+end
+
+-- A page-select button lights when the selected param belongs to its page
+-- (itself, or the same pair via PAIR_OF identity).
+function GridUI:render_page_button(x, y, page)
+  local sel = page == self.selectedParam
+    or (PAIR_OF[page] ~= nil and PAIR_OF[self.selectedParam] == PAIR_OF[page])
+  self.g:set_led(x, y, sel and 15 or 5)
+  self.g:set_strobe(x, y, 'off')
 end
 
 function GridUI:render_row6()
-  if self.actionMode then
-    self:render_action_mode()
-  else
-    for x = 0, 5 do
-      self.g:set_led(x, 6, self.engine:is_running(x + 1) and 15 or 4)
-      self.g:set_strobe(x, 6, 'off')
+  for i, page in ipairs(ROW6_PAGES) do self:render_page_button(i - 1, 6, page) end
+  for x = #ROW6_PAGES, 7 do self.g:set_led(x, 6, 0) end  -- dark gap before the launch block (cols 8..10)
+  -- In an action mode the page/mode buttons dim to a flat 8 (no strobe) so the
+  -- launch block reads as the active target surface.
+  local dim = self.actionMode ~= nil
+  local function mode_led(col, active)
+    if dim then
+      self.g:set_led(col, 6, 8); self.g:set_strobe(col, 6, 'off')
+    else
+      self.g:set_led(col, 6, active and 15 or 8)
+      self.g:set_strobe(col, 6, active and 'fast' or 'off')
     end
-    for x = 6, 10 do self.g:set_led(x, 6, 0) end
   end
-  self.g:set_led(ROW6_PERF_COL, 6, self.perfMode and 15 or 8)
-  self.g:set_strobe(ROW6_PERF_COL, 6, self.perfMode and 'fast' or 'off')
-  self.g:set_led(ROW6_PROB_COL, 6, self.probMode and 15 or 8)
-  self.g:set_strobe(ROW6_PROB_COL, 6, self.probMode and 'fast' or 'off')
-  local scale_open = self.picker and self.picker.kind == 'scale'
-  self.g:set_led(ROW6_SCALE_COL, 6, scale_open and 15 or 8)
-  self.g:set_strobe(ROW6_SCALE_COL, 6, scale_open and 'fast' or 'off')
-  self.g:set_led(ROW6_QNT_COL, 6, self.qntMode and 15 or 8)
-  self.g:set_strobe(ROW6_QNT_COL, 6, self.qntMode and 'fast' or 'off')
-  self.g:set_led(ROW6_MIX_COL, 6, self.mixMode and 15 or 8)
-  self.g:set_strobe(ROW6_MIX_COL, 6, self.mixMode and 'fast' or 'off')
+  mode_led(ROW6_PERF_COL, self.perfMode)
+  mode_led(ROW6_PROB_COL, self.probMode)
+  mode_led(ROW6_SCALE_COL, self.picker and self.picker.kind == 'scale')
+  mode_led(ROW6_QNT_COL, self.qntMode)
+  mode_led(ROW6_MIX_COL, self.mixMode)
 end
 
 function GridUI:render_row7()
-  for x = 0, #ROW7_PAGES - 1 do
-    local bp = ROW7_PAGES[x + 1]
-    -- a page button lights when the selected param belongs to its page (itself,
-    -- or the same pair via PAIR_OF identity).
-    local sel = bp == self.selectedParam
-      or (PAIR_OF[bp] ~= nil and PAIR_OF[self.selectedParam] == PAIR_OF[bp])
-    self.g:set_led(x, 7, sel and 15 or 5)
-    self.g:set_strobe(x, 7, 'off')
-  end
-  for x = #ROW7_PAGES, 10 do self.g:set_led(x, 7, 0) end  -- dark gap before the action buttons
+  for i, page in ipairs(ROW7_PAGES) do self:render_page_button(i - 1, 7, page) end
+  -- dark gap between the page buttons and the launch block (cols 8..10, drawn
+  -- separately by render_launch_block).
+  for x = #ROW7_PAGES, LAUNCH_COL0 - 1 do self.g:set_led(x, 7, 0) end
   local function action_led(col, name)
     self.g:set_led(col, 7, self.actionMode == name and 15 or 4)
     self.g:set_strobe(col, 7, self.actionMode == name and 'fast' or 'off')

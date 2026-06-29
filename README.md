@@ -35,7 +35,7 @@ on initial install, Norns will need to be restarted to load the new engine.
 
 ## start
 
-on initial load, each channel sequence is randomized.  launch one or more channels from row 6 on the lower left corner.
+on initial load, each channel sequence is randomized.  launch one or more channels from the 3x2 launch block at the bottom (cols 8-10 on the two lowest rows: top row = channels 1-3, bottom row = channels 4-6).
 these will likely loop at different intervals creating evolving sequences.  refer to the guide for a step-by-step tutorial on the components of a sequence.
 
 ## the voice
@@ -99,25 +99,30 @@ sequence glow dim.
 
 ### launch
 
-`[x: 0-5, y: 6]`
+`[x: 8-10, y: 6-7]` — a 3×2 block (row 6 = channels 1-3, row 7 = channels 4-6)
 
-toggle each channel running / stopped (bright = running). a channel loops bursts
-until stopped; a channel whose `reps` sequence has a single step is **single-shot**
-(it fires one burst and stops) — give `reps` two or more steps to loop.
+toggle each channel running / stopped (bright = running). on **first run** (until
+any channel has started) the idle buttons gently breathe (a slow pulse) to invite a
+first press; once you've launched anything the breathing settles to a static dim. a
+channel loops bursts until stopped; a channel whose `reps` sequence has a single
+step is **single-shot** (it fires one burst and stops) — give `reps` two or more
+steps to loop.
 
 ### param select
 
-`[x: 0-4, y: 7]`
+choose which param rows 0–5 show/edit — one button per **page**, split across the
+two control rows:
 
-choose which param rows 0–5 show/edit — one button per **page**:
+- row 6 `[x: 0-4, y: 6]`: `0` **note** · `1` **op1 ratio** · `2` **op2 ratio**
+  · `3` **op3 ratio** · `4` **op4 ratio**
+- row 7 `[x: 0-1, y: 7]`: `0` **div / reps** (paired) · `1` **SHP** =
+  ampShape / modShape (paired)
 
-- `0` **div / reps** (paired) · `1` **note** · `2` **level** · `3` **attack / decay**
-  (paired) · `4` **modatk / moddec** (paired)
-
-the three paired pages show two A-layer lanes at once (no B layer). `note` and
-`level` show their A layer (left) and B layer (right) — B is an **additive offset**
-summed onto A each burst (its value set adds a literal `0` = no offset). timbre
-(per-op ratio/level) is **not** sequenced — it lives on the OP page.
+the paired pages show two A-layer lanes at once (no B layer). `note` and the four
+op-ratio pages show their A layer (left) and B layer (right) — for `note` B is an
+**additive offset** summed onto A each burst; for an op ratio B is an **index
+offset** that micro-tunes A through the curated ratio set. channel level + per-op
+levels are **static** scalars on the MIX page, not sequenced.
 
 ### page buttons
 
@@ -133,16 +138,17 @@ summed onto A each burst (its value set adds a literal `0` = no offset). timbre
 
 `[x: 11-15, y: 7]`
 
-armed modes, not instant: press one (it fast-blinks), then tap a channel on row 6
-to apply. press again to disarm.
+armed modes, not instant: press one (it fast-blinks), then tap a channel in the
+launch block (cols 8-10, rows 6-7) to apply. press again to disarm.
 
-- `11` **CLR** — reset the channel's A sequences to defaults
-- `12` **COPY** — snapshot the A layer
-- `13` **PASTE** — write the snapshot in
+- `11` **COPY** — snapshot the A layer + the MIX-page static scalars
+- `12` **PASTE** — write the snapshot in
+- `13` **CLR** — reset the channel's A sequences to defaults
 - `14` **RANDOMIZE** — scramble to fresh, grid-reachable values
 - `15` **MUTATE** — nudge values ±
 
-> CLR / COPY / PASTE act on the **A** layer only, leaving B to keep variating.
+> CLR resets both layers; COPY / PASTE act on the **A** layer (leaving B to keep
+> variating) and carry the channel's MIX-page voicing scalars along.
 
 ### OP page
 
