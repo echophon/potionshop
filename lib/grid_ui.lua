@@ -175,41 +175,67 @@ local PROB_HIT_COL  = 15
 
 local ENV_MODE_NAMES       = {'shape', 'burst', 'hit'}
 local GEODE_MODE_NAMES     = {'transient', 'sustain', 'cycle'}  -- amp geode, always on
--- FM algorithm (1..16): operator routings, labelled by their shape. 1..8 are the
--- canonical Yamaha 4-op DX set; 9..16 are extended routings (see Engine_Potionshop
--- algorithms table — keep ordering in sync). One ALG grid row fits all 16 (cols 0..15).
+-- FM algorithm (1..32): operator routings, labelled by their shape. 1..8 are the
+-- canonical Yamaha 4-op DX set; 9..16 are extended PM routings; 17..32 are AM/ring &
+-- hybrid AM+FM routings (x = ring, ~ = AM shimmer, > = PM — see Engine_Potionshop
+-- algorithms table, keep ordering in sync). The algo scalar picker spans two grid rows.
 local ALGO_NAMES = {'4>3>2>1', '(4,3)>2>1', '4>3>1 2>1', '4>2>1 3>1',
                     '2>1 4>3', '4>1,2,3', '4>3 +1,2', 'additive',
                     '(4,3,2)>1', '3>2>1 +4', '4>2>1 +3', '4>3>2 +1',
-                    '4>3>1 +2', '(4,3)>1 +2', '4>1,2 +3', '4>2 3>1'}
+                    '4>3>1 +2', '(4,3)>1 +2', '4>1,2 +3', '4>2 3>1',
+                    '2x1 +3,4', '2x1 4x3', '4>3x1 +2', '4~1,2,3',
+                    '4x3x2x1', '(4,3)>1 2~1',
+                    '2~1 4~3', '4x1,2,3', '2>1 4~3', '4~3~2~1',
+                    '4>1 3x 2~', '3>2>1 4~1', '(4,3)>2x1', '4x2 3x1',
+                    '4~2 3~1', '4>3 3~2~1'}
 -- alt(B)-layer trigger mode for the note layer (altTrig):
 --   hold = add&hold (B drawn once per burst, summed onto A for every hit)
 --   step = advance the B sequins per hit (arpeggiates the alt layer)
 local ALT_TRIG_MODE_NAMES  = {'hold', 'step'}
--- Curated per-operator FM ratios. Mirrors Burst.RATIO_PICKER / RATIO_FINE /
--- RATIO_VALUES — keep in sync. RATIO_PICKER = the 32 COARSE ratios the grid pickers
--- show (op1 scalar + op2/3/4 A lane, rendered across rows 6-7: cols 0..15 = 1..16,
--- second row = 17..32). RATIO_FINE = finer just-intonation ratios woven between the
--- coarse steps (low/mid range), reachable ONLY through the op-ratio B index offset.
-local RATIO_PICKER = {
-  0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1,
-  1.25, 1.5, 1.75, 2, 2.25, 2.5, 2.75, 3,
-  3.5, 4, 4.5, 5, 5.5, 6, 6.5, 7,
-  7.5, 8, 9, 10, 11, 12, 13, 14,
+-- Curated per-operator FM ratios, in two role sets. Mirrors Burst.CARRIER_RATIOS /
+-- MODULATOR_RATIOS / RATIO_VALUES — keep in sync. The op-ratio A lane shows the set
+-- for that op's ROLE under the channel's algo (carrier -> CARRIER_RATIOS 5-limit just
+-- intervals; modulator -> MODULATOR_RATIOS whole numbers + divisions). Each set is 32
+-- values = one full grid picker (rows 6-7: cols 0..15 = 1..16, second row = 17..32).
+local CARRIER_RATIOS = {
+  0.5, 0.6, 0.625, 0.667, 0.75, 0.8, 0.833, 0.9375,
+  1.0, 1.125, 1.2, 1.25, 1.333, 1.5, 1.6, 1.667,
+  1.875, 2.0, 2.4, 2.5, 2.667, 3.0, 3.2, 3.333,
+  3.75, 4.0, 4.8, 5.0, 5.333, 6.0, 7.5, 8.0,
 }
-local RATIO_FINE = {
-  -- sub-unity (sub-octave JI): 1/3, 9/16, 3/5, 2/3, 7/10, 4/5, 5/6, 9/10, 15/16
-  0.333, 0.5625, 0.6, 0.667, 0.7, 0.8, 0.833, 0.9, 0.9375,
-  -- octave 1-2: 9/8, 6/5, 4/3, 7/5, 8/5, 5/3, 9/5, 15/8
-  1.125, 1.2, 1.333, 1.4, 1.6, 1.667, 1.8, 1.875,
-  -- 2-4 (denser): 11/5, 7/3, 12/5, 8/3, 14/5, 16/5, 10/3, 18/5, 15/4
-  2.2, 2.333, 2.4, 2.667, 2.8, 3.2, 3.333, 3.6, 3.75,
+local MODULATOR_RATIOS = {
+  0.125, 0.167, 0.2, 0.25, 0.333, 0.4, 0.5, 0.6, 0.667, 0.75, 0.8,
+  1.0, 1.25, 1.333, 1.5, 1.667, 2.0, 2.5, 3.0, 3.333, 3.75, 4.0,
+  5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 14.0, 16.0,
 }
--- full set = coarse + fine, sorted ascending so a B index step is a pitch step.
+-- full set = union of both, sorted ascending + de-duplicated. This is the STABLE index
+-- space the op-ratio B (index-offset) lane walks and that params store indices against
+-- (both role sets are subsets). The grid step picker filters to the role set; the union
+-- is the fallback/contract superset. Mirrors Burst.RATIO_VALUES — keep in sync.
 local RATIO_VALUES = {}
-for _, v in ipairs(RATIO_PICKER) do RATIO_VALUES[#RATIO_VALUES + 1] = v end
-for _, v in ipairs(RATIO_FINE)   do RATIO_VALUES[#RATIO_VALUES + 1] = v end
-table.sort(RATIO_VALUES)
+do
+  local seen = {}
+  local function add(v) if not seen[v] then seen[v] = true; RATIO_VALUES[#RATIO_VALUES + 1] = v end end
+  for _, v in ipairs(CARRIER_RATIOS)   do add(v) end
+  for _, v in ipairs(MODULATOR_RATIOS) do add(v) end
+  table.sort(RATIO_VALUES)
+end
+-- Carrier role per algo 1..22 = complement of the modulator list. Mirrors
+-- Burst.ALGO_MODULATORS / Engine_Potionshop.algorithms — keep in sync. Used to pick
+-- which role set the op-ratio A grid picker shows for a given channel.
+local ALGO_MODULATORS = {
+  {2,3,4},{2,3,4},{2,3,4},{2,3,4},{2,4},{4},{4},{},
+  {2,3,4},{2,3},{2,4},{3,4},{3,4},{3,4},{4},{3,4},
+  {2},{2,4},{3,4},{4},{2,3,4},{2,3,4},
+  {2,4},{4},{2,4},{2,3,4},{2,3,4},{2,3,4},{2,3,4},{3,4},{3,4},{2,3,4},
+}
+local function is_carrier(algo, op)
+  for _, m in ipairs(ALGO_MODULATORS[algo] or {}) do if m == op then return false end end
+  return true
+end
+local function op_ratio_set(algo, op)
+  return is_carrier(algo, op) and CARRIER_RATIOS or MODULATOR_RATIOS
+end
 -- op-ratio B lane: integer INDEX offsets 0..31 (0 = no shift, the default). Adding
 -- this to the A ratio's index walks UP RATIO_VALUES into the finer in-between ratios.
 local OP_RATIO_OFFSETS = {}
@@ -256,13 +282,14 @@ local STEP_PICKER_VALUES = {
   -- the carrier (ampShape) and modulator (modShape) lanes pick from it.
   ampShape = range(SHAPE_COUNT, function(i) return i + 1 end),
   modShape = range(SHAPE_COUNT, function(i) return i + 1 end),
-  -- sequenced op1/2/3/4 FM ratios: the A lane snaps to the 32-value grid-picker range
-  -- (RATIO_PICKER); the B lane (an index offset) uses OP_RATIO_OFFSETS — see
-  -- picker_layout, which is layer-aware for op ratios.
-  opRatio1 = RATIO_PICKER,
-  opRatio2 = RATIO_PICKER,
-  opRatio3 = RATIO_PICKER,
-  opRatio4 = RATIO_PICKER,
+  -- sequenced op1/2/3/4 FM ratios: A indexes the STABLE union (RATIO_VALUES) for
+  -- params storage + off-grid snapping; the grid step picker filters this to the op's
+  -- role set (op_picker_layout). The B lane (an index offset) uses OP_RATIO_OFFSETS —
+  -- see picker_layout, which is layer-aware for op ratios.
+  opRatio1 = RATIO_VALUES,
+  opRatio2 = RATIO_VALUES,
+  opRatio3 = RATIO_VALUES,
+  opRatio4 = RATIO_VALUES,
 }
 -- Layer-aware picker layout. Op-ratio B is the one lane whose value set differs from
 -- its A lane (integer index offsets vs ratios); every other lane uses one layout for
@@ -270,6 +297,18 @@ local STEP_PICKER_VALUES = {
 local function picker_layout(param, layer)
   if layer == 'B' and param:match('^opRatio') then return OP_RATIO_OFFSETS end
   return STEP_PICKER_VALUES[param]
+end
+-- Role-aware variant for the op-ratio A lane: the grid step picker shows only the
+-- channel's role set for that op (carrier vs modulator under its algo), filtering the
+-- stable union that params/brightness use. Every other param/layer falls through to
+-- picker_layout. ch is the 0-based channel.
+local function op_picker_layout(self, ch, param, layer)
+  if layer == 'A' and param:match('^opRatio') then
+    local op = tonumber(param:sub(-1))
+    local algo = (self:chan(ch) or {}).algo or 1
+    return op_ratio_set(algo, op)
+  end
+  return picker_layout(param, layer)
 end
 -- OP-page op-level picker: 0..1 in 1/31 steps (same layout the old op sequins
 -- used), so every operator level stays grid-reachable.
@@ -280,7 +319,7 @@ local OP_LEVEL_VALUES = range(32, function(i) return i / 31 end)
 local MOD_INDEX_VALUES  = range(32, function(i) return i end)            -- 1..32 (brightness depth)
 local AMP_PUNCH_VALUES  = range(32, function(i) return i - 1 end)        -- 0..31 (curve exaggeration)
 local FM_FEEDBACK_VALUES = range(32, function(i) return (i - 1) * 4 / 31 end) -- 0..4 rad, 1/31-of-4 steps
-local ALGO_VALUES = range(16, function(i) return i end)  -- 1..16 FM algorithm (per-channel)
+local ALGO_VALUES = range(32, function(i) return i end)  -- 1..32 FM algorithm (per-channel; 17..32 = AM/ring & hybrid)
 -- Curated per-channel quantize grids (events per whole note). Mirrors
 -- Burst.QUANTIZE_VALUES — keep in sync. Edited on the per-channel QNT page.
 local QUANTIZE_VALUES = {3, 4, 6, 8, 12, 16, 24, 32}
@@ -341,10 +380,11 @@ local function value_brightness(param, value, layer)
       -- B is an integer index offset 0..31: brightness ramps with the shift amount.
       b = clamp(round(2 + clamp(value, 0, 31) / 31 * 11), 2, VALUE_MAX)
     else
-      -- A ratio: brightness from its index in the 32-cell picker (low ratio = dim),
-      -- so the sequence row reads like the OP-page ratio cells.
-      local idx = nearest_index(RATIO_PICKER, value)
-      b = clamp(round(2 + (idx - 1) / (#RATIO_PICKER - 1) * 11), 2, VALUE_MAX)
+      -- A ratio: brightness from its position in the full (union) ratio space (low
+      -- ratio = dim), so the sequence row reads as a pitch-height gradient regardless
+      -- of which role set the cell came from.
+      local idx = nearest_index(RATIO_VALUES, value)
+      b = clamp(round(2 + (idx - 1) / (#RATIO_VALUES - 1) * 11), 2, VALUE_MAX)
     end
   elseif param == 'level' or param:match('^op%d') then
     b = math.max(2, round(2 + value * 11))
@@ -381,9 +421,11 @@ GridUI.RATE_VALUES = RATE_VALUES
 GridUI.QUANTIZE_VALUES = QUANTIZE_VALUES
 GridUI.PROB_VALUES = PROB_VALUES
 GridUI.ALT_TRIG_MODE_NAMES = ALT_TRIG_MODE_NAMES
-GridUI.RATIO_VALUES = RATIO_VALUES
+GridUI.RATIO_VALUES = RATIO_VALUES          -- stable union (params index + B-walk space)
 GridUI.SHAPE_NAMES = SHAPE_NAMES            -- envelope shape labels (mirror Burst.SHAPES)
-GridUI.RATIO_PICKER = RATIO_PICKER          -- first-32 grid-picker range (op1 + op ratio A)
+GridUI.CARRIER_RATIOS = CARRIER_RATIOS      -- 5-limit set (carrier ops); mirror Burst
+GridUI.MODULATOR_RATIOS = MODULATOR_RATIOS  -- whole-number/division set (modulator ops)
+GridUI.op_ratio_set = op_ratio_set          -- (algo, op) -> role set
 GridUI.OP_RATIO_OFFSETS = OP_RATIO_OFFSETS  -- op ratio B index-offset layout (0..31)
 GridUI.picker_layout = picker_layout        -- layer-aware step-picker layout
 GridUI.OP_LEVEL_VALUES = OP_LEVEL_VALUES
@@ -619,7 +661,7 @@ end
 
 function GridUI:apply_picker_value(p, x, y)
   if p.kind == 'step' then
-    local v = picker_layout(p.param, p.layer)[y * GRID_W + x + 1]
+    local v = op_picker_layout(self, p.ch, p.param, p.layer)[y * GRID_W + x + 1]
     if v == nil then return end
     -- pressing the already-selected (full-bright) value toggles the step off:
     -- the value grid (rows 6-7) is the remove affordance, freeing the channel
@@ -955,7 +997,7 @@ end
 function GridUI:render_step_picker(p)
   local vals = seqx.values(self:seq_ref(p.ch, p.param, p.layer))
   local focused = vals[p.col + 1]
-  local layout = picker_layout(p.param, p.layer)
+  local layout = op_picker_layout(self, p.ch, p.param, p.layer)
   for y = 0, 1 do
     for x = 0, GRID_W - 1 do
       local v = layout[y * GRID_W + x + 1]
@@ -1068,7 +1110,7 @@ function GridUI:render_mix_row(ch)
   self.g:set_led(MOD_INDEX_COL, ch, bright(((c.modIndex or 1) - 1) / 31))
   self.g:set_led(AMP_PUNCH_COL, ch, bright((c.ampPunch or 0) / 31))
   self.g:set_led(FM_FEEDBACK_COL, ch, bright((c.fmFeedback or 0) / 4))
-  self.g:set_led(ALGO_COL, ch, bright(((c.algo or 1) - 1) / 15))
+  self.g:set_led(ALGO_COL, ch, bright(((c.algo or 1) - 1) / 31))
   if self.picker and self.picker.kind == 'scalar' and self.picker.ch == ch then
     local f = self.picker.field
     if f == 'level' then self.g:set_led(MIX_LEVEL_COL, ch, 15)

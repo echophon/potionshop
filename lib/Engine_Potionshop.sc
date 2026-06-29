@@ -2,8 +2,9 @@
 // SuperCollider engine for the Norns port of potionshop.
 //
 // FOUR-OPERATOR FM voice (Yamaha DX21/DX27/DX100/TX81Z-style): 4 sine operators,
-// 16 algorithms (operator routings: the classic 8 DX shapes + 8 extended
-// routings), and per-operator-style feedback.
+// 32 algorithms (operator routings: the classic 8 DX shapes + 8 extended PM
+// routings (1..16) + 16 amplitude/ring-modulation & hybrid AM+FM routings (17..32)),
+// and per-operator-style feedback. AM/ring depth reuses the modIndex macro for now.
 // This replaced the earlier 2-op `PotionFM` voice (one carrier + one modulator);
 // `Burst:fire` (lib/burst.lua) drives it per hit, adding a per-channel `algo`.
 //
@@ -46,24 +47,46 @@ Engine_Potionshop : CroneEngine {
 	classvar <algorithms;
 
 	*initClass {
+		// each entry = [ pmEdges, carriers, amEdges ]. pmEdges = phase-modulation
+		// connections [from,to] (from > to). amEdges = amplitude/ring connections
+		// [from,to,kind] where kind 0 = AM (carrier retained, tremolo/shimmer) and
+		// 1 = ring (carrier suppressed, metallic). 1..16 are PM-only (empty amEdges);
+		// 17..22 introduce AM/ring. With all ratios 5-limit, ring sidebands (C +/- M)
+		// land on just thirds/fifths, so AM is the more 5-limit-coherent generator.
 		algorithms = [
-		//   edges (from->to)                carriers
-			[ [[4,3],[3,2],[2,1]],            [1] ],          // 1: 4->3->2->1 single stack
-			[ [[4,2],[3,2],[2,1]],            [1] ],          // 2: (4,3)->2->1 double-mod stack
-			[ [[4,3],[3,1],[2,1]],            [1] ],          // 3: 4->3->1, 2->1
-			[ [[4,2],[3,1],[2,1]],            [1] ],          // 4: 4->2->1, 3->1
-			[ [[2,1],[4,3]],                  [1,3] ],        // 5: twin 2-op stacks
-			[ [[4,1],[4,2],[4,3]],            [1,2,3] ],      // 6: op4 mods three carriers
-			[ [[4,3]],                        [1,2,3] ],      // 7: one stack + two bare carriers
-			[ [],                             [1,2,3,4] ],    // 8: additive (no modulation)
-			[ [[4,1],[3,1],[2,1]],            [1] ],          // 9: (4,3,2)->1 parallel triple-mod
-			[ [[3,2],[2,1]],                  [1,4] ],        // 10: 3->2->1 stack + pure op4
-			[ [[4,2],[2,1]],                  [1,3] ],        // 11: 4->2->1 stack + pure op3
-			[ [[4,3],[3,2]],                  [1,2] ],        // 12: 4->3->2 carrier + pure op1
-			[ [[4,3],[3,1]],                  [1,2] ],        // 13: 4->3->1 carrier + pure op2
-			[ [[4,1],[3,1]],                  [1,2] ],        // 14: (4,3)->1 + pure op2
-			[ [[4,1],[4,2]],                  [1,2,3] ],      // 15: op4 mods 2 carriers + pure op3
-			[ [[4,2],[3,1]],                  [1,2] ]         // 16: twin 2-op stacks (4->2, 3->1)
+		//   pmEdges (from->to)               carriers     amEdges (from,to,kind)
+			[ [[4,3],[3,2],[2,1]],            [1],         [] ],   // 1: 4->3->2->1 single stack
+			[ [[4,2],[3,2],[2,1]],            [1],         [] ],   // 2: (4,3)->2->1 double-mod stack
+			[ [[4,3],[3,1],[2,1]],            [1],         [] ],   // 3: 4->3->1, 2->1
+			[ [[4,2],[3,1],[2,1]],            [1],         [] ],   // 4: 4->2->1, 3->1
+			[ [[2,1],[4,3]],                  [1,3],       [] ],   // 5: twin 2-op stacks
+			[ [[4,1],[4,2],[4,3]],            [1,2,3],     [] ],   // 6: op4 mods three carriers
+			[ [[4,3]],                        [1,2,3],     [] ],   // 7: one stack + two bare carriers
+			[ [],                             [1,2,3,4],   [] ],   // 8: additive (no modulation)
+			[ [[4,1],[3,1],[2,1]],            [1],         [] ],   // 9: (4,3,2)->1 parallel triple-mod
+			[ [[3,2],[2,1]],                  [1,4],       [] ],   // 10: 3->2->1 stack + pure op4
+			[ [[4,2],[2,1]],                  [1,3],       [] ],   // 11: 4->2->1 stack + pure op3
+			[ [[4,3],[3,2]],                  [1,2],       [] ],   // 12: 4->3->2 carrier + pure op1
+			[ [[4,3],[3,1]],                  [1,2],       [] ],   // 13: 4->3->1 carrier + pure op2
+			[ [[4,1],[3,1]],                  [1,2],       [] ],   // 14: (4,3)->1 + pure op2
+			[ [[4,1],[4,2]],                  [1,2,3],     [] ],   // 15: op4 mods 2 carriers + pure op3
+			[ [[4,2],[3,1]],                  [1,2],       [] ],   // 16: twin 2-op stacks (4->2, 3->1)
+			[ [],                             [1,3,4],     [[2,1,1]] ],            // 17: op2 ring-mods op1; two bare carriers (metallic dyad)
+			[ [],                             [1,3],       [[2,1,1],[4,3,1]] ],    // 18: twin ring pairs (ring analog of algo 5)
+			[ [[4,3]],                        [1,2],       [[3,1,1]] ],           // 19: op4->op3 PM stack ring-mods op1; pure op2
+			[ [],                             [1,2,3],     [[4,1,0],[4,2,0],[4,3,0]] ], // 20: op4 AM-shimmers three carriers (AM analog of algo 6)
+			[ [],                             [1],         [[4,3,1],[3,2,1],[2,1,1]] ], // 21: ring chain 4(x)3(x)2(x)1 (bell)
+			[ [[4,1],[3,1]],                  [1],         [[2,1,0]] ],           // 22: (4,3)->op1 PM + op2 AM-shimmers op1
+			[ [],                             [1,3],       [[2,1,0],[4,3,0]] ],            // 23: twin AM pairs (2~1, 4~3) (AM analog of algo 5)
+			[ [],                             [1,2,3],     [[4,1,1],[4,2,1],[4,3,1]] ],    // 24: op4 ring-mods three carriers (ring analog of algo 20)
+			[ [[2,1]],                        [1,3],       [[4,3,0]] ],                    // 25: 2->1 PM stack + 4~3 AM pair (hybrid)
+			[ [],                             [1],         [[4,3,0],[3,2,0],[2,1,0]] ],    // 26: AM chain 4~3~2~1 (AM analog of algo 21)
+			[ [[4,1]],                        [1],         [[3,1,1],[2,1,0]] ],            // 27: op1 hit by PM(4) + ring(3) + AM(2)
+			[ [[3,2],[2,1]],                  [1],         [[4,1,0]] ],                    // 28: 3->2->1 PM stack + op4 AM-shimmers op1
+			[ [[4,2],[3,2]],                  [1],         [[2,1,1]] ],                    // 29: (4,3)->2 PM carrier ring-mods op1
+			[ [],                             [1,2],       [[4,2,1],[3,1,1]] ],            // 30: twin ring pairs (4x2, 3x1) (ring analog of algo 16)
+			[ [],                             [1,2],       [[4,2,0],[3,1,0]] ],            // 31: twin AM pairs (4~2, 3~1) (AM analog of algo 16)
+			[ [[4,3]],                        [1],         [[3,2,0],[2,1,0]] ]             // 32: 4->3 PM then AM chain 3~2~1 (hybrid)
 		];
 	}
 
@@ -80,26 +103,29 @@ Engine_Potionshop : CroneEngine {
 		// per-channel on the grid OP page (no longer a single harm macro).
 		SynthDef("PotionFM", { arg out = 0, freq = 220, amp = 0.3,
 			r1 = 1, r2 = 1, r3 = 1, r4 = 1,                 // per-operator ratios (op1 default 1.0)
-			m21 = 0, m31 = 0, m41 = 0, m32 = 0, m42 = 0, m43 = 0,  // mod edges (from->to)
+			m21 = 0, m31 = 0, m41 = 0, m32 = 0, m42 = 0, m43 = 0,  // PM edges (from->to)
+			a21 = 0, a31 = 0, a41 = 0, a32 = 0, a42 = 0, a43 = 0,  // AM edges (retain carrier)
+			g21 = 0, g31 = 0, g41 = 0, g32 = 0, g42 = 0, g43 = 0,  // ring edges (suppress carrier)
 			c1 = 1, c2 = 0, c3 = 0, c4 = 0,                 // carrier gains
 			lvl1 = 1, lvl2 = 1, lvl3 = 1, lvl4 = 1,         // per-operator output levels
-			modIndex = 4, feedback = 0,                     // global PM depth (rad), op4 self-FB (rad)
+			modIndex = 4, amDepth = 0, feedback = 0,        // PM depth (rad), AM/ring depth (0..1), op4 self-FB (rad)
 			attack = 0.001, ampDecay = 0.4,                 // carrier amp env attack/decay times
 			ampAtkCurve = -4, ampDecCurve = -4,             // carrier env per-segment Env curves
 			modAttack = 0.001, modDecay = 0.2,              // modulator brightness env atk/dec times
 			modAtkCurve = -4, modDecCurve = -4,             // modulator env per-segment Env curves
 			drive = 1, gate = 1;                            // soft-clip, voice gate
-			var ampEnv, cut, modEnv, o1, o2, o3, o4, sig, driveMix;
+			var ampEnv, cut, mEnv, modEnv, amEnv, o1, o2, o3, o4, sig, driveMix;
 
-			// modulator brightness envelope: scales every modulation depth so the
-			// timbre brightens over its own attack and fades over its own decay. Both
-			// axes + the per-segment curves come from the per-channel sequenced
-			// modShape, independent of the carrier amp env below. Env.new (vs the old
-			// Env.perc) lets attack + decay carry independent curves -- the whole point
-			// of the SHAPE control (lib/burst.lua SHAPES).
-			modEnv = modIndex * EnvGen.kr(
+			// shared modulator envelope (unit 0->1->0): both the PM brightness depth
+			// and the AM/ring depth ride it so AM shimmer and FM brightness track the
+			// same contour. Axes + per-segment curves come from the per-channel
+			// sequenced modShape. Env.new (vs the old Env.perc) lets attack + decay
+			// carry independent curves -- the whole point of the SHAPE control.
+			mEnv = EnvGen.kr(
 				Env.new([0, 1, 0], [modAttack, max(0.01, modDecay)], [modAtkCurve, modDecCurve])
 			);
+			modEnv = modIndex * mEnv;   // PM depth in radians, enveloped
+			amEnv  = amDepth  * mEnv;   // AM/ring depth in 0..1, enveloped
 
 			// carrier amp env from the per-channel sequenced ampShape (atk/dec times +
 			// independent per-segment curves); frees the synth on completion.
@@ -127,6 +153,21 @@ Engine_Potionshop : CroneEngine {
 			o3 = SinOsc.ar(freq * r3, modEnv * (m43 * o4)) * lvl3;
 			o2 = SinOsc.ar(freq * r2, modEnv * (m42 * o4 + m32 * o3)) * lvl2;
 			o1 = SinOsc.ar(freq * r1, modEnv * (m41 * o4 + m31 * o3 + m21 * o2)) * lvl1;
+
+			// amplitude/ring modulation post-pass (higher op modulates a lower op's
+			// amplitude). Applied top-down (o3, o2, o1) so ring chains cascade through
+			// the already-modified outputs. Both ride amEnv (= amDepth*modShape, depth
+			// from the modIndex macro), so amEnv = 0 leaves PM-only algorithms untouched
+			// and dialing modIndex sweeps depth dry -> full. AM keeps the carrier:
+			// o*(1 + amEnv*src). Ring crossfades carrier -> ringed: o*(1 + amEnv*(src-1))
+			// = o*src at full depth. Assumes at most one ring source per target (true for
+			// the algorithm table).
+			o3 = o3 * (1 + (amEnv * (a43 * o4)));
+			o3 = o3 * (1 + (amEnv * (g43 * (o4 - 1))));
+			o2 = o2 * (1 + (amEnv * (a42 * o4 + a32 * o3)));
+			o2 = o2 * (1 + (amEnv * (g42 * (o4 - 1) + g32 * (o3 - 1))));
+			o1 = o1 * (1 + (amEnv * (a41 * o4 + a31 * o3 + a21 * o2)));
+			o1 = o1 * (1 + (amEnv * (g41 * (o4 - 1) + g31 * (o3 - 1) + g21 * (o2 - 1))));
 
 			// sum carriers, apply amp env + voice-gate + level.
 			// 0.5 master gain: halve the level range so a mid `level` reads as a
@@ -176,7 +217,7 @@ Engine_Potionshop : CroneEngine {
 		// are appended so the older positional args keep their indices.
 		this.addCommand("trig", "fffffffffffffffffffffff", { arg msg;
 			var freq = msg[1], amp = msg[2];
-			var algo = msg[3].asInteger.clip(1, 16);
+			var algo = msg[3].asInteger.clip(1, 32);
 			var r2 = msg[4], r3 = msg[5], r4 = msg[6];
 			var modIndex = msg[7];
 			var attack = msg[8], ampDecay = msg[9], ampDecCurve = msg[10], modDecay = msg[11];
@@ -186,24 +227,37 @@ Engine_Potionshop : CroneEngine {
 			var modAttack = msg[19];
 			var r1 = msg[20];
 			var ampAtkCurve = msg[21], modAtkCurve = msg[22], modDecCurve = msg[23];
-			var spec, edges, carriers, cgain, weights, pmIndex, voice;
+			var spec, edges, carriers, amEdges, cgain, weights, amWeights, pmIndex, amDepth, voice;
 
 			spec = algorithms[algo - 1];
 			edges = spec[0];
 			carriers = spec[1];
+			amEdges = spec[2];
 			// normalize so additive (4-carrier) algorithms aren't 4x louder than
 			// single-carrier stacks; equal-power-ish 1/sqrt(n).
 			cgain = carriers.size.max(1).sqrt.reciprocal;
 
-			// edge weights: 1 where the algorithm has a connection, else 0.
+			// PM edge weights: 1 where the algorithm has a connection, else 0.
 			weights = IdentityDictionary.new;
 			[\m21, \m31, \m41, \m32, \m42, \m43].do { |k| weights[k] = 0 };
 			edges.do { |e|
 				weights[("m" ++ e[0].asString ++ e[1].asString).asSymbol] = 1;  // [from,to] -> m<from><to>
 			};
 
-			// modIndex (sequencer 1..24) -> PM depth in radians.
+			// AM/ring edge weights: aNN = AM (retain carrier), gNN = ring (suppress).
+			// amEdge = [from, to, kind]; kind 1 -> ring (g), else AM (a).
+			amWeights = IdentityDictionary.new;
+			[\a21, \a31, \a41, \a32, \a42, \a43,
+			 \g21, \g31, \g41, \g32, \g42, \g43].do { |k| amWeights[k] = 0 };
+			amEdges.do { |e|
+				var prefix = (e[2] == 1).if("g", "a");  // ring vs AM
+				amWeights[(prefix ++ e[0].asString ++ e[1].asString).asSymbol] = 1;
+			};
+
+			// modIndex (sequencer 1..24) -> PM depth in radians, reused (normalized to
+			// 0..1) as the AM/ring depth so one macro drives both generators for now.
 			pmIndex = modIndex.linlin(1, 24, 0.5, 8);
+			amDepth = modIndex.linlin(1, 24, 0, 1);
 
 			// release any voice still ringing on this channel so it can't drone
 			// into the new note (gate=0 -> ~6ms fade + free). `set` on an already
@@ -215,6 +269,11 @@ Engine_Potionshop : CroneEngine {
 				\r1, r1, \r2, r2, \r3, r3, \r4, r4,
 				\m21, weights[\m21], \m31, weights[\m31], \m41, weights[\m41],
 				\m32, weights[\m32], \m42, weights[\m42], \m43, weights[\m43],
+				\a21, amWeights[\a21], \a31, amWeights[\a31], \a41, amWeights[\a41],
+				\a32, amWeights[\a32], \a42, amWeights[\a42], \a43, amWeights[\a43],
+				\g21, amWeights[\g21], \g31, amWeights[\g31], \g41, amWeights[\g41],
+				\g32, amWeights[\g32], \g42, amWeights[\g42], \g43, amWeights[\g43],
+				\amDepth, amDepth,
 				\c1, carriers.includes(1).if(cgain, 0),
 				\c2, carriers.includes(2).if(cgain, 0),
 				\c3, carriers.includes(3).if(cgain, 0),

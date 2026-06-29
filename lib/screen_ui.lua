@@ -170,6 +170,13 @@ function Screen:_layout(param)
   if self:layer() == 'B' and param:match('^opRatio') then
     return GridUI.OP_RATIO_OFFSETS
   end
+  -- op-ratio A is role-dependent: show the focused channel's set for this op (carrier
+  -- vs modulator under its algo), matching the grid step picker. Mirrors GridUI.
+  if self:layer() == 'A' and param:match('^opRatio') then
+    local op = tonumber(param:sub(-1))
+    local algo = (self.ctl:chan(self.sel_ch) or {}).algo or 1
+    return GridUI.op_ratio_set(algo, op)
+  end
   local layout = self.SPV[param]
   if self:layer() == 'B' and layout[1] ~= 0 then
     local t = {0}

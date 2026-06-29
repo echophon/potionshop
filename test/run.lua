@@ -117,11 +117,12 @@ for _ = 1, 200 do
   for _, v in ipairs(seqx.values(c.div))  do if not in_set(v, Burst.MUSICAL_DIVS) then ok_div = false end end
   for _, v in ipairs(seqx.values(c.reps)) do if not in_set(v, {1,2,3,4}) then ok_reps = false end end
   for _, v in ipairs(seqx.values(c.note)) do if not (v >= 0 and v <= 15 and v == math.floor(v)) then ok_note = false end end
-  -- op2/3/4 ratios are sequenced now: every A-layer step must land on the 32-cell
-  -- picker range (RATIO_PICKER), since A is only editable there (B routes higher).
-  for _, seq in ipairs({c.opRatio2, c.opRatio3, c.opRatio4}) do
-    for _, v in ipairs(seqx.values(seq)) do
-      if not in_set(v, Burst.RATIO_PICKER) then ok_ratio = false end
+  -- op2/3/4 ratios are sequenced now: every A-layer step must land on that op's ROLE
+  -- set under the channel's algo (carrier -> CARRIER_RATIOS, else MODULATOR_RATIOS),
+  -- the exact grid the picker shows so the value stays highlightable/editable.
+  for _, op in ipairs({2, 3, 4}) do
+    for _, v in ipairs(seqx.values(c['opRatio' .. op])) do
+      if not in_set(v, Burst.op_ratio_set(c.algo, op)) then ok_ratio = false end
     end
   end
   -- carrier (ampShape) and modulator (modShape) envelope shapes are sequenced as
@@ -306,7 +307,7 @@ local function first_trig()
   e.channels[1].reps = seqx.new{1}
   e.channels[1].opRatio1 = seqx.new{0.5}
   e.channels[1].opRatio2 = seqx.new{2}
-  e.channels[1].opRatio3 = seqx.new{3.5}
+  e.channels[1].opRatio3 = seqx.new{3}
   e.channels[1].opRatio4 = seqx.new{7}
   e:launch(1)
   clock._run_until(2)
@@ -316,7 +317,7 @@ end
 local off = first_trig()
 check('algo passes at trig arg 3 (default channel = 1)', off and off[3] == 1)
 check('sequenced op2/3/4 ratios pass at trig args 4/5/6',
-  off and approx(off[4], 2) and approx(off[5], 3.5) and approx(off[6], 7))
+  off and approx(off[4], 2) and approx(off[5], 3) and approx(off[6], 7))
 -- op1 ratio (sequenced): its drawn value rides as r1 at trig arg 20 (appended last).
 check('op1 ratio passes at trig arg 20', off and approx(off[20], 0.5))
 
@@ -350,23 +351,58 @@ local rv = Burst.RATIO_VALUES
 local sorted = true
 for i = 2, #rv do if rv[i] < rv[i - 1] then sorted = false end end
 check('RATIO_VALUES is sorted ascending', sorted)
-check('op_ratio B=0 is identity for each coarse picker value', (function()
-  for _, a in ipairs(Burst.RATIO_PICKER) do if not approx(Burst.op_ratio(a, 0), a) then return false end end
+check('op_ratio B=0 is identity for each value in the union', (function()
+  for _, a in ipairs(Burst.RATIO_VALUES) do if not approx(Burst.op_ratio(a, 0), a) then return false end end
   return true
 end)())
 check('op_ratio is monotonic non-decreasing in the offset',
   Burst.op_ratio(1, 0) <= Burst.op_ratio(1, 1) and Burst.op_ratio(1, 1) <= Burst.op_ratio(1, 5)
   and Burst.op_ratio(1, 5) < rv[#rv] + 1e-9)
-check('B offset reaches finer (non-picker) ratios woven between coarse steps', (function()
-  if #Burst.RATIO_VALUES <= #Burst.RATIO_PICKER then return false end
-  for _, a in ipairs(Burst.RATIO_PICKER) do
-    local r = Burst.op_ratio(a, 1)
-    if r > a and not in_set(r, Burst.RATIO_PICKER) then return true end
+check('B offset can walk a carrier value into a modulator-only ratio', (function()
+  -- the union interleaves both role sets, so a B step from a carrier base can land on
+  -- a value present only in the modulator set (proving B walks the full union).
+  for _, a in ipairs(Burst.CARRIER_RATIOS) do
+    for off = 1, 4 do
+      local r = Burst.op_ratio(a, off)
+      if r > a and not in_set(r, Burst.CARRIER_RATIOS) and in_set(r, Burst.MODULATOR_RATIOS) then
+        return true
+      end
+    end
   end
   return false
 end)())
 check('op_ratio clamps at the top of the list',
   approx(Burst.op_ratio(rv[#rv], 31), rv[#rv]) and approx(Burst.op_ratio(rv[#rv], 99), rv[#rv]))
+
+-- ---- dynamic op-ratio role sets (carrier vs modulator by algorithm) ----
+print('op-ratio role sets:')
+check('32 algorithms across the mirrors', #Burst.ALGO_MODULATORS == 32)
+check('op1 is a carrier in every algorithm (1..32)', (function()
+  for a = 1, 32 do if not Burst.is_carrier(a, 1) then return false end end
+  return true
+end)())
+check('algo 8 (additive) makes all four ops carriers',
+  Burst.is_carrier(8, 2) and Burst.is_carrier(8, 3) and Burst.is_carrier(8, 4))
+check('algo 1 (single stack) makes op2/3/4 modulators',
+  (not Burst.is_carrier(1, 2)) and (not Burst.is_carrier(1, 3)) and (not Burst.is_carrier(1, 4)))
+check('AM algo 17 makes op2 a modulator (ring source), op3/op4 carriers',
+  (not Burst.is_carrier(17, 2)) and Burst.is_carrier(17, 3) and Burst.is_carrier(17, 4))
+check('op_ratio_set: carrier op -> CARRIER_RATIOS, modulator op -> MODULATOR_RATIOS',
+  Burst.op_ratio_set(1, 1) == Burst.CARRIER_RATIOS
+  and Burst.op_ratio_set(1, 2) == Burst.MODULATOR_RATIOS)
+-- randomize honors the role: under an all-carrier algo, op2/3/4 land on CARRIER_RATIOS;
+-- under a single-stack algo they land on MODULATOR_RATIOS.
+local rand_carrier_ok, rand_mod_ok = true, true
+for _ = 1, 100 do
+  local ec = Burst.new(); ec.channels[1].algo = 8; ec:randomize(1)
+  local em = Burst.new(); em.channels[1].algo = 1; em:randomize(1)
+  for _, op in ipairs({2, 3, 4}) do
+    if not in_set(seqx.values(ec.channels[1]['opRatio' .. op])[1], Burst.CARRIER_RATIOS) then rand_carrier_ok = false end
+    if not in_set(seqx.values(em.channels[1]['opRatio' .. op])[1], Burst.MODULATOR_RATIOS) then rand_mod_ok = false end
+  end
+end
+check('randomize under all-carrier algo draws op2/3/4 from CARRIER_RATIOS', rand_carrier_ok)
+check('randomize under single-stack algo draws op2/3/4 from MODULATOR_RATIOS', rand_mod_ok)
 
 -- op-ratio trig mode (prob page): affects ONLY the B (offset) lane, mirroring the
 -- note alt-trig. hold draws B once per burst (held); step advances the B index per
@@ -703,6 +739,16 @@ check('reset_channel rewinds ampShape/modShape to step 1',
 -- ---- grid_ui: controller wiring ---------------------------------------
 local GridUI = require 'grid_ui'
 print('grid_ui controller:')
+check('GridUI exposes 32 algorithm names', #GridUI.ALGO_NAMES == 32)
+check('Burst and GridUI agree on carrier role for every algo/op', (function()
+  for a = 1, 32 do
+    for op = 1, 4 do
+      if (Burst.op_ratio_set(a, op) == Burst.CARRIER_RATIOS)
+         ~= (GridUI.op_ratio_set(a, op) == GridUI.CARRIER_RATIOS) then return false end
+    end
+  end
+  return true
+end)())
 local function mock_grid()
   return {
     leds = {},
@@ -847,9 +893,9 @@ check('op1 ratio page shows opRatio1 A | B lanes',
 ctl:press(0, 0)  -- left half step 0 -> opRatio1 A picker
 check('op1 ratio left half edits the A layer',
   ctl.picker.param == 'opRatio1' and ctl.picker.layer == 'A')
-ctl:press(11, 6) -- value grid row 6 col 11 -> RATIO_PICKER[12] = 2
-check('op1 ratio A picker writes a curated ratio step',
-  approx(seqx.values(geng.channels[1].opRatio1)[1], GridUI.RATIO_PICKER[12]))
+ctl:press(11, 6) -- value grid row 6 col 11 -> op1 is a carrier, so CARRIER_RATIOS[12]
+check('op1 ratio A picker writes a curated (carrier-set) ratio step',
+  approx(seqx.values(geng.channels[1].opRatio1)[1], GridUI.CARRIER_RATIOS[12]))
 ctl:press(8, 0)  -- right half step 0 -> opRatio1 B (offset) picker
 check('op1 ratio right half edits the B (offset) layer',
   ctl.picker.param == 'opRatio1' and ctl.picker.layer == 'B')
@@ -861,6 +907,23 @@ check('op2 ratio page shows opRatio2 A | B lanes',
   and ctl:row_lanes()[2].param == 'opRatio2' and ctl:row_lanes()[2].layer == 'B')
 ctl:press(6, 7)  -- col 6 = op4 ratio page
 check('op4 ratio page selected', ctl.selectedParam == 'opRatio4')
+
+-- dynamic picker: the op2 A picker filters to the channel's role set for op2, which
+-- flips with the algorithm. Press the SAME value cell under two algos and confirm the
+-- committed ratio comes from the carrier set (algo 8) vs the modulator set (algo 1).
+ctl:press(4, 7)               -- op2 ratio page
+geng.channels[1].algo = 8     -- additive -> op2 is a carrier
+ctl:press(0, 0)               -- open op2 A picker on ch1 step 0
+ctl:press(3, 6)               -- value grid row 6 col 3 -> picker index 4
+check('op2 A picker (carrier algo) writes from CARRIER_RATIOS',
+  approx(seqx.values(geng.channels[1].opRatio2)[1], GridUI.CARRIER_RATIOS[4]))
+geng.channels[1].algo = 1     -- single stack -> op2 is a modulator
+ctl:press(0, 0)               -- reopen op2 A picker
+ctl:press(3, 6)               -- same cell -> picker index 4, now the modulator set
+check('op2 A picker (modulator algo) writes from MODULATOR_RATIOS',
+  approx(seqx.values(geng.channels[1].opRatio2)[1], GridUI.MODULATOR_RATIOS[4]))
+ctl:close_picker()
+
 -- back to the note page so later tests start from a known selection
 ctl:press(1, 7)
 check('back to note page', ctl.selectedParam == 'note')
@@ -1076,8 +1139,9 @@ check('main page line reaches the sequenced opRatio2 lane', sui:main_param() == 
 seng.channels[1].opRatio2 = seqx.new{1}
 sui.sel_step = 0
 sui:enc(3, 1)
-check('main E3 steps opRatio2 up the curated ratio grid (A = picker range)',
-  in_set(seqx.values(seng.channels[1].opRatio2)[1], GridUI.RATIO_PICKER)
+check('main E3 steps opRatio2 up the curated ratio grid (A = role set)',
+  in_set(seqx.values(seng.channels[1].opRatio2)[1],
+         GridUI.op_ratio_set(seng.channels[1].algo, 2))
   and seqx.values(seng.channels[1].opRatio2)[1] ~= 1)
 
 -- perf page: values come from the shared interval/octave/rate tables
@@ -1382,9 +1446,9 @@ check('harm has no param at all', fake:lookup_param('ch1_harm_a') == nil)
 -- op1 ratio is sequenced now (no static ch1_ratio1 scalar); op levels are 0..31 grid scalars.
 check('no static op1-ratio scalar param', fake:lookup_param('ch1_ratio1') == nil)
 check('op1 ratio has a sequenced A block', fake:lookup_param('ch1_opRatio1_a') ~= nil)
-fake:set('ch1_opRatio1_a', '1.5 2 3.5')
+fake:set('ch1_opRatio1_a', '1.5 2 3')
 check('op1 ratio text installs a curated-ratio sequence',
-  vals_eq(seqx.values(peng.channels[1].opRatio1), {1.5, 2, 3.5}))
+  vals_eq(seqx.values(peng.channels[1].opRatio1), {1.5, 2, 3}))
 check('op1 ratio has a B (index-offset) block', fake:lookup_param('ch1_opRatio1_b') ~= nil)
 fake:set('ch1_op1_trig', 2)  -- option 2 = step
 check('op1 ratio trig param sets step', peng.channels[1].opRatio1Trig == 1)
@@ -1397,10 +1461,10 @@ check('op level 31 -> 1.0', approx(peng.channels[1].opLevel3, 1))
 
 -- op2/3/4 ratios are sequenced: text + cursor blocks like note/level, A value + B
 -- offset, snapping every token to the curated ratio grid.
-fake:set('ch1_opRatio2_a', '1.5 2 3.5')
+fake:set('ch1_opRatio2_a', '1.5 2 3')
 check('op2 ratio text installs a curated-ratio sequence',
-  vals_eq(seqx.values(peng.channels[1].opRatio2), {1.5, 2, 3.5}))
-check('op2 ratio text normalized back (curated tokens)', fake:get('ch1_opRatio2_a') == '1.5 2 3.5')
+  vals_eq(seqx.values(peng.channels[1].opRatio2), {1.5, 2, 3}))
+check('op2 ratio text normalized back (curated tokens)', fake:get('ch1_opRatio2_a') == '1.5 2 3')
 fake:set('ch1_opRatio2_b', '0 4')
 check('op2 ratio B index-offset parses (0 = no shift)',
   vals_eq(seqx.values(peng.channels[1].opRatio2B), {0, 4}))

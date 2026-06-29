@@ -45,34 +45,54 @@ Burst.MUSICAL_DIVS = MUSICAL_DIVS
 local QUANTIZE_VALUES = {3, 4, 6, 8, 12, 16, 24, 32}
 Burst.QUANTIZE_VALUES = QUANTIZE_VALUES
 
--- Curated per-operator FM ratios, in two parts. RATIO_PICKER = the 32 COARSE ratios
--- the grid pickers show (op1/2/3/4 A lane): sub-unity 0.125..0.875 =
--- sub-octave/bass; half-integers 2.25, 3.5, ... = inharmonic bell/metallic; up to 14.
-local RATIO_PICKER = {
-  0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1,
-  1.25, 1.5, 1.75, 2, 2.25, 2.5, 2.75, 3,
-  3.5, 4, 4.5, 5, 5.5, 6, 6.5, 7,
-  7.5, 8, 9, 10, 11, 12, 13, 14,
+-- Per-operator FM ratios, split into TWO curated sets that complement the 5-limit
+-- key layout (lib/scales.lua JI_RATIOS). Which set an op draws from is chosen
+-- DYNAMICALLY per channel by the algorithm: an op that is a CARRIER under the
+-- channel's algo uses CARRIER_RATIOS (5-limit just intervals, so each carrier sounds
+-- a pure interval and reinforces the key); an op that is a MODULATOR uses
+-- MODULATOR_RATIOS (whole numbers + simple divisions, so the FM/ring sidebands land
+-- on 5-limit-consonant partials). Burst.is_carrier(algo, op) = the complement of
+-- ALGO_MODULATORS. Mirrored by GridUI.CARRIER_RATIOS / MODULATOR_RATIOS — keep in sync.
+--
+-- CARRIER set: 5-limit just ratios across ~4 octaves (every value factors into
+-- 2*3*5 in both numerator & denominator). 32 ascending values = one full grid picker.
+local CARRIER_RATIOS = {
+  -- sub-octave: 1/2 3/5 5/8 2/3 3/4 4/5 5/6 15/16
+  0.5, 0.6, 0.625, 0.667, 0.75, 0.8, 0.833, 0.9375,
+  -- octave 1-2: 1/1 9/8 6/5 5/4 4/3 3/2 8/5 5/3
+  1.0, 1.125, 1.2, 1.25, 1.333, 1.5, 1.6, 1.667,
+  -- octave 2-4: 15/8 2/1 12/5 5/2 8/3 3/1 16/5 10/3
+  1.875, 2.0, 2.4, 2.5, 2.667, 3.0, 3.2, 3.333,
+  -- octave 4-8: 15/4 4/1 24/5 5/1 16/3 6/1 15/2 8/1
+  3.75, 4.0, 4.8, 5.0, 5.333, 6.0, 7.5, 8.0,
 }
-Burst.RATIO_PICKER = RATIO_PICKER
--- Finer just-intonation ratios woven BETWEEN the coarse steps across the low/mid
--- range. Reachable ONLY via the op-ratio B index offset, which walks UP the merged
--- sorted list from a coarse A base (see op_ratio) — i.e. micro-tuning. Three bands:
-local RATIO_FINE = {
-  -- sub-unity (sub-octave JI, mirrors the 1-2 octave below the fundamental):
-  -- 1/3, 9/16, 3/5, 2/3, 7/10, 4/5, 5/6, 9/10, 15/16
-  0.333, 0.5625, 0.6, 0.667, 0.7, 0.8, 0.833, 0.9, 0.9375,
-  -- octave 1-2: 9/8, 6/5, 4/3, 7/5, 8/5, 5/3, 9/5, 15/8
-  1.125, 1.2, 1.333, 1.4, 1.6, 1.667, 1.8, 1.875,
-  -- 2-4 (denser): 11/5, 7/3, 12/5, 8/3, 14/5, 16/5, 10/3, 18/5, 15/4
-  2.2, 2.333, 2.4, 2.667, 2.8, 3.2, 3.333, 3.6, 3.75,
+Burst.CARRIER_RATIOS = CARRIER_RATIOS
+-- MODULATOR set: whole numbers (integer modulator -> harmonic sidebands) + unit
+-- divisions (subharmonic, keeps the spectrum periodic) + 5-limit-biased fractions
+-- (5/4, 5/3, 5/2, ... tilt the brightest sidebands onto the just thirds/fifths the
+-- key is tuned to). 32 ascending values.
+local MODULATOR_RATIOS = {
+  -- unit divisions + small 5-limit fractions below 1:
+  -- 1/8 1/6 1/5 1/4 1/3 2/5 1/2 3/5 2/3 3/4 4/5
+  0.125, 0.167, 0.2, 0.25, 0.333, 0.4, 0.5, 0.6, 0.667, 0.75, 0.8,
+  -- 5-limit fractions 1-2 + harmonic integers + 5-rich highs:
+  -- 1 5/4 4/3 3/2 5/3 2 5/2 3 10/3 15/4 4 5 6 7 8 9 10 11 12 14 16
+  1.0, 1.25, 1.333, 1.5, 1.667, 2.0, 2.5, 3.0, 3.333, 3.75, 4.0,
+  5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 14.0, 16.0,
 }
--- the full curated set = coarse + fine, sorted ascending so a B index step is a pitch
--- step. Mirrors GridUI.RATIO_VALUES / RATIO_PICKER / RATIO_FINE — keep in sync.
+Burst.MODULATOR_RATIOS = MODULATOR_RATIOS
+-- The full curated set = union of both, sorted ascending + de-duplicated. This is the
+-- STABLE index space the op-ratio B (index-offset) lane walks and that params store
+-- indices against; both role sets are subsets, so every value stays grid-reachable.
+-- Mirrors GridUI.RATIO_VALUES — keep in sync.
 local RATIO_VALUES = {}
-for _, v in ipairs(RATIO_PICKER) do RATIO_VALUES[#RATIO_VALUES + 1] = v end
-for _, v in ipairs(RATIO_FINE)   do RATIO_VALUES[#RATIO_VALUES + 1] = v end
-table.sort(RATIO_VALUES)
+do
+  local seen = {}
+  local function add(v) if not seen[v] then seen[v] = true; RATIO_VALUES[#RATIO_VALUES + 1] = v end end
+  for _, v in ipairs(CARRIER_RATIOS)   do add(v) end
+  for _, v in ipairs(MODULATOR_RATIOS) do add(v) end
+  table.sort(RATIO_VALUES)
+end
 Burst.RATIO_VALUES = RATIO_VALUES
 
 -- value -> 1-based index in RATIO_VALUES (exact for picked values; nearest otherwise).
@@ -99,6 +119,9 @@ Burst.op_ratio = op_ratio
 -- Which operators are modulators (appear as a 'from' in some edge) per algorithm
 -- 1..16. Mirrors Engine_Potionshop.algorithms (SC) — keep in sync; used only to
 -- pick the brightness proxy (largest active modulator ratio) for MIDI/crow out.
+-- Non-carrier (modulator) ops per algo 1..22. For 17..22 these include the AM/ring
+-- source ops too (they appear as a 'from' in an amEdge). op1 is a carrier in every
+-- algorithm. Mirrors Engine_Potionshop.algorithms (pmEdges + amEdges) — keep in sync.
 local ALGO_MODULATORS = {
   {2, 3, 4}, {2, 3, 4}, {2, 3, 4}, {2, 3, 4},
   {2, 4}, {4}, {4}, {},  -- 8 = additive (no modulators)
@@ -110,8 +133,39 @@ local ALGO_MODULATORS = {
   {3, 4},                -- 14: (4,3)->1 + pure op2
   {4},                   -- 15: op4 mods 2 carriers + pure op3
   {3, 4},                -- 16: twin 2-op stacks (4->2, 3->1)
+  {2},                   -- 17: op2 ring-mods op1 (two bare carriers)
+  {2, 4},                -- 18: twin ring pairs (2->1, 4->3)
+  {3, 4},                -- 19: 4->3 PM stack ring-mods op1 (pure op2)
+  {4},                   -- 20: op4 AM-shimmers three carriers
+  {2, 3, 4},             -- 21: ring chain 4(x)3(x)2(x)1
+  {2, 3, 4},             -- 22: (4,3)->1 PM + op2 AM-shimmers op1
+  {2, 4},                -- 23: twin AM pairs (2~1, 4~3)
+  {4},                   -- 24: op4 ring-mods three carriers
+  {2, 4},                -- 25: 2->1 PM stack + 4~3 AM pair
+  {2, 3, 4},             -- 26: AM chain 4~3~2~1
+  {2, 3, 4},             -- 27: op1 hit by PM(4) + ring(3) + AM(2)
+  {2, 3, 4},             -- 28: 3->2->1 PM stack + op4 AM-shimmer
+  {2, 3, 4},             -- 29: (4,3)->2 PM carrier ring-mods op1
+  {3, 4},                -- 30: twin ring pairs (4x2, 3x1)
+  {3, 4},                -- 31: twin AM pairs (4~2, 3~1)
+  {2, 3, 4},             -- 32: 4->3 PM then AM chain 3~2~1
 }
 Burst.ALGO_MODULATORS = ALGO_MODULATORS
+
+-- An op is a carrier under `algo` iff it is NOT in that algo's modulator list. Drives
+-- the dynamic op-ratio set selection (carriers -> CARRIER_RATIOS, else MODULATOR_RATIOS)
+-- in randomize/mutate and the grid op-ratio pickers (mirrored in lib/grid_ui.lua).
+local function is_carrier(algo, op)
+  local mods = ALGO_MODULATORS[algo] or {}
+  for _, m in ipairs(mods) do if m == op then return false end end
+  return true
+end
+Burst.is_carrier = is_carrier
+-- The op-ratio set for op `op` under `algo`: 5-limit carriers, else harmonic modulators.
+local function op_ratio_set(algo, op)
+  return is_carrier(algo, op) and CARRIER_RATIOS or MODULATOR_RATIOS
+end
+Burst.op_ratio_set = op_ratio_set
 
 -- Envelope SHAPES. Each is a normalized contour scaled at fire time to the channel's
 -- *known* inter-hit slot (gap_sec), so every shape "fits the schedule" automatically.
@@ -765,15 +819,15 @@ function Burst:randomize(ch)
   c.ampShape = seqx.new{math.random(1, SHAPE_PERC_COUNT)}
   c.modShape = seqx.new{math.random(1, SHAPE_PERC_COUNT)}
   -- op2/3/4 FM ratios ARE scrambled (timbral variety): each gets a SINGLE random A
-  -- value from the curated grid-reachable set (held, not stepped — like the shapes
-  -- above; the picker can still highlight/edit it; the reachability test asserts it).
-  -- The B (offset) layer is left intact, like noteB. op1 is ALSO sequenced
-  -- now, but randomize leaves it alone (A stays at the 1.0 anchor) so a randomized
-  -- channel keeps a fundamental and stays pitched — op1 is usually the carrier
-  -- (mutate likewise).
-  c.opRatio2 = seqx.new{pick(RATIO_PICKER)}
-  c.opRatio3 = seqx.new{pick(RATIO_PICKER)}
-  c.opRatio4 = seqx.new{pick(RATIO_PICKER)}
+  -- value drawn from its ROLE set under this channel's algo — CARRIER_RATIOS if the op
+  -- is a carrier, else MODULATOR_RATIOS (held, not stepped, like the shapes above; the
+  -- picker can still highlight/edit it; the reachability test asserts it). The B
+  -- (offset) layer is left intact, like noteB. op1 is ALSO sequenced now, but randomize
+  -- leaves it alone (A stays at the 1.0 anchor) so a randomized channel keeps a
+  -- fundamental and stays pitched — op1 is a carrier in every algo (mutate likewise).
+  c.opRatio2 = seqx.new{pick(op_ratio_set(c.algo, 2))}
+  c.opRatio3 = seqx.new{pick(op_ratio_set(c.algo, 3))}
+  c.opRatio4 = seqx.new{pick(op_ratio_set(c.algo, 4))}
   -- The engine-wide modes (envMode/geodeMode) and per-op LEVELS are
   -- left untouched: a randomized op1 = 0 would silently kill the channel (op1 is
   -- usually the carrier), so the operator level balance stays a deliberate,
@@ -810,17 +864,25 @@ function Burst:mutate(ch, amount)
   local function nudge_shape(v) return clamp(round(v + jitter(amount * 4)), 1, #SHAPES) end
   c.ampShape = map(c.ampShape, nudge_shape)
   c.modShape = map(c.modShape, nudge_shape)
-  -- nudge each sequenced op ratio A step to a neighbouring picker value (keeps them
-  -- grid-exact AND within the first-32 A-picker range; the B offset lane is left
-  -- untouched). op2/3/4 are nudged; op1 is left at its anchor (see randomize).
-  local function nudge_ratio(v)
-    local idx = 1
-    for i, r in ipairs(RATIO_PICKER) do if r == v then idx = i break end end
-    return RATIO_PICKER[clamp(idx + (jitter(amount) > 0 and 1 or -1), 1, #RATIO_PICKER)]
+  -- nudge each sequenced op ratio A step to a neighbouring value within its ROLE set
+  -- (carrier vs modulator, per the channel's algo) so it stays grid-exact and in
+  -- family; the B offset lane is left untouched. op2/3/4 are nudged; op1 stays at its
+  -- anchor (see randomize). If a value is orphaned (algo changed its role), we snap
+  -- from the nearest entry in the new set first.
+  local function nearest_idx(set, v)
+    local bi, bd = 1, math.huge
+    for i, r in ipairs(set) do local d = math.abs(r - v); if d < bd then bd = d; bi = i end end
+    return bi
   end
-  c.opRatio2 = map(c.opRatio2, nudge_ratio)
-  c.opRatio3 = map(c.opRatio3, nudge_ratio)
-  c.opRatio4 = map(c.opRatio4, nudge_ratio)
+  local function nudge_ratio_in(set)
+    return function(v)
+      local idx = nearest_idx(set, v)
+      return set[clamp(idx + (jitter(amount) > 0 and 1 or -1), 1, #set)]
+    end
+  end
+  c.opRatio2 = map(c.opRatio2, nudge_ratio_in(op_ratio_set(c.algo, 2)))
+  c.opRatio3 = map(c.opRatio3, nudge_ratio_in(op_ratio_set(c.algo, 3)))
+  c.opRatio4 = map(c.opRatio4, nudge_ratio_in(op_ratio_set(c.algo, 4)))
 end
 
 return Burst

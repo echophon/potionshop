@@ -427,7 +427,7 @@ function M:_add_channel_params(n)
       function(p) return string.format('%.2f', p:get() / 31 * 4) end)
     params:set_action(id('fm_feedback'), function(v) c.fmFeedback = v / 31 * 4; self:request_render() end)
   end)
-  -- per-channel FM algorithm (1..16, DX-style operator routing) — an option on the
+  -- per-channel FM algorithm (1..22, DX-style operator routing) — an option on the
   -- MIX page's last column. Was an engine-wide VOICE macro until it moved here.
   def(1, function()
     params:add_option(id('algorithm'), 'algorithm', GridUI.ALGO_NAMES, c.algo)
