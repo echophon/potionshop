@@ -109,73 +109,73 @@ Engine_Potionshop : CroneEngine {
 			c1 = 1, c2 = 0, c3 = 0, c4 = 0,                 // carrier gains
 			lvl1 = 1, lvl2 = 1, lvl3 = 1, lvl4 = 1,         // per-operator output levels
 			modIndex = 4, amDepth = 0, feedback = 0,        // PM depth (rad), AM/ring depth (0..1), op4 self-FB (rad)
-			attack = 0.001, ampDecay = 0.4,                 // carrier amp env attack/decay times
-			ampAtkCurve = -4, ampDecCurve = -4,             // carrier env per-segment Env curves
-			modAttack = 0.001, modDecay = 0.2,              // modulator brightness env atk/dec times
-			modAtkCurve = -4, modDecCurve = -4,             // modulator env per-segment Env curves
+			atk1 = 0.001, dec1 = 0.4, atkCurve1 = -4, decCurve1 = -4,  // op1 EG (atk/dec times + per-segment curves)
+			atk2 = 0.001, dec2 = 0.2, atkCurve2 = -4, decCurve2 = -4,  // op2 EG
+			atk3 = 0.001, dec3 = 0.2, atkCurve3 = -4, decCurve3 = -4,  // op3 EG
+			atk4 = 0.001, dec4 = 0.2, atkCurve4 = -4, decCurve4 = -4,  // op4 EG
 			drive = 1, gate = 1,                            // soft-clip, voice gate
 			pan = 0;                                        // stereo position (-1 L .. +1 R)
-			var ampEnv, cut, mEnv, modEnv, amEnv, o1, o2, o3, o4, sig, driveMix;
+			var e1, e2, e3, e4, cut, free, maxTime, o1, o2, o3, o4, sig, driveMix;
 
-			// shared modulator envelope (unit 0->1->0): both the PM brightness depth
-			// and the AM/ring depth ride it so AM shimmer and FM brightness track the
-			// same contour. Axes + per-segment curves come from the per-channel
-			// sequenced modShape. Env.new (vs the old Env.perc) lets attack + decay
-			// carry independent curves -- the whole point of the SHAPE control.
-			mEnv = EnvGen.kr(
-				Env.new([0, 1, 0], [modAttack, max(0.01, modDecay)], [modAtkCurve, modDecCurve])
-			);
-			modEnv = modIndex * mEnv;   // PM depth in radians, enveloped
-			amEnv  = amDepth  * mEnv;   // AM/ring depth in 0..1, enveloped
-
-			// carrier amp env from the per-channel sequenced ampShape (atk/dec times +
-			// independent per-segment curves); frees the synth on completion.
-			ampEnv = EnvGen.kr(
-				Env.new([0, 1, 0], [attack, max(0.01, ampDecay)], [ampAtkCurve, ampDecCurve]),
-				doneAction: Done.freeSelf
-			);
+			// PER-OPERATOR envelope generators (DX-style EG): each shapes its own
+			// operator's output (unit 0->1->0). A carrier's eN is its amplitude
+			// contour; a modulator's eN is the FM-depth / AM-depth / brightness
+			// contour it imparts, because eN rides into oN, which feeds the lower
+			// ops' phase (PM) and amplitude (AM/ring) terms below. Axes + per-segment
+			// curves come from each per-channel sequenced opEnvN shape.
+			e1 = EnvGen.kr(Env.new([0, 1, 0], [atk1, max(0.01, dec1)], [atkCurve1, decCurve1]));
+			e2 = EnvGen.kr(Env.new([0, 1, 0], [atk2, max(0.01, dec2)], [atkCurve2, decCurve2]));
+			e3 = EnvGen.kr(Env.new([0, 1, 0], [atk3, max(0.01, dec3)], [atkCurve3, decCurve3]));
+			e4 = EnvGen.kr(Env.new([0, 1, 0], [atk4, max(0.01, dec4)], [atkCurve4, decCurve4]));
 
 			// voice gate: each channel is monophonic, so a new hit releases the
 			// previous voice on that channel over ~6ms (click-free) instead of
 			// letting its tail drone into the next note. asr sits at 1 while gate=1
-			// and frees on release; the perc env above frees first if it completes.
+			// and frees on release.
 			cut = EnvGen.kr(
 				Env.asr(0, 1, 0.006, \lin), gate,
 				doneAction: Done.freeSelf
 			);
 
+			// natural free: a silent timer that outlives the LONGEST operator
+			// envelope, then frees the node. We can't put doneAction on the per-op
+			// EGs individually -- the first to finish would cut a still-ringing
+			// sibling -- so this single timer owns the lifetime. Does not shape sound.
+			maxTime = max(max(atk1 + dec1, atk2 + dec2), max(atk3 + dec3, atk4 + dec4));
+			free = EnvGen.kr(Env.new([0, 1], [maxTime + 0.05], \lin), doneAction: Done.freeSelf);
+
 			// top-down pass: each operator's phase is modulated by the (already
-			// computed) higher-numbered operators feeding it. op4 is the feedback
-			// operator (SinOscFB self-PM); the rest take a phase input via SinOsc.
-			// Each operator's output is scaled by its level `lvlN` -- which doubles
-			// as its FM depth when it modulates a lower op (it carries lvl into the
-			// phase term below) and its mix gain when it's a carrier (in the sum).
-			o4 = SinOscFB.ar(freq * r4, feedback) * lvl4;
-			o3 = SinOsc.ar(freq * r3, modEnv * (m43 * o4)) * lvl3;
-			o2 = SinOsc.ar(freq * r2, modEnv * (m42 * o4 + m32 * o3)) * lvl2;
-			o1 = SinOsc.ar(freq * r1, modEnv * (m41 * o4 + m31 * o3 + m21 * o2)) * lvl1;
+			// computed) higher-numbered operators feeding it, scaled by the static
+			// modIndex (PM depth, radians). op4 is the feedback operator (SinOscFB
+			// self-PM); the rest take a phase input via SinOsc. Each operator's
+			// output is scaled by its level `lvlN` AND its own envelope `eN`, so a
+			// modulator's enveloped output IS its time-varying FM depth.
+			o4 = SinOscFB.ar(freq * r4, feedback) * lvl4 * e4;
+			o3 = SinOsc.ar(freq * r3, modIndex * (m43 * o4)) * lvl3 * e3;
+			o2 = SinOsc.ar(freq * r2, modIndex * (m42 * o4 + m32 * o3)) * lvl2 * e2;
+			o1 = SinOsc.ar(freq * r1, modIndex * (m41 * o4 + m31 * o3 + m21 * o2)) * lvl1 * e1;
 
 			// amplitude/ring modulation post-pass (higher op modulates a lower op's
 			// amplitude). Applied top-down (o3, o2, o1) so ring chains cascade through
-			// the already-modified outputs. Both ride amEnv (= amDepth*modShape, depth
-			// from the modIndex macro), so amEnv = 0 leaves PM-only algorithms untouched
-			// and dialing modIndex sweeps depth dry -> full. AM keeps the carrier:
-			// o*(1 + amEnv*src). Ring crossfades carrier -> ringed: o*(1 + amEnv*(src-1))
-			// = o*src at full depth. Assumes at most one ring source per target (true for
-			// the algorithm table).
-			o3 = o3 * (1 + (amEnv * (a43 * o4)));
-			o3 = o3 * (1 + (amEnv * (g43 * (o4 - 1))));
-			o2 = o2 * (1 + (amEnv * (a42 * o4 + a32 * o3)));
-			o2 = o2 * (1 + (amEnv * (g42 * (o4 - 1) + g32 * (o3 - 1))));
-			o1 = o1 * (1 + (amEnv * (a41 * o4 + a31 * o3 + a21 * o2)));
-			o1 = o1 * (1 + (amEnv * (g41 * (o4 - 1) + g31 * (o3 - 1) + g21 * (o2 - 1))));
+			// the already-modified outputs. Depth = static amDepth (the modulating
+			// op's own envelope already rides in oN), so amDepth = 0 leaves PM-only
+			// algorithms untouched and dialing modIndex sweeps depth dry -> full. AM
+			// keeps the carrier: o*(1 + amDepth*src). Ring crossfades carrier -> ringed:
+			// o*(1 + amDepth*(src-1)) = o*src at full depth. Assumes at most one ring
+			// source per target (true for the algorithm table).
+			o3 = o3 * (1 + (amDepth * (a43 * o4)));
+			o3 = o3 * (1 + (amDepth * (g43 * (o4 - 1))));
+			o2 = o2 * (1 + (amDepth * (a42 * o4 + a32 * o3)));
+			o2 = o2 * (1 + (amDepth * (g42 * (o4 - 1) + g32 * (o3 - 1))));
+			o1 = o1 * (1 + (amDepth * (a41 * o4 + a31 * o3 + a21 * o2)));
+			o1 = o1 * (1 + (amDepth * (g41 * (o4 - 1) + g31 * (o3 - 1) + g21 * (o2 - 1))));
 
-			// sum carriers, apply amp env + voice-gate + level.
-			// 0.5 master gain: halve the level range so a mid `level` reads as a
+			// sum carriers (each already enveloped by its own eN), apply voice-gate +
+			// level. 0.5 master gain: halve the level range so a mid `level` reads as a
 			// moderate hit rather than a heavy accent, and leave headroom for
 			// additive / multi-channel sums (the limiter still backstops peaks).
 			sig = (c1 * o1) + (c2 * o2) + (c3 * o3) + (c4 * o4);
-			sig = sig * ampEnv * cut * amp * 0.5;
+			sig = sig * cut * amp * 0.5;
 
 			// soft-clip drive: drive=1 is clean, higher blends in tanh saturation
 			// and raises pre-gain together. Master Limiter catches the peaks.
@@ -203,33 +203,35 @@ Engine_Potionshop : CroneEngine {
 		]);
 
 		// trig(freq, amp, algo, r2, r3, r4, modIndex,
-		//      attack, ampDecay, ampDecCurve, modDecay, feedback, drive, ch,
-		//      lvl1, lvl2, lvl3, lvl4, modAttack, r1,
-		//      ampAtkCurve, modAtkCurve, modDecCurve, pan)
+		//      feedback, drive, ch, lvl1, lvl2, lvl3, lvl4, r1, pan,
+		//      atk1, dec1, atkCurve1, decCurve1,   // op1 EG
+		//      atk2, dec2, atkCurve2, decCurve2,   // op2 EG
+		//      atk3, dec3, atkCurve3, decCurve3,   // op3 EG
+		//      atk4, dec4, atkCurve4, decCurve4)   // op4 EG  -- 32 floats total
 		//
-		// `algo` (1..16) selects the routing/carrier data; the rest are the final
+		// `algo` (1..32) selects the routing/carrier data; the rest are the final
 		// per-hit values Burst:fire already computes. The handler expands `algo`
 		// into the SynthDef's edge weights + carrier gains (static per note). `ch`
 		// (1..6) is the channel: each channel is monophonic, so a new hit releases
 		// the previous voice on that channel before spawning the new one. lvl1..4
-		// are the global per-operator output levels. The carrier + modulator
-		// envelopes come from the per-channel sequenced SHAPE indices, resolved in
-		// Burst:fire to attack/decay times + per-segment curves; r1 is op1's
-		// per-channel ratio. modAttack[19], r1[20] and the three curve args[21..23]
-		// are appended so the older positional args keep their indices.
-		this.addCommand("trig", "ffffffffffffffffffffffff", { arg msg;
+		// are the per-operator output levels; r1 is op1's per-channel ratio. Each
+		// operator carries its OWN envelope (per-op EG) from its sequenced opEnvN
+		// shape, resolved in Burst:fire to {atk, dec, atkCurve, decCurve} and grouped
+		// per op at args 17..32.
+		this.addCommand("trig", "ffffffffffffffffffffffffffffffff", { arg msg;
 			var freq = msg[1], amp = msg[2];
 			var algo = msg[3].asInteger.clip(1, 32);
 			var r2 = msg[4], r3 = msg[5], r4 = msg[6];
 			var modIndex = msg[7];
-			var attack = msg[8], ampDecay = msg[9], ampDecCurve = msg[10], modDecay = msg[11];
-			var feedback = msg[12], drive = msg[13];
-			var ch = msg[14].asInteger.clip(1, numChannels);
-			var lvl1 = msg[15], lvl2 = msg[16], lvl3 = msg[17], lvl4 = msg[18];
-			var modAttack = msg[19];
-			var r1 = msg[20];
-			var ampAtkCurve = msg[21], modAtkCurve = msg[22], modDecCurve = msg[23];
-			var pan = msg[24];
+			var feedback = msg[8], drive = msg[9];
+			var ch = msg[10].asInteger.clip(1, numChannels);
+			var lvl1 = msg[11], lvl2 = msg[12], lvl3 = msg[13], lvl4 = msg[14];
+			var r1 = msg[15];
+			var pan = msg[16];
+			var atk1 = msg[17], dec1 = msg[18], atkCurve1 = msg[19], decCurve1 = msg[20];
+			var atk2 = msg[21], dec2 = msg[22], atkCurve2 = msg[23], decCurve2 = msg[24];
+			var atk3 = msg[25], dec3 = msg[26], atkCurve3 = msg[27], decCurve3 = msg[28];
+			var atk4 = msg[29], dec4 = msg[30], atkCurve4 = msg[31], decCurve4 = msg[32];
 			var spec, edges, carriers, amEdges, cgain, weights, amWeights, pmIndex, amDepth, voice;
 
 			spec = algorithms[algo - 1];
@@ -283,10 +285,10 @@ Engine_Potionshop : CroneEngine {
 				\c4, carriers.includes(4).if(cgain, 0),
 				\lvl1, lvl1, \lvl2, lvl2, \lvl3, lvl3, \lvl4, lvl4,
 				\modIndex, pmIndex, \feedback, feedback,
-				\attack, attack, \ampDecay, ampDecay,
-				\ampAtkCurve, ampAtkCurve, \ampDecCurve, ampDecCurve,
-				\modAttack, modAttack, \modDecay, modDecay,
-				\modAtkCurve, modAtkCurve, \modDecCurve, modDecCurve,
+				\atk1, atk1, \dec1, dec1, \atkCurve1, atkCurve1, \decCurve1, decCurve1,
+				\atk2, atk2, \dec2, dec2, \atkCurve2, atkCurve2, \decCurve2, decCurve2,
+				\atk3, atk3, \dec3, dec3, \atkCurve3, atkCurve3, \decCurve3, decCurve3,
+				\atk4, atk4, \dec4, dec4, \atkCurve4, atkCurve4, \decCurve4, decCurve4,
 				\drive, drive, \pan, pan
 			], fmGroup);
 			voices[ch - 1] = voice;

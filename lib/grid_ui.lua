@@ -20,24 +20,23 @@
 --               (div/reps have no B layer). The lane you edit is the half you
 --               press; there is no A/B flip (no double-press). See row_lanes.
 --   row 6     = 0 note · 1 op1 ratio · 2 op2 ratio · 3 op3 ratio · 4 op4 ratio
---             · 5..7 dark · 8..10 launch ch0,1,2
+--             · 5..10 dark
 --             · 11 MIX · 12 PERF · 13 PROB · 14 SCALE · 15 QNT
 --               (SCALE opens the scale picker; QNT is the per-channel quantize
 --               page. KB page disabled; FM algorithm, env mode and geode are
 --               global params, not grid pages -- the old SND page was reclaimed)
---   row 7     = 0 div/reps · 1 SHP (ampShape/modShape) · 2..7 dark
---             · 8..10 launch ch3,4,5
+--   row 7     = 0 div/reps · 1 opEnv1 · 2 opEnv2 · 3 opEnv3 · 4 opEnv4
+--             · 5..10 launch ch0..5 (channels 1..6)
 --             · 11 COPY · 12 PASTE · 13 CLR · 14 RANDOMIZE · 15 MUTATE
 --   Page-select buttons (one per sequence page) are split across the two control
---   rows: row 6 cols 0..4 = note + the four op-ratio pages; row 7 cols 0..1 =
---   div/reps + the SHP page. div/reps and ampShape/modShape are paired pages
---   showing two A-layer lanes; the SHP page is the single envelope page (left lane
---   = carrier amp shape, right lane = modulator/FM-bright shape, each a 1-based
---   index into the curated shape table). All four op ratios are sequenced pages
---   (A value | B offset, like note); channel level + op levels stay static on the
---   MIX page.
---   Channel launch/stop is a 3x2 block at cols 8..10 (row 6 = ch0,1,2; row 7 =
---   ch3,4,5). A button toggles its channel's launch/stop; when an action mode
+--   rows: row 6 cols 0..4 = note + the four op-ratio pages; row 7 cols 0..4 =
+--   div/reps + the four per-op envelope pages (opEnv1..4). div/reps is the only
+--   paired page (two A-layer lanes); the op-env pages are A/B sequenced like the op
+--   ratios — A = a 1-based shape index into the curated table, B = an integer index
+--   offset that walks the table. All four op ratios are likewise sequenced pages
+--   (A value | B offset); channel level + op levels stay static on the MIX page.
+--   Channel launch/stop is a contiguous 1x6 strip on row 7 at cols 5..10 (col 5+ch =
+--   channel ch+1). A button toggles its channel's launch/stop; when an action mode
 --   (CLR/COPY/PASTE/RANDOMIZE/MUTATE) is armed it instead targets that channel.
 --   CLR clears BOTH layers (A + the B/alt layer where present) of the tapped
 --   channel; COPY/PASTE act on the MAIN (A-layer) sequins only, leaving the B (alt)
@@ -50,7 +49,7 @@
 --   PROB:  rows 0-5 = note alt-trig hold/step (cols 0-1)
 --          · op1/2/3/4 ratio-seq trig toggles (cols 3-6, single button each:
 --            off=hold, on=step)
---          · amp/mod env shape-seq trig toggles (cols 8-9, single button each)
+--          · op1/2/3/4 env shape-seq trig toggles (cols 7-10, single button each)
 --          · prob 25/50/75/100% (cols 11-14, right-justified)
 --          · col 15 burst/hit toggle
 --   PERF:  rows 0-5 = reset off/1/2/4 bars (cols 0..3) · octave -2..+2 (cols 5..9)
@@ -86,14 +85,15 @@ local NUM_CHANNELS = 6
 -- All sequenced params (the row-7 page buttons are a separate, smaller list —
 -- ROW7_PAGES — one per page). All four op FM ratios are sequenced (A value + B index
 -- offset, like note); channel level + op levels stay static on the MIX page.
-local PARAMS = {'div', 'reps', 'note', 'ampShape', 'modShape',
+local PARAMS = {'div', 'reps', 'note',
+                'opEnv1', 'opEnv2', 'opEnv3', 'opEnv4',
                 'opRatio1', 'opRatio2', 'opRatio3', 'opRatio4'}
 -- Paired params share one page as two A-layer lanes (left|right) instead of a
 -- param's own A|B layers: div|reps (an additive offset on division/repeats isn't
--- musical) and ampShape|modShape (the carrier vs modulator envelope shape, each a
--- single index into the shape table). A paired param therefore has no B layer;
--- every other param shows its A layer left, B right.
-local PAIRS = { {'div', 'reps'}, {'ampShape', 'modShape'} }
+-- musical). div/reps is now the ONLY paired page (the per-op envelopes are A/B
+-- sequenced, like the op ratios). A paired param has no B layer; every other param
+-- shows its A layer left, B right.
+local PAIRS = { {'div', 'reps'} }
 local PAIRED, PAIR_OF = {}, {}
 for _, pr in ipairs(PAIRS) do
   PAIRED[pr[1]] = true; PAIRED[pr[2]] = true
@@ -102,12 +102,11 @@ end
 local function has_b(param) return not PAIRED[param] end
 -- page-select buttons: ONE per page. A paired page is represented by its first
 -- member (selecting it shows both lanes via row_lanes); singles are themselves.
--- The pages are split across the two control rows: the note + four op-ratio pages
--- live on ROW 6 (cols 0..4), and the timing/envelope pages (div/reps + the SHP
--- ampShape|modShape page) live on ROW 7 (cols 0..1). Each list maps to cols
--- 0..#list-1 on its row.
+-- The pages are split across the two control rows: ROW 6 (cols 0..4) = note + the
+-- four op-ratio pages; ROW 7 (cols 0..4) = div/reps + the four per-op envelope
+-- pages (opEnv1..4). Each list maps to cols 0..#list-1 on its row.
 local ROW6_PAGES = {'note', 'opRatio1', 'opRatio2', 'opRatio3', 'opRatio4'}
-local ROW7_PAGES = {'div', 'ampShape'}
+local ROW7_PAGES = {'div', 'opEnv1', 'opEnv2', 'opEnv3', 'opEnv4'}
 
 -- row 7 action buttons: COPY | PASTE | CLR | RANDOMIZE | MUTATE (copy/paste sit to
 -- the left, clear immediately right of them).
@@ -127,16 +126,16 @@ local ROW6_PERF_COL = 12
 local ROW6_PROB_COL = 13
 local ROW6_SCALE_COL = 14 -- opens the scale picker (scale preset / degrees / root)
 local ROW6_QNT_COL = 15   -- per-channel QNT page (event snap grid, curated set)
--- Channel launch/stop (and action-target) buttons: a 3-wide x 2-tall block at
--- cols 8..10 on rows 6 & 7. Row 6 = channels 0,1,2; row 7 = channels 3,4,5
--- (ch -> col 8 + ch%3, row 6 + ch//3). Moved here from the old row-6 cols 0..5
--- strip so the bottom-left stays a clean continuation of the page rows.
-local LAUNCH_COL0 = 8
-local LAUNCH_COLS = 3
--- (x, y) -> channel 0..5 if it falls in the launch block, else nil.
+-- Channel launch/stop (and action-target) buttons: a single contiguous 1x6 strip on
+-- ROW 7 at cols 5..10 (channel ch -> col 5 + ch, so ch0..5 = channels 1..6). Sits
+-- between the row-7 page buttons (cols 0..4) and the action buttons (cols 11..15),
+-- filling the row. (Was a 3x2 block at cols 8..10 across rows 6 & 7.)
+local LAUNCH_COL0 = 5
+local LAUNCH_ROW  = 7
+-- (x, y) -> channel 0..5 if it falls in the launch strip, else nil.
 local function launch_channel_at(x, y)
-  if (y == 6 or y == 7) and x >= LAUNCH_COL0 and x < LAUNCH_COL0 + LAUNCH_COLS then
-    return (y - 6) * LAUNCH_COLS + (x - LAUNCH_COL0)
+  if y == LAUNCH_ROW and x >= LAUNCH_COL0 and x < LAUNCH_COL0 + NUM_CHANNELS then
+    return x - LAUNCH_COL0
   end
   return nil
 end
@@ -189,10 +188,11 @@ local ALT_TRIG_COLS  = {0, 1}                -- note alt(B) layer: hold / step
 -- space (vs the note pair). Cols 3/4/5/6 -> opRatio1/2/3/4 trig.
 local OP_TRIG_COLS   = {3, 4, 5, 6}
 local OP_TRIG_FIELDS = {'opRatio1Trig', 'opRatio2Trig', 'opRatio3Trig', 'opRatio4Trig'}
--- amp/mod envelope-shape sequence trig: ONE button each (off=hold, on=step), same as
--- the op-ratio toggles. Cols 8/9 -> ampShape/modShape trig (step walks the A lane).
-local SHAPE_TRIG_COLS   = {8, 9}
-local SHAPE_TRIG_FIELDS = {'ampShapeTrig', 'modShapeTrig'}
+-- per-op envelope sequence trig: ONE button each (off=hold, on=step), same as the
+-- op-ratio toggles. Cols 7/8/9/10 -> opEnv1/2/3/4 trig (step walks that op env's B
+-- index-offset lane, like the op ratios).
+local OP_ENV_TRIG_COLS   = {7, 8, 9, 10}
+local OP_ENV_TRIG_FIELDS = {'opEnv1Trig', 'opEnv2Trig', 'opEnv3Trig', 'opEnv4Trig'}
 local PROB_VALUES   = {0.25, 0.5, 0.75, 1.0}
 local PROB_COLS     = {11, 12, 13, 14}
 local PROB_HIT_COL  = 15
@@ -219,23 +219,38 @@ local ALT_TRIG_MODE_NAMES  = {'hold', 'step'}
 -- Curated per-operator FM ratios, in two role sets. Mirrors Burst.CARRIER_RATIOS /
 -- MODULATOR_RATIOS / RATIO_VALUES — keep in sync. The op-ratio A lane shows the set
 -- for that op's ROLE under the channel's algo (carrier -> CARRIER_RATIOS 5-limit just
--- intervals; modulator -> MODULATOR_RATIOS whole numbers + divisions). Each set is 32
--- values = one full grid picker (rows 6-7: cols 0..15 = 1..16, second row = 17..32).
+-- intervals; modulator -> MODULATOR_RATIOS integers + divisions + fractions). Each set
+-- is 64 ascending values, biased LOW: the A grid picker (rows 6-7, two rows) exposes
+-- only the LOWER 32 (cols 0..15 = 1..16, second row = 17..32); the upper 32 (higher
+-- ratios) are B-offset reach only (op_ratio walks the role set). See Burst for the model.
 local CARRIER_RATIOS = {
-  0.5, 0.6, 0.625, 0.667, 0.75, 0.8, 0.833, 0.9375,
-  1.0, 1.125, 1.2, 1.25, 1.333, 1.5, 1.6, 1.667,
-  1.875, 2.0, 2.4, 2.5, 2.667, 3.0, 3.2, 3.333,
-  3.75, 4.0, 4.8, 5.0, 5.333, 6.0, 7.5, 8.0,
+  -- lower 32 (A picker, 0.25 .. 2.0):
+  0.25, 0.2667, 0.2778, 0.3, 0.3125, 0.3333, 0.375, 0.4,
+  0.4167, 0.4444, 0.5, 0.5333, 0.5556, 0.6, 0.625, 0.6667,
+  0.75, 0.8, 0.8333, 0.8889, 0.9, 1.0, 1.1111, 1.125,
+  1.2, 1.25, 1.3333, 1.5, 1.6, 1.6667, 1.8, 2.0,
+  -- upper 32 (B-offset reach, 2.0 .. 8.0):
+  2.0833, 2.2222, 2.25, 2.4, 2.5, 2.6667, 2.7, 2.7778,
+  3.0, 3.125, 3.2, 3.3333, 3.375, 3.5556, 3.6, 3.75,
+  4.0, 4.1667, 4.4444, 4.5, 4.8, 5.0, 5.3333, 5.4,
+  6.0, 6.25, 6.4, 6.6667, 6.75, 7.2, 7.5, 8.0,
 }
 local MODULATOR_RATIOS = {
-  0.125, 0.167, 0.2, 0.25, 0.333, 0.4, 0.5, 0.6, 0.667, 0.75, 0.8,
-  1.0, 1.25, 1.333, 1.5, 1.667, 2.0, 2.5, 3.0, 3.333, 3.75, 4.0,
-  5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 14.0, 16.0,
+  -- lower 32 (A picker, 0.25 .. 6.0 -- bright: integers 1..6 + simple fractions):
+  0.25, 0.3333, 0.4, 0.5, 0.6, 0.6667, 0.75, 0.8,
+  0.8333, 1.0, 1.2, 1.25, 1.3333, 1.4, 1.5, 1.6667,
+  1.75, 2.0, 2.25, 2.3333, 2.5, 2.6667, 3.0, 3.3333,
+  3.5, 3.6667, 4.0, 4.3333, 4.5, 5.0, 5.5, 6.0,
+  -- upper 32 (B-offset reach, 6.25 .. 16 -- high / inharmonic harmonics):
+  6.25, 6.3333, 6.5, 6.6667, 7.0, 7.3333, 7.5, 7.6667,
+  8.0, 8.3333, 8.5, 8.6667, 9.0, 9.3333, 9.5, 9.6667,
+  10.0, 10.3333, 10.5, 10.6667, 11.0, 11.3333, 11.5, 12.0,
+  12.5, 13.0, 13.5, 14.0, 14.5, 15.0, 15.5, 16.0,
 }
 -- full set = union of both, sorted ascending + de-duplicated. This is the STABLE index
--- space the op-ratio B (index-offset) lane walks and that params store indices against
--- (both role sets are subsets). The grid step picker filters to the role set; the union
--- is the fallback/contract superset. Mirrors Burst.RATIO_VALUES — keep in sync.
+-- space params store A values against (both role sets are subsets). The B (index-offset)
+-- lane no longer walks this union — it walks the op's ROLE SET (see Burst.op_ratio). The
+-- grid step picker filters to the role set's lower 32. Mirrors Burst.RATIO_VALUES — keep in sync.
 local RATIO_VALUES = {}
 do
   local seen = {}
@@ -260,28 +275,42 @@ end
 local function op_ratio_set(algo, op)
   return is_carrier(algo, op) and CARRIER_RATIOS or MODULATOR_RATIOS
 end
--- op-ratio B lane: integer INDEX offsets 0..31 (0 = no shift, the default). Adding
--- this to the A ratio's index walks UP RATIO_VALUES into the finer in-between ratios.
+-- op-ratio / op-env B lane: integer INDEX offsets 0..31 (0 = no shift, the default).
+-- For op ratios this walks UP the op's ROLE SET (the lower-32 A pick into the upper 32);
+-- for op envelopes it walks UP the SHAPES table to neighbouring contours.
 local OP_RATIO_OFFSETS = {}
 for i = 0, 31 do OP_RATIO_OFFSETS[i + 1] = i end
 
 -- Envelope shape names, mirroring Burst.SHAPES order/count (keep in sync). The
--- ampShape/modShape sequences and pickers index 1..#SHAPE_NAMES; the actual contour
--- data (attack/decay muls + per-segment curves) lives only in lib/burst.lua (the SC
--- engine never sees a shape -- fire() resolves it). The grid needs just count + labels.
--- ordered by attack length (see Burst.SHAPES): row 1 = instant attack, row 2 = growing.
-local SHAPE_NAMES = {'click', 'snap', 'tap', 'pip', 'pop', 'pluck', 'drum', 'body',
-                     'exp', 'log', 'glass', 'tail', 'bell', 'long', 'hold', 'drone',
-                     'lin', 'soft', 'round', 'fade', 'puff', 'surge', 'swell', 'arc',
-                     'ramp', 'bloom', 'huge', 'pad', 'bow', 'wedge', 'rise', 'revrs'}
-local SHAPE_COUNT = #SHAPE_NAMES
--- defaults mirror Burst.SHAPE_CARRIER_DEFAULT / SHAPE_MOD_DEFAULT
-local SHAPE_CARRIER_DEFAULT, SHAPE_MOD_DEFAULT = 12, 8
+-- opEnv1..4 sequences index 1..#SHAPE_NAMES; the actual contour data (attack/decay
+-- muls + per-segment curves) lives only in lib/burst.lua (the SC engine never sees a
+-- shape -- fire() resolves it). The grid needs just count + labels.
+-- The table is SORTED SHORTEST -> LONGEST by total length (atkMul+decMul). Shapes
+-- 1..32 are the A-PICKER bank = the 32 SHORTEST contours. Shapes 33..64 are the longer
+-- half, reached ONLY by the B index-offset lane added onto an A pick (see Burst.SHAPES
+-- / op_env), so B EXTENDS a short A pick toward longer tails.
+local SHAPE_NAMES = {'tick', 'dust', 'tock', 'clip', 'prick', 'chip', 'grain', 'dit',
+                     'spike', 'tic', 'nip', 'blip', 'nick', 'plip', 'click', 'ping',
+                     'dot', 'spit', 'rim', 'knock', 'flick', 'clave', 'dink', 'dab',
+                     'clap', 'zip', 'jab', 'poke', 'snap', 'zap', 'tink', 'plop',
+                     'ting', 'bop', 'tap', 'pip', 'pop', 'pluck', 'drum', 'soft',
+                     'round', 'puff', 'body', 'ramp', 'exp', 'log', 'lin', 'swell',
+                     'arc', 'glass', 'revrs', 'tail', 'rise', 'pad', 'wedge', 'bloom',
+                     'bell', 'bow', 'surge', 'long', 'fade', 'hold', 'huge', 'drone'}
+local SHAPE_COUNT = #SHAPE_NAMES   -- 64 total contours
+-- The A lane's picker exposes only the first 32 (two grid rows) = the shortest half;
+-- the upper 32 (longer) are reachable by ADDING the B index-offset onto an A pick. The
+-- A brightness gradient normalizes against this so the A row reads full-scale.
+local SHAPE_PICKER_COUNT = 32
+-- defaults mirror Burst.SHAPE_CARRIER_DEFAULT / SHAPE_MOD_DEFAULT ('plop' / 'knock')
+local SHAPE_CARRIER_DEFAULT, SHAPE_MOD_DEFAULT = 32, 20
 
 local DEFAULT_VALUE   = {div = 8, reps = 3, note = 0,
-                         ampShape = SHAPE_CARRIER_DEFAULT, modShape = SHAPE_MOD_DEFAULT,
+                         opEnv1 = SHAPE_CARRIER_DEFAULT, opEnv2 = SHAPE_MOD_DEFAULT,
+                         opEnv3 = SHAPE_MOD_DEFAULT, opEnv4 = SHAPE_MOD_DEFAULT,
                          opRatio1 = 1, opRatio2 = 1, opRatio3 = 1, opRatio4 = 1}  -- op ratio default = unison
 local DEFAULT_VALUE_B = {div = 0, reps = 0, note = 0,
+                         opEnv1 = 0, opEnv2 = 0, opEnv3 = 0, opEnv4 = 0,           -- op env offset default = 0 (none)
                          opRatio1 = 0, opRatio2 = 0, opRatio3 = 0, opRatio4 = 0}  -- op ratio offset default = 0 (none)
 
 -- 1-based value layouts for the step picker / KB bands. Index 1..32 maps to
@@ -302,10 +331,13 @@ local STEP_PICKER_VALUES = {
   note = range(32, function(i) return i end),
   -- (channel level is no longer a sequenced param — it's a MIX-page scalar using
   -- OP_LEVEL_VALUES, the same 0..1 in 1/31 layout the op levels use.)
-  -- envelope shapes: a flat 1..#SHAPES index list (the curated shape table); both
-  -- the carrier (ampShape) and modulator (modShape) lanes pick from it.
-  ampShape = range(SHAPE_COUNT, function(i) return i + 1 end),
-  modShape = range(SHAPE_COUNT, function(i) return i + 1 end),
+  -- per-op envelope shapes: a flat 1..#SHAPES index list (the curated shape table).
+  -- The A lane picks a shape index; the B lane is an integer index offset
+  -- (OP_RATIO_OFFSETS, via picker_layout) that walks UP the table, like the op ratios.
+  opEnv1 = range(SHAPE_PICKER_COUNT, function(i) return i + 1 end),
+  opEnv2 = range(SHAPE_PICKER_COUNT, function(i) return i + 1 end),
+  opEnv3 = range(SHAPE_PICKER_COUNT, function(i) return i + 1 end),
+  opEnv4 = range(SHAPE_PICKER_COUNT, function(i) return i + 1 end),
   -- sequenced op1/2/3/4 FM ratios: A indexes the STABLE union (RATIO_VALUES) for
   -- params storage + off-grid snapping; the grid step picker filters this to the op's
   -- role set (op_picker_layout). The B lane (an index offset) uses OP_RATIO_OFFSETS —
@@ -319,7 +351,10 @@ local STEP_PICKER_VALUES = {
 -- its A lane (integer index offsets vs ratios); every other lane uses one layout for
 -- both A and B (B's "no offset" literal-0 is handled where it's drawn/parsed).
 local function picker_layout(param, layer)
-  if layer == 'B' and param:match('^opRatio') then return OP_RATIO_OFFSETS end
+  -- op ratios and op envelopes share the integer index-offset B lane.
+  if layer == 'B' and (param:match('^opRatio') or param:match('^opEnv')) then
+    return OP_RATIO_OFFSETS
+  end
   return STEP_PICKER_VALUES[param]
 end
 -- Role-aware variant for the op-ratio A lane: the grid step picker shows only the
@@ -427,11 +462,17 @@ local function value_brightness(param, value, layer)
   elseif param == 'harm' then
     local norm = (value - 2) / 23.25
     b = clamp(round(4 + norm * 9), 4, VALUE_MAX)
-  elseif param == 'ampShape' or param == 'modShape' then
-    -- shape index 1..#SHAPES: brightness ramps with the index so the sequence row
-    -- reads as a contour gradient (low index = dim/short, high = bright).
-    local norm = clamp((value - 1) / math.max(1, SHAPE_COUNT - 1), 0, 1)
-    b = clamp(round(2 + norm * 11), 2, VALUE_MAX)
+  elseif param:match('^opEnv') then
+    if layer == 'B' then
+      -- B is an integer index offset 0..31: brightness ramps with the shift amount.
+      b = clamp(round(2 + clamp(value, 0, 31) / 31 * 11), 2, VALUE_MAX)
+    else
+      -- A shape index 1..SHAPE_PICKER_COUNT: brightness ramps with the index, and the
+      -- table is length-sorted, so the sequence row reads as a short->long gradient
+      -- (low index = short = dim, high index = longer = bright).
+      local norm = clamp((value - 1) / math.max(1, SHAPE_PICKER_COUNT - 1), 0, 1)
+      b = clamp(round(2 + norm * 11), 2, VALUE_MAX)
+    end
   else
     b = 6
   end
@@ -614,7 +655,7 @@ function GridUI:handle_normal_press(x, y)
     if self.probMode then
       local trig_idx = index_of(ALT_TRIG_COLS, x)
       local op_trig_idx = index_of(OP_TRIG_COLS, x)
-      local shape_trig_idx = index_of(SHAPE_TRIG_COLS, x)
+      local env_trig_idx = index_of(OP_ENV_TRIG_COLS, x)
       local prob_idx = index_of(PROB_COLS, x)
       if x == PROB_HIT_COL then
         self:set_scalar(y, 'probHit', not self:chan(y).probHit)
@@ -624,9 +665,9 @@ function GridUI:handle_normal_press(x, y)
         -- single-button toggle: hold (0) <-> step (1)
         local field = OP_TRIG_FIELDS[op_trig_idx + 1]
         self:set_scalar(y, field, (self:chan(y)[field] == 1) and 0 or 1)
-      elseif shape_trig_idx ~= -1 then
-        -- amp/mod env shape trig, same single-button toggle
-        local field = SHAPE_TRIG_FIELDS[shape_trig_idx + 1]
+      elseif env_trig_idx ~= -1 then
+        -- per-op env shape trig, same single-button toggle
+        local field = OP_ENV_TRIG_FIELDS[env_trig_idx + 1]
         self:set_scalar(y, field, (self:chan(y)[field] == 1) and 0 or 1)
       elseif prob_idx ~= -1 then
         self:set_scalar(y, 'burstProb', PROB_VALUES[prob_idx + 1])
@@ -1008,9 +1049,6 @@ function GridUI:handle_row6(x)
   end
   if x == ROW6_SCALE_COL then self:open_scale_picker(); return end
 
-  local ch = launch_channel_at(x, 6)
-  if ch then self:handle_channel_button(ch); return end
-
   if x < #ROW6_PAGES then self:select_page(ROW6_PAGES[x + 1]) end
 end
 
@@ -1215,11 +1253,11 @@ function GridUI:render_prob_row(ch)
     self.g:set_led(OP_TRIG_COLS[i], ch, on and 14 or 4)
     self.g:set_strobe(OP_TRIG_COLS[i], ch, on and 'slow' or 'off')
   end
-  -- amp/mod env shape-seq trig toggles (cols 8-9): same on/off treatment
-  for i = 1, #SHAPE_TRIG_COLS do
-    local on = c[SHAPE_TRIG_FIELDS[i]] == 1
-    self.g:set_led(SHAPE_TRIG_COLS[i], ch, on and 14 or 4)
-    self.g:set_strobe(SHAPE_TRIG_COLS[i], ch, on and 'slow' or 'off')
+  -- op1/2/3/4 env shape-seq trig toggles (cols 7-10): same on/off treatment
+  for i = 1, #OP_ENV_TRIG_COLS do
+    local on = c[OP_ENV_TRIG_FIELDS[i]] == 1
+    self.g:set_led(OP_ENV_TRIG_COLS[i], ch, on and 14 or 4)
+    self.g:set_strobe(OP_ENV_TRIG_COLS[i], ch, on and 'slow' or 'off')
   end
   -- prob options (right-justified): nearest discrete value highlighted
   local sel = nearest_index(PROB_VALUES, c.burstProb)
@@ -1266,9 +1304,9 @@ function GridUI:render_scaled_row(ch, values, cols, cur)
   end
 end
 
--- The channel launch/stop block (cols 8..10, rows 6 & 7). Drawn after row 6/7 so
--- it owns those cells regardless of which row it straddles. In an action mode the
--- buttons dim to 10 (the channel-target affordance); randomize/mutate also slow-
+-- The channel launch/stop strip (cols 5..10 on row 7). Drawn after row 6/7 so it
+-- owns those cells. In an action mode the buttons dim to 10 (the channel-target
+-- affordance); randomize/mutate also slow-
 -- strobe the running channels so you can see what you're about to scramble.
 -- Outside an action mode a RUNNING channel is solid full-bright; an IDLE channel
 -- is a static dim, except on first run (before any channel has ever started) when
@@ -1279,8 +1317,8 @@ function GridUI:render_launch_block()
   local mark_running = action == 'randomize' or action == 'mutate'
   local onboarding = not self.hasLaunched
   for ch = 0, NUM_CHANNELS - 1 do
-    local x = LAUNCH_COL0 + (ch % LAUNCH_COLS)
-    local y = 6 + math.floor(ch / LAUNCH_COLS)
+    local x = LAUNCH_COL0 + ch
+    local y = LAUNCH_ROW
     local running = self.engine:is_running(ch + 1)
     if action then
       self.g:set_led(x, y, 10)
@@ -1309,9 +1347,9 @@ end
 
 function GridUI:render_row6()
   for i, page in ipairs(ROW6_PAGES) do self:render_page_button(i - 1, 6, page) end
-  for x = #ROW6_PAGES, 7 do self.g:set_led(x, 6, 0) end  -- dark gap before the launch block (cols 8..10)
+  for x = #ROW6_PAGES, 10 do self.g:set_led(x, 6, 0) end  -- cols 5..10 dark (launch is on row 7 now)
   -- In an action mode the page/mode buttons dim to a flat 8 (no strobe) so the
-  -- launch block reads as the active target surface.
+  -- launch strip reads as the active target surface.
   local dim = self.actionMode ~= nil
   local function mode_led(col, active)
     if dim then
@@ -1330,8 +1368,8 @@ end
 
 function GridUI:render_row7()
   for i, page in ipairs(ROW7_PAGES) do self:render_page_button(i - 1, 7, page) end
-  -- dark gap between the page buttons and the launch block (cols 8..10, drawn
-  -- separately by render_launch_block).
+  -- no gap: pages (0..4) sit directly left of the launch strip (5..10, drawn
+  -- separately by render_launch_block); this loop is a no-op while they're adjacent.
   for x = #ROW7_PAGES, LAUNCH_COL0 - 1 do self.g:set_led(x, 7, 0) end
   local function action_led(col, name)
     self.g:set_led(col, 7, self.actionMode == name and 15 or 4)
@@ -1523,7 +1561,7 @@ function GridUI:_status()
   elseif self.perfMode then
     s = 'PERF — cols0-3 reset, cols5-9 oct, cols11-15 rate'
   elseif self.probMode then
-    s = 'PROB — 0-1 note 3-6 op 8-9 env trig, 11-14 prob, 15 hit'
+    s = 'PROB — 0-1 note 3-6 opR 7-10 opE trig, 11-14 prob, 15 hit'
   elseif self.qntMode then
     s = 'QNT — cols0-7 per-channel quantize (1/3..1/32)'
   elseif self.mixMode then
@@ -1546,9 +1584,9 @@ function GridUI:_status()
   elseif self.picker and self.picker.kind == 'step' then
     local pp = self.picker.param
     local raw = seqx.values(self:seq_ref(self.picker.ch, pp, self.picker.layer))[self.picker.col + 1]
-    -- envelope shapes show their name; everything else its raw value
+    -- op-env A shows the shape name (B is an integer offset); else the raw value
     local v = raw
-    if (pp == 'ampShape' or pp == 'modShape') and raw then v = SHAPE_NAMES[raw] or raw end
+    if pp:match('^opEnv') and self.picker.layer ~= 'B' and raw then v = SHAPE_NAMES[raw] or raw end
     s = 'edit ch' .. (self.picker.ch + 1) .. ' step ' .. self.picker.col .. ' ' ..
         pp .. (self.picker.layer == 'B' and 'B' or '') .. '=' .. tostring(v)
   elseif self.picker and self.picker.kind == 'scale' then

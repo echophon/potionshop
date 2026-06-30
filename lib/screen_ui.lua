@@ -45,11 +45,11 @@ local GridUI = require 'grid_ui'
 
 local SEQ_LEN = GridUI.SEQ_LEN  -- max steps per sequence (shared cap with the grid)
 -- the full sequenced-param list (shared with the grid/params so it can't drift):
--- div/reps/note/ampShape/modShape + the sequenced op1/2/3/4 ratios.
+-- div/reps/note + the sequenced op1/2/3/4 envelopes and op1/2/3/4 ratios.
 local PARAMS = GridUI.PARAMS
--- alt (B-layer) page: div/reps and ampShape/modShape have no B layer
--- (see GridUI.has_b), so it carries only the params that take an additive offset
--- (note, opRatio1/2/3/4 — level became a static MIX-page scalar).
+-- alt (B-layer) page: only div/reps has no B layer (see GridUI.has_b), so it carries
+-- every param that takes an offset (note + opEnv1..4 + opRatio1..4; level became a
+-- static MIX-page scalar).
 local B_PARAMS = {}
 for _, p in ipairs(PARAMS) do if GridUI.has_b(p) then B_PARAMS[#B_PARAMS + 1] = p end end
 -- Page order mirrors the grid's row-6 button layout (mix · perf · prob · scale),
@@ -60,9 +60,9 @@ local PAGES  = {'main', 'alt', 'perf', 'prob', 'scale', 'mix'}
 -- scale = root + 12 chromatic keys = 13 stops. mix = pan + channel level + 4 op
 -- levels + mod index/amp punch/fm fb/algo = 10 (all four op ratios are sequenced,
 -- edited on the main/alt seq pages). prob = prob/mode/note trig + op1..4 ratio-seq
--- trig + amp/mod env trig = 9. PERF carries 4 lines (reset/oct/rate/quantize); the
--- scale page is root + 12 keys.
-local LINES_PER_PAGE = {1 + #PARAMS, 1 + #B_PARAMS, 4, 9, 13, 10}
+-- trig + op1..4 env-seq trig = 11. PERF carries 4 lines (reset/oct/rate/quantize);
+-- the scale page is root + 12 keys.
+local LINES_PER_PAGE = {1 + #PARAMS, 1 + #B_PARAMS, 4, 11, 13, 10}
 local PAGE_PERF, PAGE_PROB, PAGE_SCALE, PAGE_MIX = 3, 4, 5, 6
 
 local NOTE_NAMES = {'c','c#','d','d#','e','f','f#','g','g#','a','a#','b'}
@@ -91,9 +91,11 @@ end
 -- with the grid + params surfaces.
 local nearest_index = GridUI.nearest_index
 
--- compact value formatting for the lines (envelope axes on the 0..31 grid scale).
-local function fmt(param, v)
-  if param == 'ampShape' or param == 'modShape' then
+-- compact value formatting for the lines. `layer` matters for op envelopes: the A
+-- lane shows a shape NAME, the B lane an integer index offset.
+local function fmt(param, v, layer)
+  if param:match('^opEnv') then
+    if layer == 'B' then return tostring(math.floor(v + 0.5)) end
     return GridUI.SHAPE_NAMES[math.floor(v + 0.5)] or tostring(v)
   end
   if param == 'level' then return string.format('%.2f', v) end
@@ -168,7 +170,8 @@ function Screen:layer() return (self.page == 2) and 'B' or 'A' end
 -- index-offset set (its first value is already 0 = no shift). For every other B
 -- lane the additive offset set is literal 0 (no offset) prepended to the picker grid.
 function Screen:_layout(param)
-  if self:layer() == 'B' and param:match('^opRatio') then
+  -- op ratios and op envelopes share the integer index-offset B lane.
+  if self:layer() == 'B' and (param:match('^opRatio') or param:match('^opEnv')) then
     return GridUI.OP_RATIO_OFFSETS
   end
   -- op-ratio A is role-dependent: show the focused channel's set for this op (carrier
@@ -464,8 +467,8 @@ function Screen:_edit_prob(d)
     local field = 'opRatio' .. (line - 3) .. 'Trig'  -- line 4->op1 .. 7->op4
     self.ctl:set_scalar(ch, field, clamp(c[field] + d, 0, 1))
   else
-    -- lines 8/9 = amp/mod env shape-sequence trig (hold/step)
-    local field = (line == 8) and 'ampShapeTrig' or 'modShapeTrig'
+    -- lines 8..11 = op1/2/3/4 env shape-sequence trig (hold/step)
+    local field = 'opEnv' .. (line - 7) .. 'Trig'  -- line 8->op1 .. 11->op4
     self.ctl:set_scalar(ch, field, clamp(c[field] + d, 0, 1))
   end
 end
@@ -614,7 +617,7 @@ function Screen:page_lines()
       local first = focused and math.max(1, self.sel_step + 1 - 3) or 1
       local last = math.min(#vals, first + 3)
       local shown = {}
-      for j = first, last do shown[#shown + 1] = fmt(p, vals[j]) end
+      for j = first, last do shown[#shown + 1] = fmt(p, vals[j], self:layer()) end
       -- the temporary `_` add slot, shown while the cursor sits on it
       local on_add = focused and self.sel_step >= #vals
       if on_add then shown[#shown + 1] = '_' end
@@ -653,12 +656,14 @@ function Screen:page_lines()
       {'prob', round(c.burstProb * 100) .. '%'},
       {'mode', c.probHit and 'hit' or 'burst'},
       {'note', trig(c.altTrig)},          -- note B trig
-      {'op1',  trig(c.opRatio1Trig)},     -- op1/2/3/4 ratio-seq trig
-      {'op2',  trig(c.opRatio2Trig)},
-      {'op3',  trig(c.opRatio3Trig)},
-      {'op4',  trig(c.opRatio4Trig)},
-      {'amp',  trig(c.ampShapeTrig)},     -- amp/mod env shape-seq trig
-      {'mod',  trig(c.modShapeTrig)},
+      {'op1 r', trig(c.opRatio1Trig)},    -- op1/2/3/4 ratio-seq trig
+      {'op2 r', trig(c.opRatio2Trig)},
+      {'op3 r', trig(c.opRatio3Trig)},
+      {'op4 r', trig(c.opRatio4Trig)},
+      {'op1 e', trig(c.opEnv1Trig)},      -- op1/2/3/4 env-seq trig
+      {'op2 e', trig(c.opEnv2Trig)},
+      {'op3 e', trig(c.opEnv3Trig)},
+      {'op4 e', trig(c.opEnv4Trig)},
     }
   else  -- PAGE_PERF
     local iv = c.resetInterval

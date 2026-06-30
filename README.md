@@ -35,7 +35,7 @@ on initial install, Norns will need to be restarted to load the new engine.
 
 ## start
 
-on initial load, each channel sequence is randomized.  launch one or more channels from the 3x2 launch block at the bottom (cols 8-10 on the two lowest rows: top row = channels 1-3, bottom row = channels 4-6).
+on initial load, each channel sequence is randomized.  launch one or more channels from the launch strip on the bottom row (cols 5-10 = channels 1-6).
 these will likely loop at different intervals creating evolving sequences.  refer to the guide for a step-by-step tutorial on the components of a sequence.
 
 ## the voice
@@ -99,7 +99,7 @@ sequence glow dim.
 
 ### launch
 
-`[x: 8-10, y: 6-7]` — a 3×2 block (row 6 = channels 1-3, row 7 = channels 4-6)
+`[x: 5-10, y: 7]` — a contiguous 1×6 strip (col 5 = channel 1 … col 10 = channel 6)
 
 toggle each channel running / stopped (bright = running). on **first run** (until
 any channel has started) the idle buttons gently breathe (a slow pulse) to invite a
@@ -115,14 +115,17 @@ two control rows:
 
 - row 6 `[x: 0-4, y: 6]`: `0` **note** · `1` **op1 ratio** · `2` **op2 ratio**
   · `3` **op3 ratio** · `4` **op4 ratio**
-- row 7 `[x: 0-1, y: 7]`: `0` **div / reps** (paired) · `1` **SHP** =
-  ampShape / modShape (paired)
+- row 7 `[x: 0-4, y: 7]`: `0` **div / reps** (paired) · `1` **op1 env** · `2` **op2
+  env** · `3` **op3 env** · `4` **op4 env**
 
-the paired pages show two A-layer lanes at once (no B layer). `note` and the four
-op-ratio pages show their A layer (left) and B layer (right) — for `note` B is an
-**additive offset** summed onto A each burst; for an op ratio B is an **index
-offset** that micro-tunes A through the curated ratio set. channel level + per-op
-levels are **static** scalars on the MIX page, not sequenced.
+`div / reps` is the only paired page (two A-layer lanes, no B). `note`, the four
+op-ratio pages and the four **per-op envelope** pages show their A layer (left) and
+B layer (right). For `note` B is an **additive offset** summed onto A each burst;
+for an op ratio B is an **index offset** that micro-tunes A through the curated
+ratio set; for an op envelope A is a **shape index** and B is an **index offset**
+that walks the curated shapes table. Each operator gets its own envelope (DX-style
+EG): a carrier's env shapes its amplitude, a modulator's its FM-depth contour.
+channel level + per-op levels are **static** scalars on the MIX page, not sequenced.
 
 ### page buttons
 
@@ -139,7 +142,7 @@ levels are **static** scalars on the MIX page, not sequenced.
 `[x: 11-15, y: 7]`
 
 armed modes, not instant: press one (it fast-blinks), then tap a channel in the
-launch block (cols 8-10, rows 6-7) to apply. press again to disarm.
+launch strip (cols 5-10, row 7) to apply. press again to disarm.
 
 - `11` **COPY** — snapshot the A layer + the MIX-page static scalars
 - `12` **PASTE** — write the snapshot in

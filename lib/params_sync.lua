@@ -8,10 +8,10 @@
 -- fm feedback / fm drive),
 -- the OUTPUTS group (lib/outputs.lua), plus one group per
 -- channel ("CHANNEL 1".."CHANNEL 6"). Each group holds the channel scalars
--- (run, rate, quantize, prob, alt trig, op1/2/3/4 ratio trig, amp/mod env trig,
+-- (run, rate, quantize, prob, alt trig, op1/2/3/4 ratio trig, op1/2/3/4 env trig,
 -- reset, channel level + per-op levels, clear/copy/paste + action triggers) and, per sequence
--- parameter x layer (div/reps/note/ampShape/modShape/opRatio1/opRatio2/opRatio3/
--- opRatio4 x A/B, where div/reps and ampShape/modShape are A-only),
+-- parameter x layer (div/reps/note/opEnv1..4/opRatio1..4 x A/B, where div/reps is
+-- A-only and the op envelopes + op ratios carry an A value + B index-offset layer),
 -- a 3-param block:
 --   chN_<p>_<a|b>        text — the whole sequence as a space-separated string
 --   chN_<p>_<a|b>_step   number — cursor into the sequence (1-based)
@@ -23,8 +23,8 @@
 -- (chN_level1..4) are plain per-channel scalars on the 0..31 grid (MIX page).
 --
 -- String tokens use the display units the grid/screen use: div/note/reps as
--- integers ('rN' for an N-step rest, reps <= 0), ampShape/modShape as shape names
--- (or a bare index). Parsing snaps
+-- integers ('rN' for an N-step rest, reps <= 0), opEnv1..4 A as shape names
+-- (or a bare index), their B as an integer index offset. Parsing snaps
 -- every token to the nearest picker value (the same nearest-index rule
 -- screen_ui edits use), so any menu edit stays grid-reachable.
 --
@@ -44,7 +44,7 @@
 local seqx   = require 'seqx'
 local GridUI = require 'grid_ui'
 
-local SEQ_PARAMS = GridUI.PARAMS  -- div/reps/note/ampShape/modShape/opRatio1..4
+local SEQ_PARAMS = GridUI.PARAMS  -- div/reps/note/opEnv1..4/opRatio1..4
 local SPV        = GridUI.STEP_PICKER_VALUES
 local OP_OFFSETS = GridUI.OP_RATIO_OFFSETS  -- op-ratio B index-offset layout (0..31)
 local MAX_STEPS  = GridUI.SEQ_LEN  -- 8-step cap, shared with grid/screen
@@ -52,7 +52,8 @@ local MAX_STEPS  = GridUI.SEQ_LEN  -- 8-step cap, shared with grid/screen
 -- Layer-aware value layout (mirrors GridUI.picker_layout): op-ratio B is an integer
 -- index offset, every other lane uses its single STEP_PICKER layout.
 local function layout_of(p, layer)
-  if layer == 'B' and p:match('^opRatio') then return OP_OFFSETS end
+  -- op ratios and op envelopes share the integer index-offset B lane.
+  if layer == 'B' and (p:match('^opRatio') or p:match('^opEnv')) then return OP_OFFSETS end
   return SPV[p]
 end
 
@@ -82,13 +83,14 @@ local function clamp(v, lo, hi) return math.max(lo, math.min(hi, v)) end
 -- shape indices — see is_shape — and `level` became a static per-channel MIX scalar
 -- (chN_level), edited like the op levels rather than as a sequence.)
 
--- envelope SHAPE params (ampShape/modShape): a 1-based index into the curated shape
--- table, shown/parsed as a shape NAME (GridUI.SHAPE_NAMES) for readability, falling
--- back to the bare index. Distinct from the level-like 0..31 axes they replaced.
+-- per-op envelope SHAPE params (opEnv1..4): the A lane is a 1-based index into the
+-- curated shape table, shown/parsed as a shape NAME (GridUI.SHAPE_NAMES) for
+-- readability, falling back to the bare index. The B lane is an integer index
+-- offset (handled like the op-ratio B lane), NOT a shape name.
 local SHAPE_NAMES = GridUI.SHAPE_NAMES
 local SHAPE_INDEX = {}
 for i, nm in ipairs(SHAPE_NAMES) do SHAPE_INDEX[string.lower(nm)] = i end
-local function is_shape(p) return p == 'ampShape' or p == 'modShape' end
+local function is_shape(p) return p:match('^opEnv') ~= nil end
 
 local M = {}
 M.__index = M
@@ -133,8 +135,8 @@ function M.parse_token(p, layer, tok)
     local rn = tok:match('^r(%d+)$')  -- rest token r1..rN -> reps 1-N (0,-1,-2,..)
     if rn then return SPV[p][GridUI.nearest_index(SPV[p], 1 - tonumber(rn))] end
   end
-  if is_shape(p) then
-    -- accept a shape name (case-insensitive) or a bare index, snapped to 1..#shapes
+  if is_shape(p) and layer ~= 'B' then
+    -- A lane: accept a shape name (case-insensitive) or a bare index, snapped to 1..#shapes
     local byname = SHAPE_INDEX[string.lower(tok)]
     if byname then return byname end
     local n = tonumber(tok)
@@ -144,7 +146,7 @@ function M.parse_token(p, layer, tok)
   local n = tonumber(tok)
   if n == nil then return nil end
   if layer == 'B' and n == 0 then return 0 end
-  if layer == 'B' and p:match('^opRatio') then
+  if layer == 'B' and (p:match('^opRatio') or p:match('^opEnv')) then
     return clamp(round(n), 0, #OP_OFFSETS - 1)  -- B = integer index offset 0..31
   end
   return SPV[p][GridUI.nearest_index(SPV[p], n)]
@@ -178,6 +180,7 @@ function M.to_text(p, layer, vals)
   local toks = {}
   for i = 1, #vals do
     if layer == 'B' and vals[i] == 0 then toks[i] = '0'
+    elseif layer == 'B' and is_shape(p) then toks[i] = tostring(round(vals[i]))  -- index offset, not a shape name
     else toks[i] = M.fmt_value(p, vals[i]) end
   end
   return table.concat(toks, ' ')
@@ -278,9 +281,9 @@ function M:add_globals()
   -- non-audio output types can't render them; these are the actual values the SC
   -- voice receives at fire time. Percent where the underlying value is fractional.
   local function pct() return function(p) return p:get() .. '%' end end
-  -- (both envelopes are per-channel sequenced via the SHAPE indices chN_ampShape_a /
-  -- chN_modShape_a, not global macros; amp_punch below now scales the carrier
-  -- shape's contour curves rather than setting a fixed perc curve.)
+  -- (each operator's envelope is per-channel sequenced via its SHAPE index
+  -- chN_opEnvN_a/_b, not global macros; amp_punch below scales every op env's
+  -- contour curves uniformly rather than setting a fixed perc curve.)
   params:add_group('voice', 'VOICE', 3)
   -- amp decay timing + per-hit amp geode: both were per-channel (grid/screen SND
   -- page); now engine-wide macros (the SND page was reclaimed). 0-based fields, so
@@ -377,13 +380,13 @@ function M:_add_channel_params(n)
       end)
     end)
   end
-  -- amp/mod envelope-shape sequence trig mode (hold/step). Shapes have no B layer, so
-  -- 'step' walks the ampShape/modShape A lane per hit (see Burst:run_burst).
-  for _, sh in ipairs({{'ampShape', 'amp env'}, {'modShape', 'mod env'}}) do
-    local field = sh[1] .. 'Trig'
+  -- per-op envelope sequence trig mode (hold/step), one per op env. 'step' walks that
+  -- op env's B index-offset lane per hit, like the op-ratio trig (see Burst:run_burst).
+  for op = 1, 4 do
+    local field = 'opEnv' .. op .. 'Trig'
     def(1, function()
-      params:add_option(id(sh[1] .. '_trig'), sh[2] .. ' trig', ALT_TRIG_NAMES, c[field] + 1)
-      params:set_action(id(sh[1] .. '_trig'), function(i)
+      params:add_option(id('opEnv' .. op .. '_trig'), 'op' .. op .. ' env trig', ALT_TRIG_NAMES, c[field] + 1)
+      params:set_action(id('opEnv' .. op .. '_trig'), function(i)
         c[field] = i - 1
         self:request_render()
       end)
@@ -618,8 +621,7 @@ function M:reflect_scalars(n)
   params:set(id('prob_mode'), c.probHit and 2 or 1, true)
   params:set(id('alt_trig'), c.altTrig + 1, true)
   for op = 1, 4 do params:set(id('op' .. op .. '_trig'), c['opRatio' .. op .. 'Trig'] + 1, true) end
-  params:set(id('ampShape_trig'), c.ampShapeTrig + 1, true)
-  params:set(id('modShape_trig'), c.modShapeTrig + 1, true)
+  for op = 1, 4 do params:set(id('opEnv' .. op .. '_trig'), c['opEnv' .. op .. 'Trig'] + 1, true) end
   params:set(id('reset'), GridUI.nearest_index(GridUI.RESET_INTERVALS, c.resetInterval), true)
   params:set(id('octave'), c.octave, true)
   params:set(id('level'), round(c.level * 31), true)

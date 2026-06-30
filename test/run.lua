@@ -117,20 +117,23 @@ for _ = 1, 200 do
   for _, v in ipairs(seqx.values(c.div))  do if not in_set(v, Burst.MUSICAL_DIVS) then ok_div = false end end
   for _, v in ipairs(seqx.values(c.reps)) do if not in_set(v, {1,2,3,4}) then ok_reps = false end end
   for _, v in ipairs(seqx.values(c.note)) do if not (v >= 0 and v <= 15 and v == math.floor(v)) then ok_note = false end end
-  -- op2/3/4 ratios are sequenced now: every A-layer step must land on that op's ROLE
-  -- set under the channel's algo (carrier -> CARRIER_RATIOS, else MODULATOR_RATIOS),
-  -- the exact grid the picker shows so the value stays highlightable/editable.
+  -- op2/3/4 ratios are sequenced now: every A-layer step must land on the LOWER 32
+  -- (RATIO_PICKER_COUNT) of that op's ROLE set under the channel's algo (carrier ->
+  -- CARRIER_RATIOS, else MODULATOR_RATIOS) — the exact cells the A grid picker shows, so
+  -- the value stays highlightable/editable (the upper 32 are B-offset reach only).
   for _, op in ipairs({2, 3, 4}) do
+    local set = Burst.op_ratio_set(c.algo, op)
+    local low = {} for i = 1, math.min(Burst.RATIO_PICKER_COUNT, #set) do low[i] = set[i] end
     for _, v in ipairs(seqx.values(c['opRatio' .. op])) do
-      if not in_set(v, Burst.op_ratio_set(c.algo, op)) then ok_ratio = false end
+      if not in_set(v, low) then ok_ratio = false end
     end
   end
-  -- carrier (ampShape) and modulator (modShape) envelope shapes are sequenced as
-  -- shape INDICES; randomize draws only from the instant-attack family, so every
-  -- step must be an integer in 1..Burst.SHAPE_PERC_COUNT (a subset of the picker).
-  for _, seq in ipairs({c.ampShape, c.modShape}) do
+  -- the four per-operator envelope shapes are sequenced as shape INDICES; randomize
+  -- draws from the upper part of the short A-picker bank, so every step must be an
+  -- integer in SHAPE_RANDOMIZE_MIN..SHAPE_PICKER_COUNT (a slice of the picker range).
+  for _, seq in ipairs({c.opEnv1, c.opEnv2, c.opEnv3, c.opEnv4}) do
     for _, v in ipairs(seqx.values(seq)) do
-      if not (v == math.floor(v) and v >= 1 and v <= Burst.SHAPE_PERC_COUNT) then ok_ad = false end
+      if not (v == math.floor(v) and v >= Burst.SHAPE_RANDOMIZE_MIN and v <= Burst.SHAPE_PICKER_COUNT) then ok_ad = false end
     end
   end
   -- channel level is a static scalar: randomize must leave it at the init value.
@@ -141,17 +144,17 @@ for _ = 1, 200 do
   if #o1 ~= 1 or not approx(o1[1], 1) then ok_op1 = false end
   local dl = seqx.len(c.div)
   if not (dl >= 2 and dl <= 4) then ok_len = false end
-  -- the two env shapes + op2/3/4 ratios randomize to ONE held step (stable timbre)
-  for _, seq in ipairs({c.ampShape, c.modShape, c.opRatio2, c.opRatio3, c.opRatio4}) do
+  -- the four env shapes + op2/3/4 ratios randomize to ONE held step (stable timbre)
+  for _, seq in ipairs({c.opEnv1, c.opEnv2, c.opEnv3, c.opEnv4, c.opRatio2, c.opRatio3, c.opRatio4}) do
     if seqx.len(seq) ~= 1 then ok_single = false end
   end
 end
 check('div values all in MUSICAL_DIVS', ok_div)
 check('reps values all in {1,2,3,4}', ok_reps)
 check('note values 0..15 integer', ok_note)
-check('sequenced op2/3/4 ratio steps land on the curated RATIO_VALUES set', ok_ratio)
+check('sequenced op2/3/4 ratio steps land on the lower-32 of the role set', ok_ratio)
 check('randomize keeps op1 ratio at the 1.0 anchor', ok_op1)
-check('carrier+mod randomize shapes land in the instant-attack family (1..PERC)', ok_ad)
+check('carrier+mod randomize shapes land in the upper short bank (16..32)', ok_ad)
 check('randomize leaves channel level at the fixed init constant', ok_level_const)
 check('lengths: div/reps/note 2..4', ok_len)
 check('shapes + op2/3/4 randomize to a single held step', ok_single)
@@ -259,43 +262,45 @@ check('alt-trig step arpeggiates the B pitch per hit',
   and approx(step[2], scales.degree_to_freq(5, major))
   and approx(step[3], scales.degree_to_freq(7, major)))
 
--- env-shape trig: 'hold' draws the ampShape once per burst (every hit shares its
--- contour); 'step' advances the ampShape A sequins per hit so the envelope shape
--- arpeggiates. A 3-hit burst with ampShape {1,3,6} (distinct decay muls) yields, via
--- the amp-decay trig arg (arg 9, = decMul*gap in shape envMode): hold => three equal
--- decays; step => three distinct decays. (Shapes have no B layer — step walks A.)
-local function shape_step_decays(trig_mode)
+-- op-env trig: 'hold' draws opEnv1's shape once per burst (every hit shares its
+-- contour); 'step' advances the opEnv1 B (index-offset) lane per hit, re-resolved
+-- against the held A, so the envelope shape arpeggiates — exactly like the op-ratio
+-- trig. A=1 + B {0,14,31} resolves to shapes 1/15/32 (tick/click/plop, distinct
+-- decMul: 0.03/0.10/0.20 in the length-sorted table), observed on op1's env-decay trig
+-- arg (arg 18 = decMul*gap in shape envMode): hold => three equal decays; step =>
+-- three distinct decays.
+local function env_step_decays(trig_mode)
   clock._reset()
   local saved = engine
   local decs = {}
-  engine = { trig = function(...) local a = {...}; decs[#decs + 1] = a[9] end }
+  engine = { trig = function(...) local a = {...}; decs[#decs + 1] = a[18] end }
   local e = Burst.new()
   set_quant(e, 0)
   e.channels[1].div  = seqx.new{4}
   e.channels[1].reps = seqx.new{3}          -- single 3-hit burst
   e.channels[1].note = seqx.new{0}
-  e.channels[1].ampShape = seqx.new{1, 3, 6}  -- click/tap/pluck: distinct decMul
-  e.channels[1].ampShapeTrig = trig_mode
+  e.channels[1].opEnv1  = seqx.new{1}            -- A: held shape index per burst
+  e.channels[1].opEnv1B = seqx.new{0, 14, 31}    -- B: index offsets -> shapes 1/15/32
+  e.channels[1].opEnv1Trig = trig_mode
   e:launch(1)
   clock._run_until(4)
   engine = saved
   return decs
 end
-check('env-shape trig defaults to hold', Burst.new().channels[1].ampShapeTrig == 0)
-local sh_hold = shape_step_decays(0)
-check('env-shape hold holds one shape across the burst',
+check('op-env trig defaults to hold', Burst.new().channels[1].opEnv1Trig == 0)
+local sh_hold = env_step_decays(0)
+check('op-env hold holds one shape across the burst',
   #sh_hold == 3 and approx(sh_hold[1], sh_hold[2]) and approx(sh_hold[2], sh_hold[3]))
-local sh_step = shape_step_decays(1)
-check('env-shape step arpeggiates the shape per hit',
+local sh_step = env_step_decays(1)
+check('op-env step arpeggiates the shape per hit',
   #sh_step == 3 and not approx(sh_step[1], sh_step[2])
   and not approx(sh_step[2], sh_step[3]) and not approx(sh_step[1], sh_step[3]))
 
 -- all four op ratios are sequenced (A value + B offset, drawn per burst). The drawn
 -- op2/3/4 values pass straight to trig args 4/5/6 (r2/r3/r4); op1's drawn value rides
--- as r1 at arg 20; the per-channel pan rides at arg 24 (appended last).
--- engine.trig(freq, amp, algo, r2, r3, r4, modIndex,
---             atk, aDec, ampDecCurve, mDec, feedback, drive, ch, op1..op4, modAtk, r1,
---             ampAtkCurve, modAtkCurve, modDecCurve, pan).
+-- as r1 at arg 15; the per-channel pan rides at arg 16.
+-- engine.trig(freq, amp, algo, r2, r3, r4, modIndex, feedback, drive, ch,
+--             lvl1..4, r1, pan, then per-op env {atk,dec,atkCurve,decCurve} x4 at 17..32).
 local function first_trig()
   clock._reset()
   local saved = engine
@@ -319,13 +324,13 @@ local off = first_trig()
 check('algo passes at trig arg 3 (default channel = 1)', off and off[3] == 1)
 check('sequenced op2/3/4 ratios pass at trig args 4/5/6',
   off and approx(off[4], 2) and approx(off[5], 3) and approx(off[6], 7))
--- op1 ratio (sequenced): its drawn value rides as r1 at trig arg 20 (appended last).
-check('op1 ratio passes at trig arg 20', off and approx(off[20], 0.5))
-check('pan passes at trig arg 24', off and approx(off[24], -0.5))
+-- op1 ratio (sequenced): its drawn value rides as r1 at trig arg 15.
+check('op1 ratio passes at trig arg 15', off and approx(off[15], 0.5))
+check('pan passes at trig arg 16', off and approx(off[16], -0.5))
 
--- op ratio B lane is an INDEX OFFSET: it shifts A's position in the sorted
--- RATIO_VALUES list (never an off-grid sum), walking UP into the finer in-between
--- ratios. A {2} + B {4} -> the 4th entry above 2 in the list (arg 4).
+-- op ratio B lane is an INDEX OFFSET: it shifts A's position UP the op's ROLE SET
+-- (never an off-grid sum), reaching the higher upper-32 ratios. Under algo 1 op2 is a
+-- modulator, so B walks MODULATOR_RATIOS. A {2} + B {4} -> the 4th entry above 2.0 (arg 4).
 local function ratio_b_trig()
   clock._reset()
   local saved = engine
@@ -333,22 +338,23 @@ local function ratio_b_trig()
   engine = { trig = function(...) cap = cap or {...} end }
   local e = Burst.new()
   set_quant(e, 0)
+  e.channels[1].algo = 1                   -- op2 = modulator -> MODULATOR_RATIOS
   e.channels[1].div = seqx.new{4}
   e.channels[1].reps = seqx.new{1}
   e.channels[1].opRatio2 = seqx.new{2}    -- A: base ratio
-  e.channels[1].opRatio2B = seqx.new{4}   -- B: +4 index offset (walks up the list)
+  e.channels[1].opRatio2B = seqx.new{4}   -- B: +4 index offset (walks up the role set)
   e:launch(1)
   clock._run_until(2)
   engine = saved
   return cap
 end
 local rb = ratio_b_trig()
-check('op2 ratio B index-offset shifts A up the list (arg 4)',
-  rb and approx(rb[4], Burst.op_ratio(2, 4)) and rb[4] > 2)
+check('op2 ratio B index-offset shifts A up the role set (arg 4)',
+  rb and approx(rb[4], Burst.op_ratio(2, 4, Burst.MODULATOR_RATIOS)) and rb[4] > 2)
 
--- op_ratio properties (robust to list content): B=0 is identity; the list is sorted
--- ascending so positive offsets are monotonic non-decreasing; offsets clamp at the
--- top rather than overflowing; every coarse picker value resolves on the full list.
+-- op_ratio properties (generic list-walk; the 3rd arg is the list, default = union):
+-- B=0 is identity; positive offsets are monotonic non-decreasing on the sorted list;
+-- offsets clamp at the top rather than overflowing.
 local rv = Burst.RATIO_VALUES
 local sorted = true
 for i = 2, #rv do if rv[i] < rv[i - 1] then sorted = false end end
@@ -360,20 +366,21 @@ end)())
 check('op_ratio is monotonic non-decreasing in the offset',
   Burst.op_ratio(1, 0) <= Burst.op_ratio(1, 1) and Burst.op_ratio(1, 1) <= Burst.op_ratio(1, 5)
   and Burst.op_ratio(1, 5) < rv[#rv] + 1e-9)
-check('B offset can walk a carrier value into a modulator-only ratio', (function()
-  -- the union interleaves both role sets, so a B step from a carrier base can land on
-  -- a value present only in the modulator set (proving B walks the full union).
-  for _, a in ipairs(Burst.CARRIER_RATIOS) do
-    for off = 1, 4 do
-      local r = Burst.op_ratio(a, off)
-      if r > a and not in_set(r, Burst.CARRIER_RATIOS) and in_set(r, Burst.MODULATOR_RATIOS) then
-        return true
-      end
+check('B offset walks UP WITHIN the op role set (stays in-role)', (function()
+  -- B now walks the op's role set, not the union: a carrier base + offset stays a
+  -- carrier ratio (never lands on a modulator-only value), and it moves up the set.
+  local C = Burst.CARRIER_RATIOS
+  for _, a in ipairs(C) do
+    for off = 0, 6 do
+      local r = Burst.op_ratio(a, off, C)
+      if not in_set(r, C) then return false end       -- in-role
+      if r < a - 1e-9 then return false end            -- monotonic up
     end
   end
-  return false
+  -- and it actually REACHES the upper 32 (e.g. low A + offset climbs past 2.0)
+  return Burst.op_ratio(C[Burst.RATIO_PICKER_COUNT], 8, C) > C[Burst.RATIO_PICKER_COUNT]
 end)())
-check('op_ratio clamps at the top of the list',
+check('op_ratio clamps at the top of the role set',
   approx(Burst.op_ratio(rv[#rv], 31), rv[#rv]) and approx(Burst.op_ratio(rv[#rv], 99), rv[#rv]))
 
 -- ---- dynamic op-ratio role sets (carrier vs modulator by algorithm) ----
@@ -417,9 +424,10 @@ local function op_ratio_trig_seq(trig_mode)
   engine = { trig = function(...) local a = {...}; r2[#r2 + 1] = a[4] end }
   local e = Burst.new()
   set_quant(e, 0)
+  e.channels[1].algo = 1                   -- op2 = modulator -> MODULATOR_RATIOS
   e.channels[1].div  = seqx.new{4}
   e.channels[1].reps = seqx.new{3}        -- length-1 finite -> single 3-hit burst
-  e.channels[1].opRatio2  = seqx.new{2}   -- A: held per burst (index 12)
+  e.channels[1].opRatio2  = seqx.new{2}   -- A: held per burst
   e.channels[1].opRatio2B = seqx.new{0, 1, 2}  -- B: index offsets
   e.channels[1].opRatio2Trig = trig_mode
   e:launch(1)
@@ -427,13 +435,14 @@ local function op_ratio_trig_seq(trig_mode)
   engine = saved
   return r2
 end
+local MOD = Burst.MODULATOR_RATIOS
 local hold_r = op_ratio_trig_seq(0)
 check('op ratio trig hold holds one B offset across the burst',
   #hold_r == 3 and approx(hold_r[1], 2) and approx(hold_r[2], 2) and approx(hold_r[3], 2))
 local step_r = op_ratio_trig_seq(1)
 check('op ratio trig step walks the index UP per hit (A held)',
   #step_r == 3 and approx(step_r[1], 2)
-  and step_r[2] == Burst.op_ratio(2, 1) and step_r[3] == Burst.op_ratio(2, 2)
+  and step_r[2] == Burst.op_ratio(2, 1, MOD) and step_r[3] == Burst.op_ratio(2, 2, MOD)
   and step_r[2] > step_r[1] and step_r[3] > step_r[2])
 check('op ratio trig defaults to hold (0)', Burst.new().channels[1].opRatio2Trig == 0)
 
@@ -460,13 +469,13 @@ check('op ratio step leaves the A lane held within the burst',
   #a_step == 3 and approx(a_step[1], 2) and approx(a_step[2], 2) and approx(a_step[3], 2))
 
 -- op1 is sequenced the same way (A value + B index offset + per-hit trig), and its
--- drawn value rides as r1 at trig arg 20. A {2} + B {0,1,2} under step trig walks the
--- index UP per hit, exactly like op2 above but observed on arg 20.
+-- drawn value rides as r1 at trig arg 15. A {2} + B {0,1,2} under step trig walks the
+-- index UP per hit, exactly like op2 above but observed on arg 15.
 local function op1_ratio_trig_seq(trig_mode)
   clock._reset()
   local saved = engine
   local r1 = {}
-  engine = { trig = function(...) local a = {...}; r1[#r1 + 1] = a[20] end }
+  engine = { trig = function(...) local a = {...}; r1[#r1 + 1] = a[15] end }
   local e = Burst.new()
   set_quant(e, 0)
   e.channels[1].div  = seqx.new{4}
@@ -480,26 +489,28 @@ local function op1_ratio_trig_seq(trig_mode)
   return r1
 end
 local hold_r1 = op1_ratio_trig_seq(0)
-check('op1 ratio trig hold holds one B offset across the burst (arg 20)',
+check('op1 ratio trig hold holds one B offset across the burst (arg 15)',
   #hold_r1 == 3 and approx(hold_r1[1], 2) and approx(hold_r1[2], 2) and approx(hold_r1[3], 2))
 local step_r1 = op1_ratio_trig_seq(1)
-check('op1 ratio trig step walks the index UP per hit on arg 20',
+-- op1 is a carrier in every algo, so its B walks CARRIER_RATIOS.
+local CAR = Burst.CARRIER_RATIOS
+check('op1 ratio trig step walks the index UP per hit on arg 15',
   #step_r1 == 3 and approx(step_r1[1], 2)
-  and step_r1[2] == Burst.op_ratio(2, 1) and step_r1[3] == Burst.op_ratio(2, 2)
+  and step_r1[2] == Burst.op_ratio(2, 1, CAR) and step_r1[3] == Burst.op_ratio(2, 2, CAR)
   and step_r1[2] > step_r1[1] and step_r1[3] > step_r1[2])
 check('op1 ratio trig defaults to hold (0)', Burst.new().channels[1].opRatio1Trig == 0)
 
--- envelope SHAPES: each sequenced shape INDEX resolves (in fire) to attack/decay
--- times scaled to the inter-hit gap + per-segment Env curves. The carrier shape
--- (ampShape) feeds trig args 8 (attack) / 9 (ampDecay) / 10 (ampDecCurve) /
--- 21 (ampAtkCurve); the modulator shape (modShape) feeds 19 (modAttack) /
--- 11 (modDecay) / 22 (modAtkCurve) / 23 (modDecCurve). div 4 @ 120bpm => gap 0.5s.
--- Expectations are derived from Burst.SHAPES so this survives table tuning/reordering.
+-- PER-OPERATOR envelope SHAPES: each op's sequenced shape INDEX resolves (in fire)
+-- to {attack, decay, atkCurve, decCurve} scaled to the inter-hit gap, grouped per op
+-- at trig args 17..32 (op1 17-20, op2 21-24, op3 25-28, op4 29-32). div 4 @ 120bpm
+-- => gap 0.5s. Expectations derive from Burst.SHAPES so this survives table tuning.
 local GAP = 0.5
 local function exp_atk(sh) return math.max(0.001, GAP * sh[1]) end
 local function shp(i) return Burst.SHAPES[i] end
--- pick representative carrier shapes BY their contour, not by a hard-coded index,
--- so this survives reordering the table:
+-- op K's env args occupy trig 17..32 in groups of 4 (atk, dec, atkCurve, decCurve):
+-- op1->17, op2->21, op3->25, op4->29.
+-- pick representative shapes BY their contour, not a hard-coded index, so this
+-- survives reordering the table:
 --   I_INSTANT = the SHORTEST instant-attack shape (atkMul 0, min decMul)
 --   I_LONGATK = the longest-attack shape (max atkMul)
 --   I_LONGDEC = the longest-decay shape (max decMul)
@@ -513,7 +524,8 @@ do
   end
   I_INSTANT, I_LONGATK, I_LONGDEC = bestdec, maxatk, maxdec
 end
-local function shape_trig(amp_i, mod_i)
+-- drive an env on op K (others held at the instant shape), return the captured trig.
+local function env_trig(op, idx)
   clock._reset()
   local saved = engine
   local cap
@@ -522,40 +534,37 @@ local function shape_trig(amp_i, mod_i)
   set_quant(e, 0)
   e.channels[1].div = seqx.new{4}
   e.channels[1].reps = seqx.new{1}
-  e.channels[1].ampShape = seqx.new{amp_i}
-  e.channels[1].modShape = seqx.new{mod_i}
+  for k = 1, 4 do e.channels[1]['opEnv' .. k] = seqx.new{I_INSTANT} end
+  e.channels[1]['opEnv' .. op] = seqx.new{idx}
   e:launch(1)
   clock._run_until(2)
   engine = saved
   return cap
 end
-local s_inst = shape_trig(I_INSTANT, I_INSTANT)
-local s_atk  = shape_trig(I_LONGATK, I_INSTANT)
-local s_dec  = shape_trig(I_LONGDEC, I_INSTANT)
-check('instant-attack shape -> ~0.001s attack (trig arg 8)', s_inst and approx(s_inst[8], 0.001))
-check('longer-attack shape -> longer gap-relative attack (trig arg 8)',
-  s_atk and s_inst and s_atk[8] > s_inst[8] and approx(s_atk[8], exp_atk(shp(I_LONGATK))))
-check('longer-decay shape -> longer amp decay (trig arg 9)', s_dec and s_inst and s_dec[9] > s_inst[9])
--- ampPunch default 4 => punch scale 1.0, so the carrier curves pass through unscaled.
-check('carrier shape feeds amp-decay curve (trig arg 10)', s_inst and approx(s_inst[10], shp(I_INSTANT)[4]))
-check('carrier shape feeds amp-attack curve (trig arg 21)', s_inst and approx(s_inst[21], shp(I_INSTANT)[3]))
+-- op1's envelope rides args 17..20.
+local s_inst = env_trig(1, I_INSTANT)
+local s_atk  = env_trig(1, I_LONGATK)
+local s_dec  = env_trig(1, I_LONGDEC)
+check('instant-attack op env -> ~0.001s attack (op1 arg 17)', s_inst and approx(s_inst[17], 0.001))
+check('longer-attack op env -> longer gap-relative attack (op1 arg 17)',
+  s_atk and s_inst and s_atk[17] > s_inst[17] and approx(s_atk[17], exp_atk(shp(I_LONGATK))))
+check('longer-decay op env -> longer decay (op1 arg 18)', s_dec and s_inst and s_dec[18] > s_inst[18])
+-- ampPunch default 4 => punch scale 1.0, so the curves pass through unscaled.
+check('op env feeds dec curve (op1 arg 20)', s_inst and approx(s_inst[20], shp(I_INSTANT)[4]))
+check('op env feeds atk curve (op1 arg 19)', s_inst and approx(s_inst[19], shp(I_INSTANT)[3]))
 
--- modulator envelope: the modShape index feeds the FM-brightness env independently
--- of the carrier (ampShape held constant). instant vs longest-decay mod shape.
-local m_inst = shape_trig(I_INSTANT, I_INSTANT)
-local m_dec  = shape_trig(I_INSTANT, I_LONGDEC)
-check('modulator shape feeds mod attack (trig arg 19)', m_inst and approx(m_inst[19], exp_atk(shp(I_INSTANT))))
-check('longer mod shape -> longer FM body (trig arg 11)', m_dec and m_inst and m_dec[11] > m_inst[11])
-check('modulator shape feeds mod-attack curve (trig arg 22)', m_inst and approx(m_inst[22], shp(I_INSTANT)[3]))
-check('modulator shape feeds mod-decay curve (trig arg 23)', m_inst and approx(m_inst[23], shp(I_INSTANT)[4]))
--- the modulator env is independent of the carrier env: changing modShape must not
--- move the carrier attack/decay (args 8/9).
-check('mod shape does not disturb carrier env (args 8/9 stable)',
-  m_inst and m_dec and approx(m_inst[8], m_dec[8]) and approx(m_inst[9], m_dec[9]))
+-- each operator carries its OWN envelope: driving op3's env feeds args 25..28 and
+-- must NOT disturb op1's env (args 17..20).
+local o3_inst = env_trig(3, I_INSTANT)
+local o3_dec  = env_trig(3, I_LONGDEC)
+check('op3 env feeds its own decay (op3 arg 26)', o3_dec and o3_inst and o3_dec[26] > o3_inst[26])
+check('op3 env feeds atk curve (op3 arg 27)', o3_inst and approx(o3_inst[27], shp(I_INSTANT)[3]))
+check('op3 env does not disturb op1 env (args 17/18 stable)',
+  o3_inst and o3_dec and approx(o3_inst[17], o3_dec[17]) and approx(o3_inst[18], o3_dec[18]))
 
--- shape-mode amp decay tracks the inter-hit gap: 4x faster division -> ~1/4
--- the decay, so dense/fast channels self-shorten instead of piling up.
-local function amp_decay_for_div(divv)
+-- op-env decay tracks the inter-hit gap: 4x faster division -> ~1/4 the decay
+-- (read op1's decay at arg 18), so dense/fast channels self-shorten.
+local function op1_decay_for_div(divv)
   clock._reset()
   local saved = engine
   local cap
@@ -567,10 +576,10 @@ local function amp_decay_for_div(divv)
   e:launch(1)
   clock._run_until(2)
   engine = saved
-  return cap and cap[9]
+  return cap and cap[18]
 end
-local slow, fast = amp_decay_for_div(2), amp_decay_for_div(8)
-check('amp decay scales with division (4x faster ~= 1/4 the hit)',
+local slow, fast = op1_decay_for_div(2), op1_decay_for_div(8)
+check('op env decay scales with division (4x faster ~= 1/4 the hit)',
   slow and fast and approx(fast, slow / 4))
 
 -- the per-channel FM algorithm reaches trig arg 3 (4-op engine routing selector).
@@ -591,7 +600,7 @@ local function algo_trig(algo)
 end
 check('per-channel algo feeds trig arg 3', algo_trig(5) == 5)
 
--- the channel index rides along as trig arg 14 so the SC engine can keep each
+-- the channel index rides along as trig arg 10 so the SC engine can keep each
 -- channel monophonic (a new hit releases the previous voice, no droning overlap).
 local function chan_arg(ch)
   clock._reset()
@@ -605,15 +614,14 @@ local function chan_arg(ch)
   e:launch(ch)
   clock._run_until(2)
   engine = saved
-  return cap and cap[14]
+  return cap and cap[10]
 end
-check('channel index feeds trig arg 14', chan_arg(3) == 3)
+check('channel index feeds trig arg 10', chan_arg(3) == 3)
 
--- VOICE macros: engine-wide globals read straight at fire time. trig args
--- 10/12/13 = amp-decay curve, feedback, drive; arg 7 = modIndex. The amp-decay
--- curve = the carrier shape's decCurve scaled by ampPunch/4 (default shape 'tail'
--- decCurve -4 * ampPunch 4/4 = -4). (mod env args 11/19/22/23 are per-channel.)
--- `setup(e)` mutates the engine before launch; returns the first trig.
+-- voice scalars/macros read straight at fire time. trig args: 7 = modIndex,
+-- 8 = feedback, 9 = drive; op1's per-segment env curves ride args 19 (atk) / 20 (dec),
+-- = the op1 shape's curves scaled by ampPunch/4 (default 'tail' decCurve -4 *
+-- ampPunch 4/4 = -4). `setup(e)` mutates the engine before launch; returns the trig.
 local function macro_trig(setup)
   clock._reset()
   local saved = engine
@@ -630,29 +638,29 @@ local function macro_trig(setup)
   return cap
 end
 local d = macro_trig()
-check('voice macro defaults: modIndex=2, amp-dec curve=-4, feedback=0, drive=1',
-  d and approx(d[7], 2) and approx(d[10], -4) and approx(d[12], 0) and approx(d[13], 1))
--- mod index, amp punch and FM feedback are now per-channel static scalars (MIX page);
--- they feed the trig args directly (drive stays an engine-wide macro). The modulator
--- decay is sequenced -> arg 11, with modulator attack at arg 19.
+check('voice macro defaults: modIndex=2, op1 dec curve=-4, feedback=0, drive=1',
+  d and approx(d[7], 2) and approx(d[20], -4) and approx(d[8], 0) and approx(d[9], 1))
+-- mod index, amp punch and FM feedback are per-channel static scalars (MIX page);
+-- they feed the trig args directly (drive stays an engine-wide macro). ampPunch
+-- scales every op env's curves -> op1 dec curve at arg 20.
 local gv = macro_trig(function(e)
   e.channels[1].modIndex, e.channels[1].ampPunch, e.channels[1].fmFeedback = 12, 8, 1.5
   e.drive = 4
 end)
 check('voice scalars feed trig: modIndex, ampPunch->curve, feedback, drive',
-  gv and approx(gv[7], 12) and approx(gv[10], -8) and approx(gv[12], 1.5) and approx(gv[13], 4))
--- per-operator levels ride trig args 15..18; op1 default 1, op2..4 default 15/31.
-check('op levels default: op1=1, op2..4=15/31 (args 15-18)',
-  d and approx(d[15], 1) and approx(d[16], 15/31) and approx(d[17], 15/31) and approx(d[18], 15/31))
--- now per-channel STATIC scalars: opLevel1..4 feed trig args 15-18 directly.
+  gv and approx(gv[7], 12) and approx(gv[20], -8) and approx(gv[8], 1.5) and approx(gv[9], 4))
+-- per-operator levels ride trig args 11..14; op1 default 1, op2..4 default 15/31.
+check('op levels default: op1=1, op2..4=15/31 (args 11-14)',
+  d and approx(d[11], 1) and approx(d[12], 15/31) and approx(d[13], 15/31) and approx(d[14], 15/31))
+-- now per-channel STATIC scalars: opLevel1..4 feed trig args 11-14 directly.
 local ol = macro_trig(function(e)
   e.channels[1].opLevel1 = 0.2
   e.channels[1].opLevel2 = 0.4
   e.channels[1].opLevel3 = 0.6
   e.channels[1].opLevel4 = 0.8
 end)
-check('per-channel op levels feed trig args 15-18',
-  ol and approx(ol[15], 0.2) and approx(ol[16], 0.4) and approx(ol[17], 0.6) and approx(ol[18], 0.8))
+check('per-channel op levels feed trig args 11-14',
+  ol and approx(ol[11], 0.2) and approx(ol[12], 0.4) and approx(ol[13], 0.6) and approx(ol[14], 0.8))
 
 -- quantization: an off-grid division (triplet, 4/3 beats) must snap every
 -- event FORWARD to the quarter-note grid (quantize=4 -> step 1 beat). We read
@@ -728,15 +736,15 @@ erb:bar_reset(3)
 check('bar_reset does not launch a stopped channel', erb:is_running(3) == false)
 
 -- reset_channel must rewind EVERY sequence (hardcoded list), including the
--- envelope shapes, or ampShape/modShape drift out of phase on a bar reset.
+-- per-op envelope shapes (A and B), or opEnvN drift out of phase on a bar reset.
 local rzc = Burst.new()
-rzc.channels[1].ampShape = seqx.new{1, 5, 9}
-rzc.channels[1].modShape = seqx.new{2, 6}
-rzc.channels[1].ampShape(); rzc.channels[1].ampShape()  -- advance the playheads
-rzc.channels[1].modShape()
+rzc.channels[1].opEnv1 = seqx.new{1, 5, 9}
+rzc.channels[1].opEnv1B = seqx.new{0, 3}
+rzc.channels[1].opEnv1(); rzc.channels[1].opEnv1()  -- advance the playheads
+rzc.channels[1].opEnv1B()
 rzc:reset_channel(1)
-check('reset_channel rewinds ampShape/modShape to step 1',
-  rzc.channels[1].ampShape() == 1 and rzc.channels[1].modShape() == 2)
+check('reset_channel rewinds opEnv1 A/B to step 1',
+  rzc.channels[1].opEnv1() == 1 and rzc.channels[1].opEnv1B() == 0)
 
 -- ---- grid_ui: controller wiring ---------------------------------------
 local GridUI = require 'grid_ui'
@@ -868,23 +876,29 @@ check('hit-count cells (top row) do not strobe',
   mg.strobes[6 * 16 + 0] == nil and mg.strobes[6 * 16 + 15] == nil)
 ctl:close_picker()
 
--- SHP page on a SINGLE button (row 7 col 1, next to div/reps): the one envelope
--- page, paired ampShape | modShape lanes (replaced the old carrier attack/decay +
--- modulator modatk/moddec pages). Selecting it lights only that button.
-ctl:press(1, 7)  -- row 7 col 1 = SHP page
-check('SHP page selected', ctl.selectedParam == 'ampShape')
-check('SHP page shows ampShape | modShape lanes',
-  ctl:row_lanes()[1].param == 'ampShape' and ctl:row_lanes()[2].param == 'modShape')
+-- per-op envelope pages (row 7 cols 1/2/3/4 = opEnv1/2/3/4, following div/reps at
+-- col 0): an A|B sequence like the op ratios (left = A shape index, right = B index
+-- offset). Selecting one lights only its button.
+ctl:press(1, 7)  -- row 7 col 1 = opEnv1 page
+check('opEnv1 page selected', ctl.selectedParam == 'opEnv1')
+check('opEnv1 page shows opEnv1 A | B lanes',
+  ctl:row_lanes()[1].param == 'opEnv1' and ctl:row_lanes()[1].layer == 'A'
+  and ctl:row_lanes()[2].param == 'opEnv1' and ctl:row_lanes()[2].layer == 'B')
 ctl:render_all()
-check('row7 lights only the SHP button (col1), not div/reps (col0)',
+check('row7 lights only the opEnv1 button (col1), not div/reps (col0)',
   mg.leds[7 * 16 + 1] == 15 and mg.leds[7 * 16 + 0] ~= 15)
-ctl:press(8, 0)  -- right half -> modShape A
-check('SHP page right half edits modShape',
-  ctl.picker.param == 'modShape' and ctl.picker.layer == 'A')
-ctl:press(2, 6)  -- value grid row 6 col 2 -> shape index 3
-check('SHP picker writes a shape index step',
-  seqx.values(geng.channels[1].modShape)[1] == GridUI.STEP_PICKER_VALUES.modShape[3])
+ctl:press(0, 0)  -- left half -> opEnv1 A
+check('opEnv1 left half edits the A (shape) layer',
+  ctl.picker.param == 'opEnv1' and ctl.picker.layer == 'A')
+ctl:press(2, 6)  -- value grid row 6 col 3 -> shape index 3
+check('opEnv1 A picker writes a shape index step',
+  seqx.values(geng.channels[1].opEnv1)[1] == GridUI.STEP_PICKER_VALUES.opEnv1[3])
+ctl:press(8, 0)  -- right half -> opEnv1 B (offset) picker
+check('opEnv1 right half edits the B (offset) layer',
+  ctl.picker.param == 'opEnv1' and ctl.picker.layer == 'B')
 ctl:close_picker()
+ctl:press(4, 7)  -- row 7 col 4 = opEnv4 page
+check('opEnv4 page selected', ctl.selectedParam == 'opEnv4')
 
 -- sequenced op ratio pages (row 6 cols 1/2/3/4 = op1/2/3/4, following the note
 -- page at col 0): an A|B sequence like note (left = A value, right = B offset).
@@ -935,26 +949,26 @@ check('back to note page', ctl.selectedParam == 'note')
 -- cue inviting a first press)
 check('fresh controller has not launched', ctl.hasLaunched == false)
 ctl:render_all()
-check('idle launch buttons pulse before first launch', mg.strobes[6 * 16 + 8] == 'pulse')
+check('idle launch buttons pulse before first launch', mg.strobes[7 * 16 + 5] == 'pulse')
 
--- launch toggle: 3x2 block at cols 8..10 (row 6 = ch0,1,2; row 7 = ch3,4,5)
-ctl:press(8, 6)   -- ch0 = col 8, row 6
-check('launch block (col8,row6) launches channel 1', geng:is_running(1) == true)
+-- launch toggle: a contiguous 1x6 strip on row 7 at cols 5..10 (col 5+ch = channel ch+1)
+ctl:press(5, 7)   -- ch0 = col 5, row 7
+check('launch strip (col5,row7) launches channel 1', geng:is_running(1) == true)
 check('first launch latches hasLaunched', ctl.hasLaunched == true)
-ctl:press(8, 6)
+ctl:press(5, 7)
 check('re-press stops channel 1', geng:is_running(1) == false)
 ctl:press(10, 7)  -- ch5 = col 10, row 7
-check('launch block (col10,row7) launches channel 6', geng:is_running(6) == true)
+check('launch strip (col10,row7) launches channel 6', geng:is_running(6) == true)
 ctl:press(10, 7)
 check('re-press stops channel 6', geng:is_running(6) == false)
 
 -- first-run gate: once any channel has ever started, the onboarding pulse is gone;
 -- a running channel is solid full-bright, an idle one a static dim (no strobe)
-geng:launch(1)  -- ch0 = col 8, row 6
+geng:launch(1)  -- ch0 = col 5, row 7
 ctl:render_all()
-check('idle launch button no longer pulses after first launch', mg.strobes[6 * 16 + 9] == nil)
-check('idle launch button settles to a static dim', mg.leds[6 * 16 + 9] == 4)
-check('running launch button is solid full-bright', mg.leds[6 * 16 + 8] == 15)
+check('idle launch button no longer pulses after first launch', mg.strobes[7 * 16 + 6] == nil)
+check('idle launch button settles to a static dim', mg.leds[7 * 16 + 6] == 4)
+check('running launch button is solid full-bright', mg.leds[7 * 16 + 5] == 15)
 geng:stop(1)
 
 -- scale picker (row6 QNT col 14)
@@ -1011,15 +1025,15 @@ ctl:press(4, 0)
 ctl:press(6, 0)   -- col6 -> op4 trig toggle
 check('op4 trig button (col6) sets step', geng.channels[1].opRatio4Trig == 1)
 ctl:press(6, 0)
--- amp/mod env shape-seq trig toggles (cols 8-9): single button, hold (0) <-> step (1)
-check('amp env trig defaults to hold', geng.channels[1].ampShapeTrig == 0)
-ctl:press(8, 0)   -- col8 -> amp env trig toggle
-check('amp env trig button (col8) sets step', geng.channels[1].ampShapeTrig == 1)
-ctl:press(8, 0)
-check('amp env trig button toggles back to hold', geng.channels[1].ampShapeTrig == 0)
-ctl:press(9, 0)   -- col9 -> mod env trig toggle
-check('mod env trig button (col9) sets step', geng.channels[1].modShapeTrig == 1)
-ctl:press(9, 0)
+-- op1/2/3/4 env shape-seq trig toggles (cols 7-10): single button, hold (0) <-> step (1)
+check('op1 env trig defaults to hold', geng.channels[1].opEnv1Trig == 0)
+ctl:press(7, 0)   -- col7 -> op1 env trig toggle
+check('op1 env trig button (col7) sets step', geng.channels[1].opEnv1Trig == 1)
+ctl:press(7, 0)
+check('op1 env trig button toggles back to hold', geng.channels[1].opEnv1Trig == 0)
+ctl:press(10, 0)  -- col10 -> op4 env trig toggle
+check('op4 env trig button (col10) sets step', geng.channels[1].opEnv4Trig == 1)
+ctl:press(10, 0)
 ctl:press(13, 6)
 check('PROB mode exited', ctl.probMode == false)
 
@@ -1136,16 +1150,16 @@ sui:enc(3, 1)
 check('prob page op2 trig line steps to step', seng.channels[1].opRatio2Trig == 1)
 sui:enc(3, -1)
 check('prob page op2 trig line steps back to hold', seng.channels[1].opRatio2Trig == 0)
-sui.sel_line[4] = 8   -- amp env shape-seq trig
+sui.sel_line[4] = 8   -- op1 env shape-seq trig
 sui:enc(3, 1)
-check('prob page amp env trig line steps to step', seng.channels[1].ampShapeTrig == 1)
+check('prob page op1 env trig line steps to step', seng.channels[1].opEnv1Trig == 1)
 sui:enc(3, -1)
-check('prob page amp env trig line steps back to hold', seng.channels[1].ampShapeTrig == 0)
-sui.sel_line[4] = 9   -- mod env shape-seq trig
+check('prob page op1 env trig line steps back to hold', seng.channels[1].opEnv1Trig == 0)
+sui.sel_line[4] = 11  -- op4 env shape-seq trig
 sui:enc(3, 1)
-check('prob page mod env trig line steps to step', seng.channels[1].modShapeTrig == 1)
+check('prob page op4 env trig line steps to step', seng.channels[1].opEnv4Trig == 1)
 sui:enc(3, -1)
-check('prob page mod env trig line steps back to hold', seng.channels[1].modShapeTrig == 0)
+check('prob page op4 env trig line steps back to hold', seng.channels[1].opEnv4Trig == 0)
 
 -- mix page: line 1 = pan, line 2 = channel level, lines 3..6 = op1..op4 level. All
 -- four op ratios are sequenced now (edited on the main/alt seq pages), absent here.
@@ -1169,7 +1183,8 @@ check('mix page line 3 steps opLevel1 down the 0..1 grid',
 -- op1/2/3/4 ratios are now sequenced — editable on the main seq page like any lane.
 sui:set_page(1)
 sui.sel_ch = 0
-sui.sel_line[1] = 1 + 7   -- run(1) + params: div..modShape(1..5) opRatio1(6) opRatio2(7) = line 8
+-- params: div(1) reps(2) note(3) opEnv1..4(4..7) opRatio1(8) opRatio2(9) -> line 10
+sui.sel_line[1] = 1 + 9
 sui:enc(2, 0)             -- sync grid selected param to the focused line
 check('main page line reaches the sequenced opRatio2 lane', sui:main_param() == 'opRatio2')
 seng.channels[1].opRatio2 = seqx.new{1}
@@ -1512,15 +1527,15 @@ check('op2 ratio trig param sets step', peng.channels[1].opRatio2Trig == 1)
 fake:set('ch1_op2_trig', 1)  -- option 1 = hold
 check('op2 ratio trig param sets hold', peng.channels[1].opRatio2Trig == 0)
 
--- amp/mod env shape trig mode params (hold/step option, like the op-ratio trigs)
-fake:set('ch1_ampShape_trig', 2)  -- option 2 = step
-check('amp env trig param sets step', peng.channels[1].ampShapeTrig == 1)
-fake:set('ch1_ampShape_trig', 1)  -- option 1 = hold
-check('amp env trig param sets hold', peng.channels[1].ampShapeTrig == 0)
-fake:set('ch1_modShape_trig', 2)
-check('mod env trig param sets step', peng.channels[1].modShapeTrig == 1)
-fake:set('ch1_modShape_trig', 1)
-check('mod env trig param sets hold', peng.channels[1].modShapeTrig == 0)
+-- per-op env shape trig mode params (hold/step option, like the op-ratio trigs)
+fake:set('ch1_opEnv1_trig', 2)  -- option 2 = step
+check('op1 env trig param sets step', peng.channels[1].opEnv1Trig == 1)
+fake:set('ch1_opEnv1_trig', 1)  -- option 1 = hold
+check('op1 env trig param sets hold', peng.channels[1].opEnv1Trig == 0)
+fake:set('ch1_opEnv4_trig', 2)
+check('op4 env trig param sets step', peng.channels[1].opEnv4Trig == 1)
+fake:set('ch1_opEnv4_trig', 1)
+check('op4 env trig param sets hold', peng.channels[1].opEnv4Trig == 0)
 
 -- reps rest tokens: rN <-> reps (1-N), so r1=0, r2=-1, r4=-3
 fake:set('ch1_reps_a', '2 r1 r4')
@@ -1828,14 +1843,14 @@ engine.trig = function() engine.trigs = engine.trigs + 1 end
 local oeng = Burst.new()
 oeng.outputs = outs
 midi_log = {}
--- fire(ch, beat, freq, level, ampShape, modShape, div, total, hit_idx)
-oeng:fire(1, 0, 440, 0.5, 4, 3, 4, 1, 0)  -- ch1 is midi: external only (pitch bend + note_on + op1/op2 CCs)
+-- fire(ch, beat, freq, level, env1, env2, env3, env4, div, total, hit_idx)
+oeng:fire(1, 0, 440, 0.5, 4, 3, 8, 8, 4, 1, 0)  -- ch1 is midi: external only (pitch bend + note_on + op1/op2 CCs)
 check('fire on midi channel skips engine.trig', engine.trigs == 0 and #midi_log == 4)
 ofake:set('ch1_output', Outputs.DEST.AUDIO_MIDI)
 midi_log = {}
-oeng:fire(1, 0, 440, 0.5, 4, 3, 4, 1, 0)
+oeng:fire(1, 0, 440, 0.5, 4, 3, 8, 8, 4, 1, 0)
 check('audio+midi fires both', engine.trigs == 1 and #midi_log == 4)
-oeng:fire(2, 0, 440, 0.5, 4, 3, 4, 1, 0)  -- ch2 is on crow 3+4
+oeng:fire(2, 0, 440, 0.5, 4, 3, 8, 8, 4, 1, 0)  -- ch2 is on crow 3+4
 check('fire on crow channel skips engine.trig', engine.trigs == 1)
 engine = nil
 

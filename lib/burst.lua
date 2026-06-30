@@ -54,37 +54,56 @@ Burst.QUANTIZE_VALUES = QUANTIZE_VALUES
 -- on 5-limit-consonant partials). Burst.is_carrier(algo, op) = the complement of
 -- ALGO_MODULATORS. Mirrored by GridUI.CARRIER_RATIOS / MODULATOR_RATIOS — keep in sync.
 --
--- CARRIER set: 5-limit just ratios across ~4 octaves (every value factors into
--- 2*3*5 in both numerator & denominator). 32 ascending values = one full grid picker.
+-- Each role set holds 64 ascending values, sorted LOW -> HIGH and biased to the low
+-- end. The op-ratio A grid picker (two rows) exposes only the LOWER 32 (~the
+-- sub-octave..+1-octave region); the upper 32 (higher ratios / octave-ups) are reached
+-- by ADDING the B index-offset lane, which walks UP the op's ROLE SET (op_ratio below)
+-- -- exactly mirroring the env-shape A/B model. So the directly-pickable range leans
+-- low, and randomize draws only from the lower 32 (RATIO_PICKER_COUNT). Mirrored by
+-- GridUI.CARRIER_RATIOS / MODULATOR_RATIOS / RATIO_VALUES -- keep in sync.
+--
+-- CARRIER set: 5-limit just ratios (every value factors into 2*3*5 num & denom). Lower
+-- 32 span 0.25..2.0 (dense), upper 32 span 2.0..8.0.
 local CARRIER_RATIOS = {
-  -- sub-octave: 1/2 3/5 5/8 2/3 3/4 4/5 5/6 15/16
-  0.5, 0.6, 0.625, 0.667, 0.75, 0.8, 0.833, 0.9375,
-  -- octave 1-2: 1/1 9/8 6/5 5/4 4/3 3/2 8/5 5/3
-  1.0, 1.125, 1.2, 1.25, 1.333, 1.5, 1.6, 1.667,
-  -- octave 2-4: 15/8 2/1 12/5 5/2 8/3 3/1 16/5 10/3
-  1.875, 2.0, 2.4, 2.5, 2.667, 3.0, 3.2, 3.333,
-  -- octave 4-8: 15/4 4/1 24/5 5/1 16/3 6/1 15/2 8/1
-  3.75, 4.0, 4.8, 5.0, 5.333, 6.0, 7.5, 8.0,
+  -- lower 32 (A picker, 0.25 .. 2.0):
+  0.25, 0.2667, 0.2778, 0.3, 0.3125, 0.3333, 0.375, 0.4,
+  0.4167, 0.4444, 0.5, 0.5333, 0.5556, 0.6, 0.625, 0.6667,
+  0.75, 0.8, 0.8333, 0.8889, 0.9, 1.0, 1.1111, 1.125,
+  1.2, 1.25, 1.3333, 1.5, 1.6, 1.6667, 1.8, 2.0,
+  -- upper 32 (B-offset reach, 2.0 .. 8.0):
+  2.0833, 2.2222, 2.25, 2.4, 2.5, 2.6667, 2.7, 2.7778,
+  3.0, 3.125, 3.2, 3.3333, 3.375, 3.5556, 3.6, 3.75,
+  4.0, 4.1667, 4.4444, 4.5, 4.8, 5.0, 5.3333, 5.4,
+  6.0, 6.25, 6.4, 6.6667, 6.75, 7.2, 7.5, 8.0,
 }
 Burst.CARRIER_RATIOS = CARRIER_RATIOS
--- MODULATOR set: whole numbers (integer modulator -> harmonic sidebands) + unit
--- divisions (subharmonic, keeps the spectrum periodic) + 5-limit-biased fractions
--- (5/4, 5/3, 5/2, ... tilt the brightest sidebands onto the just thirds/fifths the
--- key is tuned to). 32 ascending values.
+-- MODULATOR set: harmonic integers (-> harmonic sidebands) + a few unit divisions
+-- (subharmonic warmth) + simple fractions. Lower 32 span 0.25..6.0 and INCLUDE the
+-- bright harmonic integers 1..6, so the default / randomized FM is bright rather than
+-- dark; upper 32 span 6.25..16 (high & inharmonic harmonics, B-offset reach). (The
+-- deep subharmonics that made the default dark were dropped.)
 local MODULATOR_RATIOS = {
-  -- unit divisions + small 5-limit fractions below 1:
-  -- 1/8 1/6 1/5 1/4 1/3 2/5 1/2 3/5 2/3 3/4 4/5
-  0.125, 0.167, 0.2, 0.25, 0.333, 0.4, 0.5, 0.6, 0.667, 0.75, 0.8,
-  -- 5-limit fractions 1-2 + harmonic integers + 5-rich highs:
-  -- 1 5/4 4/3 3/2 5/3 2 5/2 3 10/3 15/4 4 5 6 7 8 9 10 11 12 14 16
-  1.0, 1.25, 1.333, 1.5, 1.667, 2.0, 2.5, 3.0, 3.333, 3.75, 4.0,
-  5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 14.0, 16.0,
+  -- lower 32 (A picker, 0.25 .. 6.0 -- integers 1..6 + simple fractions):
+  0.25, 0.3333, 0.4, 0.5, 0.6, 0.6667, 0.75, 0.8,
+  0.8333, 1.0, 1.2, 1.25, 1.3333, 1.4, 1.5, 1.6667,
+  1.75, 2.0, 2.25, 2.3333, 2.5, 2.6667, 3.0, 3.3333,
+  3.5, 3.6667, 4.0, 4.3333, 4.5, 5.0, 5.5, 6.0,
+  -- upper 32 (B-offset reach, 6.25 .. 16 -- high / inharmonic harmonics):
+  6.25, 6.3333, 6.5, 6.6667, 7.0, 7.3333, 7.5, 7.6667,
+  8.0, 8.3333, 8.5, 8.6667, 9.0, 9.3333, 9.5, 9.6667,
+  10.0, 10.3333, 10.5, 10.6667, 11.0, 11.3333, 11.5, 12.0,
+  12.5, 13.0, 13.5, 14.0, 14.5, 15.0, 15.5, 16.0,
 }
 Burst.MODULATOR_RATIOS = MODULATOR_RATIOS
+-- Size of the op-ratio A picker = the lower half of each role set (mirrors the
+-- env-shape SHAPE_PICKER_COUNT). The A grid shows / randomize draws from set[1..32];
+-- the upper 32 are B-offset reach only.
+local RATIO_PICKER_COUNT = 32
+Burst.RATIO_PICKER_COUNT = RATIO_PICKER_COUNT
 -- The full curated set = union of both, sorted ascending + de-duplicated. This is the
--- STABLE index space the op-ratio B (index-offset) lane walks and that params store
--- indices against; both role sets are subsets, so every value stays grid-reachable.
--- Mirrors GridUI.RATIO_VALUES — keep in sync.
+-- STABLE index space that params store A values against (both role sets are subsets, so
+-- every value stays addressable). NOTE: the B (index-offset) lane no longer walks this
+-- union -- it walks the op's ROLE SET (see op_ratio). Mirrors GridUI.RATIO_VALUES — keep in sync.
 local RATIO_VALUES = {}
 do
   local seen = {}
@@ -107,14 +126,31 @@ local function ratio_pos(v)
   return best
 end
 
--- Resolve a sequenced op ratio: A is a curated ratio value (first-32 grid range),
--- `off` is the B integer index offset that walks UP the list (clamped to its end).
--- The result is always a real RATIO_VALUES entry — never an off-grid sum.
-local function op_ratio(a, off)
-  local idx = ratio_pos(a) + math.floor((off or 0) + 0.5)
-  return RATIO_VALUES[math.max(1, math.min(#RATIO_VALUES, idx))]
+-- nearest 1-based index of v in an ascending list (exact when v is a list member).
+local function nearest_in(list, v)
+  local best, bd = 1, math.huge
+  for i, x in ipairs(list) do local d = math.abs(x - v); if d < bd then bd = d; best = i end end
+  return best
+end
+-- Resolve a sequenced op ratio: A is a curated ratio value, `off` is the B integer
+-- index offset that walks UP a sorted ratio `list` (clamped to its ends). `list`
+-- defaults to the full union (RATIO_VALUES) but run_burst passes the op's ROLE SET
+-- (CARRIER_RATIOS / MODULATOR_RATIOS), so B walks WITHIN the op's role -- this is the
+-- only route from the low A-picker range into the upper-32 (higher) ratios, mirroring
+-- op_env. The result is always a real list entry, never an off-grid sum.
+local function op_ratio(a, off, list)
+  list = list or RATIO_VALUES
+  local pos = (list == RATIO_VALUES) and ratio_pos(a) or nearest_in(list, a)
+  local idx = pos + math.floor((off or 0) + 0.5)
+  return list[math.max(1, math.min(#list, idx))]
 end
 Burst.op_ratio = op_ratio
+
+-- Resolve a sequenced per-operator envelope shape: A is a 1-based shape index, `off`
+-- is the B integer index offset that walks UP the SHAPES table (clamped to its ends).
+-- Mirrors op_ratio, but A is already an index (shapes have no value/index split), so
+-- this is a plain clamped add. Defined after SHAPES below via the forward upvalue.
+local op_env  -- forward-declared; body assigned once #SHAPES is known (see below)
 
 -- Which operators are modulators (appear as a 'from' in some edge) per algorithm
 -- 1..16. Mirrors Engine_Potionshop.algorithms (SC) — keep in sync; used only to
@@ -177,68 +213,105 @@ Burst.op_ratio_set = op_ratio_set
 --   atkCurve/decCurve = SC `Env` curve per segment (0 = linear, negative = fast-start
 --                   exp 'pluck', positive = slow-start 'log'). Independent per segment,
 --                   which the old single Env.perc curve couldn't express.
--- DEFAULTS: carrier = SHAPE_CARRIER_DEFAULT ('tail', ~the old decay 16/31 contour),
--- modulator = SHAPE_MOD_DEFAULT ('body', ~the old moddec 8/31). Mirrored by name +
--- count in lib/grid_ui.lua (GridUI.SHAPE_NAMES) -- keep the two in sync. (The SC
--- engine never sees a shape: fire() resolves the index to times + curves.)
+-- DEFAULTS: carrier = SHAPE_CARRIER_DEFAULT ('plop', the longest/roundest contour
+-- still inside the short A picker), modulator = SHAPE_MOD_DEFAULT ('knock', ~0.6x the
+-- carrier so the FM brightness env reads as a tighter bright attack). Mirrored by
+-- name + count in lib/grid_ui.lua (GridUI.SHAPE_NAMES) -- keep the two in sync. (The
+-- SC engine never sees a shape: fire() resolves the index to times + curves.)
 --
--- ORDERED BY ATTACK LENGTH (atkMul ascending) so the picker reads left-to-right /
--- top-to-bottom as a short -> long attack gradient (and the LED/screen brightness
--- ramp tracks it). row 1 (1..16) is the INSTANT-attack family (atkMul 0, percussive),
--- ordered by decay length within it; row 2 (17..32) is the GROWING-attack family
--- (atkMul 0.05 -> 1.00), swells through ramps. Every entry is a single attack-decay
+-- SORTED SHORTEST -> LONGEST by TOTAL length (atkMul + decMul). The A lane's
+-- grid/screen picker exposes ONLY the first 32 (GridUI.SHAPE_PICKER_COUNT; the picker
+-- is two grid rows) = the 32 SHORTEST contours, so the default palette leans short.
+-- The upper 32 (the longer half) are reachable ONLY by ADDING the B index-offset lane
+-- onto an A pick (op_env clamps a+off into 1..#SHAPES) -- so B EXTENDS a short A pick
+-- toward longer tails. Because the table is length-ordered the LED/screen brightness
+-- ramp now reads as a short -> long gradient. Every entry is a single attack-decay
 -- contour -- deliberately NO ratchets / LFO-style cycling, which would fight the
--- engine's own rhythm; the variety is in decay length + the per-segment curve family
+-- engine's own rhythm; the variety is in length + the per-segment curve family
 -- (exp / linear / log).
 local SHAPES = {
-  -- {atkMul, decMul, atkCurve, decCurve, name}
-  -- row 1: instant attack (atkMul 0), ordered by decay length, curve variety:
-  {0.00, 0.10, -8, -8, 'click'},  -- 1  tiniest transient
-  {0.00, 0.18, -8, -8, 'snap'},   -- 2  very short, steep
-  {0.00, 0.25, -4, -4, 'tap'},    -- 3  short pluck
-  {0.00, 0.30, -2, -2, 'pip'},    -- 4  gentle short
-  {0.00, 0.38, -2, -8, 'pop'},    -- 5  soft-ish in, steep out
-  {0.00, 0.45, -4, -4, 'pluck'},  -- 6
-  {0.00, 0.55, -6, -6, 'drum'},   -- 7  punchy mid
-  {0.00, 0.70, -4, -4, 'body'},   -- 8  (modulator default; ~old moddec 8/31)
-  {0.00, 0.80, -4, -8, 'exp'},    -- 9  steep exponential decay
-  {0.00, 0.85, -4,  4, 'log'},    -- 10 logarithmic decay (slow then fast)
-  {0.00, 1.00, -1,  8, 'glass'},  -- 11 hold then a log (slow-start) drop
-  {0.00, 1.10, -4, -4, 'tail'},   -- 12 (carrier default; ~old decay 16/31)
-  {0.00, 1.40, -2, -6, 'bell'},   -- 13 long bell-like ring
-  {0.00, 1.70, -4, -3, 'long'},   -- 14 nearly fills the slot
-  {0.00, 2.00,  0, -8, 'hold'},   -- 15 flat sustain then a fast drop
-  {0.00, 2.40, -1, -2, 'drone'},  -- 16 very long tail (cut by next hit; clamped 3s)
-  -- row 2: growing attack (atkMul 0.05 -> 1.00), swells through ramps:
-  {0.05, 0.80,  0,  0, 'lin'},    -- 17 linear attack + decay
-  {0.10, 0.55, -2, -2, 'soft'},   -- 18 gentle pluck w/ a touch of attack
-  {0.15, 0.50, -1, -2, 'round'},  -- 19
-  {0.15, 1.60,  0, -2, 'fade'},   -- 20 soft in, long near-linear fade
-  {0.20, 0.45,  2, -3, 'puff'},   -- 21 gentle log blip
-  {0.25, 1.30,  3, -5, 'surge'},  -- 22 log attack + long tail
-  {0.30, 0.55,  4, -4, 'swell'},  -- 23 soft (log) attack
-  {0.35, 0.55,  4,  4, 'arc'},    -- 24 soft symmetric (log in + out)
-  {0.40, 0.30, -4, -4, 'ramp'},   -- 25 exp attack, short
-  {0.45, 0.90,  6, -4, 'bloom'},  -- 26 slow swell + medium tail
-  {0.50, 1.50,  5, -4, 'huge'},   -- 27 big swell pad
-  {0.60, 0.55, -2, -2, 'pad'},    -- 28 slow symmetric
-  {0.70, 0.80,  2, -2, 'bow'},    -- 29 bowed: slow in, medium out
-  {0.85, 0.40, -3, -3, 'wedge'},  -- 30 attack nearly fills the slot
-  {1.00, 0.10,  3, -2, 'rise'},   -- 31 reverse: rises into the next hit
-  {1.00, 0.05,  0, -8, 'revrs'},  -- 32 pure ramp into the next hit, click off
+  -- {atkMul, decMul, atkCurve, decCurve, name}   -- sorted by total = atkMul + decMul
+  -- A-PICKER bank (1..32): the 32 shortest contours (total 0.03 .. 0.20):
+  {0.00, 0.03, -8, -8, 'tick'},   -- 1  ultra-short transient
+  {0.00, 0.04, -6, -8, 'dust'},   -- 2
+  {0.00, 0.05, -8, -6, 'tock'},   -- 3
+  {0.00, 0.05, -4, -4, 'clip'},   -- 4
+  {0.00, 0.05, -8, -4, 'prick'},  -- 5
+  {0.00, 0.05, -6, -8, 'chip'},   -- 6
+  {0.00, 0.06, -4, -6, 'grain'},  -- 7
+  {0.00, 0.06, -8,  0, 'dit'},    -- 8  linear out micro 
+  {0.01, 0.06, -8, -6, 'spike'},  -- 9  first attack-bearing shape
+  {0.00, 0.07, -6, -4, 'tic'},    -- 10
+  {0.00, 0.07, -8, -6, 'nip'},    -- 11
+  {0.00, 0.08, -8, -8, 'blip'},   -- 12
+  {0.00, 0.09, -8, -2, 'nick'},   -- 13
+  {0.00, 0.09, -6, -8, 'plip'},   -- 14
+  {0.00, 0.10, -8, -8, 'click'},  -- 15 tiny transient
+  {0.00, 0.10, -2, -8, 'ping'},   -- 16 gentle in, steep out
+  {0.00, 0.10,  0, -8, 'dot'},    -- 17 flat-ish then drop
+  {0.02, 0.08, -6, -8, 'spit'},   -- 18
+  {0.00, 0.11, -4, -8, 'rim'},    -- 19
+  {0.00, 0.12, -8, -8, 'knock'},  -- 20 
+  {0.02, 0.10, -8, -8, 'flick'},  -- 21 tiny attack snap
+  {0.00, 0.13, -2, -6, 'clave'},  -- 22 woody
+  {0.00, 0.14, -4, -6, 'dink'},   -- 23
+  {0.04, 0.10, -8, -8, 'dab'},    -- 24 small attack tap
+  {0.00, 0.15, -6, -4, 'clap'},   -- 25
+  {0.03, 0.12, -6, -6, 'zip'},    -- 26 quick swell-blip
+  {0.00, 0.16, -6, -6, 'jab'},    -- 27
+  {0.02, 0.14, -4, -4, 'poke'},   -- 28
+  {0.00, 0.18, -8, -8, 'snap'},   -- 29 short, steep
+  {0.00, 0.18, -4, -8, 'zap'},    -- 30 fast exp out
+  {0.00, 0.18, -2, -6, 'tink'},   -- 31
+  {0.00, 0.20, -4, -4, 'plop'},   -- 32 (carrier default; longest/roundest in the A picker)
+  -- B-REACH bank (33..64): the longer half (total 0.22 .. 2.40), reached by B offset:
+  {0.00, 0.22, -2, -8, 'ting'},   -- 33 short bell-ish
+  {0.00, 0.24, -6, -6, 'bop'},    -- 34 fuller but still short
+  {0.00, 0.25, -4, -4, 'tap'},    -- 35 short pluck
+  {0.00, 0.30, -2, -2, 'pip'},    -- 36 gentle short
+  {0.00, 0.38, -2, -8, 'pop'},    -- 37 soft-ish in, steep out
+  {0.00, 0.45, -4, -4, 'pluck'},  -- 38
+  {0.00, 0.55, -6, -6, 'drum'},   -- 39 punchy mid
+  {0.10, 0.55, -2, -2, 'soft'},   -- 40 gentle pluck w/ a touch of attack
+  {0.15, 0.50, -1, -2, 'round'},  -- 41
+  {0.20, 0.45,  2, -3, 'puff'},   -- 42 gentle log blip
+  {0.00, 0.70, -4, -4, 'body'},   -- 43 (~old moddec 8/31)
+  {0.40, 0.30, -4, -4, 'ramp'},   -- 44 exp attack, short
+  {0.00, 0.80, -4, -8, 'exp'},    -- 45 steep exponential decay
+  {0.00, 0.85, -4,  4, 'log'},    -- 46 logarithmic decay (slow then fast)
+  {0.05, 0.80,  0,  0, 'lin'},    -- 47 linear attack + decay
+  {0.30, 0.55,  4, -4, 'swell'},  -- 48 soft (log) attack
+  {0.35, 0.55,  4,  4, 'arc'},    -- 49 soft symmetric (log in + out)
+  {0.00, 1.00, -1,  8, 'glass'},  -- 50 hold then a log (slow-start) drop
+  {1.00, 0.05,  0, -8, 'revrs'},  -- 51 pure ramp into the next hit, click off
+  {0.00, 1.10, -4, -4, 'tail'},   -- 52 (~old decay 16/31)
+  {1.00, 0.10,  3, -2, 'rise'},   -- 53 reverse: rises into the next hit
+  {0.60, 0.55, -2, -2, 'pad'},    -- 54 slow symmetric
+  {0.85, 0.40, -3, -3, 'wedge'},  -- 55 attack nearly fills the slot
+  {0.45, 0.90,  6, -4, 'bloom'},  -- 56 slow swell + medium tail
+  {0.00, 1.40, -2, -6, 'bell'},   -- 57 long bell-like ring
+  {0.70, 0.80,  2, -2, 'bow'},    -- 58 bowed: slow in, medium out
+  {0.25, 1.30,  3, -5, 'surge'},  -- 59 log attack + long tail
+  {0.00, 1.70, -4, -3, 'long'},   -- 60 nearly fills the slot
+  {0.15, 1.60,  0, -2, 'fade'},   -- 61 soft in, long near-linear fade
+  {0.00, 2.00,  0, -8, 'hold'},   -- 62 flat sustain then a fast drop
+  {0.50, 1.50,  5, -4, 'huge'},   -- 63 big swell pad
+  {0.00, 2.40, -1, -2, 'drone'},  -- 64 very long tail (cut by next hit; clamped 3s)
 }
 Burst.SHAPES = SHAPES
-Burst.SHAPE_CARRIER_DEFAULT = 12  -- 'tail'
-Burst.SHAPE_MOD_DEFAULT     = 8   -- 'body'
--- Count of the leading INSTANT-attack shapes (atkMul 0). Because the table is
--- attack-ordered they're contiguous at the front (the row-1 / first-16 percussive
--- family). randomize draws env shapes only from this range, so a scrambled channel
--- stays punchy rather than getting a slow swell/pad that smears the rhythm.
-local SHAPE_PERC_COUNT = 0
-for _, s in ipairs(SHAPES) do
-  if s[1] == 0 then SHAPE_PERC_COUNT = SHAPE_PERC_COUNT + 1 else break end
-end
-Burst.SHAPE_PERC_COUNT = SHAPE_PERC_COUNT
+Burst.SHAPE_CARRIER_DEFAULT = 32  -- 'plop'  (longest/roundest in the short A picker)
+Burst.SHAPE_MOD_DEFAULT     = 20  -- 'knock' (~0.6x the carrier: tighter bright attack)
+-- Size of the A-PICKER bank = the first (shortest) half of the length-sorted table
+-- (mirrors GridUI.SHAPE_PICKER_COUNT, the picker's two grid rows). init + randomize
+-- draw env shapes from this range (1..SHAPE_PICKER_COUNT), so a scrambled channel
+-- stays short/tight -- the whole upper half (the longer swells/pads/tails) stays a
+-- deliberate, hand-picked B-offset reach. Indices here are inherently grid-reachable.
+local SHAPE_PICKER_COUNT = math.min(32, #SHAPES)
+Burst.SHAPE_PICKER_COUNT = SHAPE_PICKER_COUNT
+-- randomize draws env shapes from SHAPE_RANDOMIZE_MIN..SHAPE_PICKER_COUNT (the upper
+-- part of the short bank) -- skips the tiniest clicks for a bit more body.
+local SHAPE_RANDOMIZE_MIN = 16
+Burst.SHAPE_RANDOMIZE_MIN = SHAPE_RANDOMIZE_MIN
 
 -- Resolve a 1-based shape index to its contour entry (clamped to the table).
 function Burst.shape(i)
@@ -246,6 +319,14 @@ function Burst.shape(i)
   if i < 1 then i = 1 elseif i > #SHAPES then i = #SHAPES end
   return SHAPES[i]
 end
+
+-- op_env body (forward-declared above): A shape index + B index offset, clamped to
+-- the SHAPES table. The mirror of op_ratio for per-operator envelope sequences.
+op_env = function(a, off)
+  local idx = math.floor((a or 1) + 0.5) + math.floor((off or 0) + 0.5)
+  return math.max(1, math.min(#SHAPES, idx))
+end
+Burst.op_env = op_env
 
 local function round(x) return math.floor(x + 0.5) end
 local function clamp(v, lo, hi) return math.max(lo, math.min(hi, v)) end
@@ -324,15 +405,21 @@ local function default_channel()
     -- left it alone), so it sequenced nothing. 16/31 ≈ 0.52 is the grid-exact form
     -- of the old 0.5 neutral, kept reachable on the 1/31 MIX picker.
     level = 16 / 31,
-    -- envelope SHAPE is sequenced. ampShape (carrier amp env) and modShape
-    -- (modulator/FM-brightness env) are a single PAIR sharing one page (like
-    -- div/reps): each is a 1-based index into Burst.SHAPES, resolved per hit in
-    -- fire() to attack/decay times (scaled to the inter-hit gap) + per-segment
-    -- curves. One index replaces the old attack|decay and modatk|moddec pairs.
-    ampShape = seqx.new{Burst.SHAPE_CARRIER_DEFAULT},
-    modShape = seqx.new{Burst.SHAPE_MOD_DEFAULT},
-    -- div/reps/ampShape/modShape have no B layer; only note keeps one now (level
-    -- became a static MIX-page scalar, so its old additive B layer is gone too).
+    -- PER-OPERATOR envelope SHAPES, sequenced like the op ratios. opEnv1..4 each
+    -- give operator K its own EG (DX-style): a carrier's env shapes its amplitude,
+    -- a modulator's env shapes the FM depth/brightness it imparts (SC multiplies oK
+    -- by its env). Each is a 1-based index into Burst.SHAPES with an A value lane +
+    -- a B index-offset lane (opEnvKB) that walks UP the table, exactly like
+    -- opRatioK. Resolved per hit in fire() to attack/decay times (scaled to the
+    -- inter-hit gap) + per-segment curves. Replaced the old ampShape|modShape pair.
+    -- op1 defaults to the carrier contour, op2..4 to the modulator contour (their
+    -- usual roles), but every op env is fully editable + A/B sequenced.
+    opEnv1 = seqx.new{Burst.SHAPE_CARRIER_DEFAULT},
+    opEnv2 = seqx.new{Burst.SHAPE_MOD_DEFAULT},
+    opEnv3 = seqx.new{Burst.SHAPE_MOD_DEFAULT},
+    opEnv4 = seqx.new{Burst.SHAPE_MOD_DEFAULT},
+    opEnv1B = seqx.new{0}, opEnv2B = seqx.new{0}, opEnv3B = seqx.new{0}, opEnv4B = seqx.new{0},
+    -- div/reps have no B layer; note + the op ratios + the op envelopes each keep one.
     noteB  = seqx.new{0},
     -- per-operator FM ratios. ALL four are SEQUENCED (their own grid pages, A value
     -- + B index offset, like note/level) so every operator's voicing can morph per
@@ -367,11 +454,12 @@ local function default_channel()
     -- per burst, held for every hit) 1=step (advance the opRatioN B index lane per
     -- hit, so the ratio arpeggiates within a burst). Mirrors altTrig for the note B.
     opRatio1Trig = 0, opRatio2Trig = 0, opRatio3Trig = 0, opRatio4Trig = 0,
-    -- per-envelope-shape sequence trig mode (prob page): 0=hold (the shape is drawn
-    -- once per burst) 1=step (advance the ampShape/modShape A sequins per hit, so the
-    -- envelope shape arpeggiates within a burst). Same hold/step mechanism, but since
-    -- shapes have no B layer it walks the A lane itself (op-ratio step walks B).
-    ampShapeTrig = 0, modShapeTrig = 0,
+    -- per-op-envelope sequence trig mode (prob page): 0=hold (the env shape is drawn
+    -- once per burst) 1=step (advance that op env's B index-offset lane per hit,
+    -- re-resolved against the held A, so the envelope shape arpeggiates within a
+    -- burst). Identical mechanism to the op-ratio trig (walks B), now that op
+    -- envelopes have a B layer.
+    opEnv1Trig = 0, opEnv2Trig = 0, opEnv3Trig = 0, opEnv4Trig = 0,
   }
 end
 
@@ -399,8 +487,8 @@ function Burst.new()
   -- (FM algorithm, mod index, amp punch and FM feedback used to be engine-wide globals
   -- too; they are now per-channel static MIX-page scalars — see default_channel. FM
   -- body length
-  -- is no longer a macro either: the per-channel modShape sequence owns the modulator
-  -- envelope; the old self.fmDecay was retired.)
+  -- is no longer a macro either: the per-channel per-op envelope sequences (opEnv1..4)
+  -- own each operator's contour; the old self.fmDecay was retired.)
   self.drive = 1        -- tanh soft-clip drive: 1 = clean, higher = saturated
   -- per-operator output levels are NOT global anymore: each channel sequences its
   -- own op1..op4 (A/B) sequins (see default_channel), drawn per burst in run_burst.
@@ -436,9 +524,11 @@ end
 
 function Burst:reset_channel(ch)
   local c = self.channels[ch]
-  for _, k in ipairs{'div','reps','note','ampShape','modShape',  -- envelope shapes (paired, A-only)
+  for _, k in ipairs{'div','reps','note',                          -- timing + pitch (A)
+                     'opEnv1','opEnv2','opEnv3','opEnv4',          -- per-op envelope shapes (A)
                      'opRatio1','opRatio2','opRatio3','opRatio4',  -- sequenced op ratios (A)
-                     'noteB',                                     -- only note keeps a B layer
+                     'noteB',                                      -- note keeps a B layer
+                     'opEnv1B','opEnv2B','opEnv3B','opEnv4B',      -- op envelopes keep a B layer
                      'opRatio1B','opRatio2B','opRatio3B','opRatio4B'} do  -- op ratios keep a B layer
     c[k]:reset()
   end
@@ -573,26 +663,38 @@ function Burst:run_burst(ch, token, target_in)
     local degreeA = note_seq()
     local degreeB = note_seqB()
     local level = c.level  -- per-channel static MIX scalar (no longer sequenced)
-    -- sequenced op1/2/3/4 FM ratios: A = base ratio (first-32 grid range), B = integer
-    -- index offset that walks UP RATIO_VALUES (the only route into the 33..63 extended
-    -- range). A is the per-burst value (drawn once, held for every hit, like the note
-    -- A degree); B is its offset. Kept separate so the step trig mode below can
+    -- sequenced op1/2/3/4 FM ratios: A = base ratio (lower-32 grid range), B = integer
+    -- index offset that walks UP the op's ROLE SET (the only route into the upper-32
+    -- higher ratios). A is the per-burst value (drawn once, held for every hit, like the
+    -- note A degree); B is its offset. Kept separate so the step trig mode below can
     -- advance B per hit while A stays held. Drawn above the rest/skip checks so the
     -- sequins advance on every burst step. op1 is the fundamental (A defaults to 1.0).
     -- A live edit applies at the next burst (not identity-checked, like level).
+    -- Role set per op (carrier vs modulator under this channel's algo) = the list B walks.
+    local rset1 = op_ratio_set(c.algo, 1)
+    local rset2 = op_ratio_set(c.algo, 2)
+    local rset3 = op_ratio_set(c.algo, 3)
+    local rset4 = op_ratio_set(c.algo, 4)
     local ratio1A, ratio1B = c.opRatio1(), c.opRatio1B()
     local ratio2A, ratio2B = c.opRatio2(), c.opRatio2B()
     local ratio3A, ratio3B = c.opRatio3(), c.opRatio3B()
     local ratio4A, ratio4B = c.opRatio4(), c.opRatio4B()
-    local ratio1 = op_ratio(ratio1A, ratio1B)
-    local ratio2 = op_ratio(ratio2A, ratio2B)
-    local ratio3 = op_ratio(ratio3A, ratio3B)
-    local ratio4 = op_ratio(ratio4A, ratio4B)
-    -- carrier/modulator envelope shape indices (paired, A-only). Drawn once per burst
-    -- (held for every hit) unless the per-shape trig mode is 'step', which advances the
-    -- A sequins per hit in the loop below so the shape arpeggiates through its sequence.
-    local amp_shape = c.ampShape()
-    local mod_shape = c.modShape()
+    local ratio1 = op_ratio(ratio1A, ratio1B, rset1)
+    local ratio2 = op_ratio(ratio2A, ratio2B, rset2)
+    local ratio3 = op_ratio(ratio3A, ratio3B, rset3)
+    local ratio4 = op_ratio(ratio4A, ratio4B, rset4)
+    -- per-operator envelope shapes: A = shape index, B = integer index offset that
+    -- walks UP the SHAPES table (mirrors the op ratios). Drawn once per burst (held
+    -- for every hit) unless the per-op env trig mode is 'step', which advances that
+    -- op's B lane per hit in the loop below so the shape arpeggiates within the burst.
+    local env1A, env1B = c.opEnv1(), c.opEnv1B()
+    local env2A, env2B = c.opEnv2(), c.opEnv2B()
+    local env3A, env3B = c.opEnv3(), c.opEnv3B()
+    local env4A, env4B = c.opEnv4(), c.opEnv4B()
+    local env1 = op_env(env1A, env1B)
+    local env2 = op_env(env2A, env2B)
+    local env3 = op_env(env3A, env3B)
+    local env4 = op_env(env4A, env4B)
     local freq = scales.degree_to_freq(degreeA + degreeB, self.scale, self.root)
 
     -- REST: reps <= 0 fires nothing but still consumes (1 - reps) div-steps of
@@ -646,19 +748,21 @@ function Burst:run_burst(ch, token, target_in)
       -- exactly like the note alt-trig above). Same placement/rationale: above the
       -- probHit skip and i > 0, so a skipped hit still consumes a B value.
       if i > 0 then
-        if c.opRatio1Trig == 1 then ratio1 = op_ratio(ratio1A, c.opRatio1B()) end
-        if c.opRatio2Trig == 1 then ratio2 = op_ratio(ratio2A, c.opRatio2B()) end
-        if c.opRatio3Trig == 1 then ratio3 = op_ratio(ratio3A, c.opRatio3B()) end
-        if c.opRatio4Trig == 1 then ratio4 = op_ratio(ratio4A, c.opRatio4B()) end
+        if c.opRatio1Trig == 1 then ratio1 = op_ratio(ratio1A, c.opRatio1B(), rset1) end
+        if c.opRatio2Trig == 1 then ratio2 = op_ratio(ratio2A, c.opRatio2B(), rset2) end
+        if c.opRatio3Trig == 1 then ratio3 = op_ratio(ratio3A, c.opRatio3B(), rset3) end
+        if c.opRatio4Trig == 1 then ratio4 = op_ratio(ratio4A, c.opRatio4B(), rset4) end
       end
 
-      -- SHAPE STEP MODE: ampShape/modShape have no B layer, so 'step' advances their
-      -- A sequins per hit (the envelope shape arpeggiates through its sequence within
-      -- the burst); 'hold' keeps the per-burst draw. Same placement/rationale as the
-      -- op-ratio step above — past the i > 0 guard so a skipped hit still advances.
+      -- OP-ENV STEP MODE: per op, when opEnvNTrig == 1 the B (offset) lane advances
+      -- per hit and re-resolves against the held A, so the envelope shape walks
+      -- through neighbouring contours within the burst (A stays the per-burst base).
+      -- Identical to the op-ratio step above; same i > 0 / skip-still-advances rule.
       if i > 0 then
-        if c.ampShapeTrig == 1 then amp_shape = c.ampShape() end
-        if c.modShapeTrig == 1 then mod_shape = c.modShape() end
+        if c.opEnv1Trig == 1 then env1 = op_env(env1A, c.opEnv1B()) end
+        if c.opEnv2Trig == 1 then env2 = op_env(env2A, c.opEnv2B()) end
+        if c.opEnv3Trig == 1 then env3 = op_env(env3A, c.opEnv3B()) end
+        if c.opEnv4Trig == 1 then env4 = op_env(env4A, c.opEnv4B()) end
       end
 
       if c.probHit and math.random() > c.burstProb then
@@ -666,7 +770,7 @@ function Burst:run_burst(ch, token, target_in)
         self:emit{ type = 'fire', ch = ch, beat = target,
                    freq = freq, level = level }
       else
-        self:fire(ch, target, freq, level, amp_shape, mod_shape, div, total, i,
+        self:fire(ch, target, freq, level, env1, env2, env3, env4, div, total, i,
                   ratio1, ratio2, ratio3, ratio4)
       end
       target = target + (4 / div) / c.rate
@@ -679,14 +783,16 @@ function Burst:run_burst(ch, token, target_in)
   return nil
 end
 
-function Burst:fire(ch, beat, freq, level, amp_shape, mod_shape, div, total, hit_idx,
+function Burst:fire(ch, beat, freq, level, env1, env2, env3, env4, div, total, hit_idx,
                     ratio1, ratio2, ratio3, ratio4)
   local c = self.channels[ch]
-  -- carrier + modulator envelope contours, resolved from their sequenced shape
-  -- indices (drawn per burst in run_burst). Default to the channel defaults when
-  -- called directly (tests / external callers).
-  local amp_sh = Burst.shape(amp_shape or Burst.SHAPE_CARRIER_DEFAULT)
-  local mod_sh = Burst.shape(mod_shape or Burst.SHAPE_MOD_DEFAULT)
+  -- per-operator envelope contours, resolved from their sequenced shape indices
+  -- (drawn per burst in run_burst). Default to the channel defaults when called
+  -- directly (tests / external callers): op1 = carrier contour, op2..4 = modulator.
+  local sh1 = Burst.shape(env1 or Burst.SHAPE_CARRIER_DEFAULT)
+  local sh2 = Burst.shape(env2 or Burst.SHAPE_MOD_DEFAULT)
+  local sh3 = Burst.shape(env3 or Burst.SHAPE_MOD_DEFAULT)
+  local sh4 = Burst.shape(env4 or Burst.SHAPE_MOD_DEFAULT)
   -- all four op ratios are sequenced and passed in (drawn per burst in run_burst).
   -- Default to unison when called directly (tests).
   ratio1 = ratio1 or 1; ratio2 = ratio2 or 1; ratio3 = ratio3 or 1; ratio4 = ratio4 or 1
@@ -696,9 +802,9 @@ function Burst:fire(ch, beat, freq, level, amp_shape, mod_shape, div, total, hit
   freq = freq * (2 ^ c.octave)
   -- geodeMode is engine-wide (VOICE group), 0-based {transient,sustain,cycle};
   -- geode_mod wants 1/2/3, so +1 at the call site. The amp geode is always on (no
-  -- 'off'). The amp shape's decay length (decMul) gates the geode's 0.7 build-up
-  -- clamp (a longer decay overlaps more, like the old env decay_n did).
-  local actual_level = Burst.burst_level_for_hit(level, self.geodeMode + 1, amp_sh[2], hit_idx, total)
+  -- 'off'). op1's env decay length (decMul) gates the geode's 0.7 build-up clamp
+  -- (op1 is the anchor carrier; a longer decay overlaps more, like the old amp env).
+  local actual_level = Burst.burst_level_for_hit(level, self.geodeMode + 1, sh1[2], hit_idx, total)
 
   -- geo_freq stays at the target pitch (this voice has no pitch envelope).
   local geo_freq = freq
@@ -728,36 +834,34 @@ function Burst:fire(ch, beat, freq, level, amp_shape, mod_shape, div, total, hit
     end
   end
 
-  -- envelope contours from the two sequenced SHAPE indices, scaled to this hit's
-  -- inter-hit slot. Two independent envelopes share this mapping: the CARRIER amp
-  -- env (amp_sh) and the MODULATOR brightness env (mod_sh). Each shape is
-  -- {atkMul, decMul, atkCurve, decCurve}:
+  -- envelope contours from the FOUR sequenced per-op SHAPE indices, scaled to this
+  -- hit's inter-hit slot. Each op K gets its own EG from shape {atkMul, decMul,
+  -- atkCurve, decCurve}:
   --   attack -> gap-RELATIVE (atkMul * gap), floored at 0.001 s so an 'instant'
   --             shape stays snappy; a swell/ramp shape fills more of the slot. This
   --             is the deliberate trade vs the old absolute attack: every shape now
   --             tracks the schedule (gap shrinks with tempo/density).
   --   decay  -> gap-RELATIVE (decMul * gap); dense/fast channels self-shorten so a
   --             6-voice mix stays legible. burst/hit envMode still override the
-  --             decay timing to lock it to the grid -- applied to both envelopes.
+  --             decay timing to lock it to the grid -- applied to every op env.
+  -- The per-channel `ampPunch` MIX scalar (ampPunch/4 = 1.0 neutral) scales every
+  -- op env's per-segment curves uniformly: a per-channel "flatten <-> exaggerate the
+  -- contour" control across all four operators (it shaped only the carrier before).
   local gap_sec = interval_sec / math.max(0.01, c.rate)
+  local punch = c.ampPunch / 4
   local function attack_time(mul) return math.max(0.001, gap_sec * mul) end
   local function decay_time(mul)
     if decay_sec ~= nil then return math.max(0.01, decay_sec) end
     return clamp(gap_sec * mul, 0.02, 3.0)
   end
-  local attack  = attack_time(amp_sh[1])
-  local amp_dec = decay_time(amp_sh[2])
-  local mod_attack = attack_time(mod_sh[1])
-  local mod_dec    = decay_time(mod_sh[2])
-  -- per-segment Env curves. The carrier curves are scaled by the per-channel `ampPunch`
-  -- MIX scalar (ampPunch/4 = 1.0 neutral, so the boot 'tail' shape's -4 stays -4),
-  -- which reads as a per-channel "flatten <-> exaggerate the contour" control rather
-  -- than a fixed perc curve. The modulator keeps the shape's own curves.
-  local punch = c.ampPunch / 4
-  local amp_atk_curve = amp_sh[3] * punch
-  local amp_dec_curve = amp_sh[4] * punch
-  local mod_atk_curve = mod_sh[3]
-  local mod_dec_curve = mod_sh[4]
+  -- {atk, dec, atkCurve, decCurve} per op, in op order, for the trig call.
+  local function env_args(sh)
+    return attack_time(sh[1]), decay_time(sh[2]), sh[3] * punch, sh[4] * punch
+  end
+  local atk1, dec1, atkC1, decC1 = env_args(sh1)
+  local atk2, dec2, atkC2, decC2 = env_args(sh2)
+  local atk3, dec3, atkC3, decC3 = env_args(sh3)
+  local atk4, dec4, atkC4, decC4 = env_args(sh4)
 
   -- output routing (lib/outputs.lua): non-audio destinations replace the
   -- internal voice; midi/crow get the same final freq/level/length it would
@@ -773,26 +877,28 @@ function Burst:fire(ch, beat, freq, level, amp_shape, mod_shape, div, total, hit
   local out = self.outputs
   if engine and engine.trig and ((not out) or out:wants_audio(ch)) then
     -- 4-op FM (lib/Engine_Potionshop.sc): the per-channel algorithm selects the
-    -- operator routing; r2/r3/r4 are the per-burst sequenced op2/3/4 ratios; the
-    -- carrier/modulator envelopes come from the two sequenced SHAPE indices,
-    -- resolved above to times (args 8/9 carrier, 11/19 modulator) + per-segment
-    -- curves (arg 10 amp-decay, 21 amp-attack, 22 mod-attack, 23 mod-decay).
-    -- ol[1..4] are this channel's static operator levels, geode-shaped per hit
-    -- above. ratio1 (op1's per-burst sequenced fundamental) rides as r1 (arg 20).
-    -- New curve args are appended (21..23) so the older positional args keep theirs;
-    -- pan (24) is appended for the same reason.
+    -- operator routing; r2/r3/r4 are the per-burst sequenced op2/3/4 ratios, r1 (op1)
+    -- rides at arg 15. Each operator now carries its OWN envelope (per-op EG, DX-style)
+    -- from its sequenced SHAPE index, resolved above to {atk, dec, atkCurve, decCurve}
+    -- and grouped per op at args 17..32 (op1 17-20, op2 21-24, op3 25-28, op4 29-32).
+    -- ol[1..4] are this channel's static operator levels, geode-shaped per hit above.
+    -- See the trig command header in Engine_Potionshop.sc for the full arg order.
     engine.trig(geo_freq, actual_level, c.algo,
                 ratio2, ratio3, ratio4, mod_index,
-                attack, amp_dec, amp_dec_curve, mod_dec, feedback, drive, ch,
-                ol[1], ol[2], ol[3], ol[4], mod_attack, ratio1,
-                amp_atk_curve, mod_atk_curve, mod_dec_curve, pan)
+                feedback, drive, ch,
+                ol[1], ol[2], ol[3], ol[4], ratio1, pan,
+                atk1, dec1, atkC1, decC1,
+                atk2, dec2, atkC2, decC2,
+                atk3, dec3, atkC3, decC3,
+                atk4, dec4, atkC4, decC4)
   end
   if out then
     -- external voices can't render FM timbre; hand them the channel's brightness
     -- proxy (largest active modulator ratio, used by the ER-301 brightness CV) plus
-    -- the raw op1/op2 ratios, which the MIDI path sends as modwheel/breath CCs.
+    -- the raw op1/op2 ratios, which the MIDI path sends as modwheel/breath CCs. The
+    -- note length follows op1's (carrier) envelope.
     out:note(ch, { freq = geo_freq, level = actual_level, harm = bright_ratio,
-                   op1 = ratio1, op2 = ratio2, dur = attack + amp_dec })
+                   op1 = ratio1, op2 = ratio2, dur = atk1 + dec1 })
   end
 
   self:emit{ type = 'fire', ch = ch, beat = beat,
@@ -819,21 +925,26 @@ function Burst:randomize(ch)
   -- constant so the mix loudness is stable.
   -- envelope shapes: a SINGLE random shape index per envelope (held for the whole
   -- pattern, not stepped) -- a stable per-channel timbre rather than a morphing one.
-  -- Drawn only from the instant-attack family (1..SHAPE_PERC_COUNT) so a randomized
-  -- channel stays punchy; the slow-attack swells/pads stay deliberate, hand-picked
-  -- choices. Indices are inherently grid-reachable (a subset of the picker range).
-  c.ampShape = seqx.new{math.random(1, SHAPE_PERC_COUNT)}
-  c.modShape = seqx.new{math.random(1, SHAPE_PERC_COUNT)}
+  -- Drawn from the UPPER part of the short A-picker bank (SHAPE_RANDOMIZE_MIN..
+  -- SHAPE_PICKER_COUNT) so a randomized channel sits in the mid-short range (not the
+  -- tiniest clicks, not the long swells/pads which are B-offset reach). Indices are
+  -- inherently grid-reachable (within the picker range).
+  c.opEnv1 = seqx.new{math.random(SHAPE_RANDOMIZE_MIN, SHAPE_PICKER_COUNT)}
+  c.opEnv2 = seqx.new{math.random(SHAPE_RANDOMIZE_MIN, SHAPE_PICKER_COUNT)}
+  c.opEnv3 = seqx.new{math.random(SHAPE_RANDOMIZE_MIN, SHAPE_PICKER_COUNT)}
+  c.opEnv4 = seqx.new{math.random(SHAPE_RANDOMIZE_MIN, SHAPE_PICKER_COUNT)}
   -- op2/3/4 FM ratios ARE scrambled (timbral variety): each gets a SINGLE random A
-  -- value drawn from its ROLE set under this channel's algo — CARRIER_RATIOS if the op
-  -- is a carrier, else MODULATOR_RATIOS (held, not stepped, like the shapes above; the
-  -- picker can still highlight/edit it; the reachability test asserts it). The B
-  -- (offset) layer is left intact, like noteB. op1 is ALSO sequenced now, but randomize
-  -- leaves it alone (A stays at the 1.0 anchor) so a randomized channel keeps a
+  -- value drawn from the LOWER 32 (RATIO_PICKER_COUNT) of its ROLE set under this
+  -- channel's algo — CARRIER_RATIOS if the op is a carrier, else MODULATOR_RATIOS (held,
+  -- not stepped, like the shapes above). The lower-32 restriction keeps the value inside
+  -- the A grid picker so it stays highlightable/editable (the reachability test asserts
+  -- it). The B (offset) layer is left intact, like noteB. op1 is ALSO sequenced now, but
+  -- randomize leaves it alone (A stays at the 1.0 anchor) so a randomized channel keeps a
   -- fundamental and stays pitched — op1 is a carrier in every algo (mutate likewise).
-  c.opRatio2 = seqx.new{pick(op_ratio_set(c.algo, 2))}
-  c.opRatio3 = seqx.new{pick(op_ratio_set(c.algo, 3))}
-  c.opRatio4 = seqx.new{pick(op_ratio_set(c.algo, 4))}
+  local function pick_low(set) return set[math.random(1, math.min(RATIO_PICKER_COUNT, #set))] end
+  c.opRatio2 = seqx.new{pick_low(op_ratio_set(c.algo, 2))}
+  c.opRatio3 = seqx.new{pick_low(op_ratio_set(c.algo, 3))}
+  c.opRatio4 = seqx.new{pick_low(op_ratio_set(c.algo, 4))}
   -- The engine-wide modes (envMode/geodeMode) and per-op LEVELS are
   -- left untouched: a randomized op1 = 0 would silently kill the channel (op1 is
   -- usually the carrier), so the operator level balance stays a deliberate,
@@ -866,10 +977,13 @@ function Burst:mutate(ch, amount)
   end)
   c.note  = map(c.note,  function(v) return round(v + jitter(amount * 4)) end)
   -- volume (level) left untouched: a constant, never jittered (see randomize).
-  -- nudge each shape index to a neighbouring shape (stays grid-exact in 1..#SHAPES).
+  -- nudge each op env's shape index to a neighbouring shape (grid-exact in 1..#SHAPES);
+  -- the B offset lane is left untouched, like the op ratios below.
   local function nudge_shape(v) return clamp(round(v + jitter(amount * 4)), 1, #SHAPES) end
-  c.ampShape = map(c.ampShape, nudge_shape)
-  c.modShape = map(c.modShape, nudge_shape)
+  c.opEnv1 = map(c.opEnv1, nudge_shape)
+  c.opEnv2 = map(c.opEnv2, nudge_shape)
+  c.opEnv3 = map(c.opEnv3, nudge_shape)
+  c.opEnv4 = map(c.opEnv4, nudge_shape)
   -- nudge each sequenced op ratio A step to a neighbouring value within its ROLE set
   -- (carrier vs modulator, per the channel's algo) so it stays grid-exact and in
   -- family; the B offset lane is left untouched. op2/3/4 are nudged; op1 stays at its
