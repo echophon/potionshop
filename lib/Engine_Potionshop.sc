@@ -113,7 +113,8 @@ Engine_Potionshop : CroneEngine {
 			ampAtkCurve = -4, ampDecCurve = -4,             // carrier env per-segment Env curves
 			modAttack = 0.001, modDecay = 0.2,              // modulator brightness env atk/dec times
 			modAtkCurve = -4, modDecCurve = -4,             // modulator env per-segment Env curves
-			drive = 1, gate = 1;                            // soft-clip, voice gate
+			drive = 1, gate = 1,                            // soft-clip, voice gate
+			pan = 0;                                        // stereo position (-1 L .. +1 R)
 			var ampEnv, cut, mEnv, modEnv, amEnv, o1, o2, o3, o4, sig, driveMix;
 
 			// shared modulator envelope (unit 0->1->0): both the PM brightness depth
@@ -180,7 +181,8 @@ Engine_Potionshop : CroneEngine {
 			// and raises pre-gain together. Master Limiter catches the peaks.
 			driveMix = (drive - 1).linlin(0, 7, 0, 1);
 			sig = (sig * (1 - driveMix)) + ((sig * drive).tanh * driveMix);
-			Out.ar(out, sig ! 2);
+			// mono voice -> stereo field at the per-channel pan position.
+			Out.ar(out, Pan2.ar(sig, pan));
 		}).add;
 
 		// --- master limiter ---
@@ -203,7 +205,7 @@ Engine_Potionshop : CroneEngine {
 		// trig(freq, amp, algo, r2, r3, r4, modIndex,
 		//      attack, ampDecay, ampDecCurve, modDecay, feedback, drive, ch,
 		//      lvl1, lvl2, lvl3, lvl4, modAttack, r1,
-		//      ampAtkCurve, modAtkCurve, modDecCurve)
+		//      ampAtkCurve, modAtkCurve, modDecCurve, pan)
 		//
 		// `algo` (1..16) selects the routing/carrier data; the rest are the final
 		// per-hit values Burst:fire already computes. The handler expands `algo`
@@ -215,7 +217,7 @@ Engine_Potionshop : CroneEngine {
 		// Burst:fire to attack/decay times + per-segment curves; r1 is op1's
 		// per-channel ratio. modAttack[19], r1[20] and the three curve args[21..23]
 		// are appended so the older positional args keep their indices.
-		this.addCommand("trig", "fffffffffffffffffffffff", { arg msg;
+		this.addCommand("trig", "ffffffffffffffffffffffff", { arg msg;
 			var freq = msg[1], amp = msg[2];
 			var algo = msg[3].asInteger.clip(1, 32);
 			var r2 = msg[4], r3 = msg[5], r4 = msg[6];
@@ -227,6 +229,7 @@ Engine_Potionshop : CroneEngine {
 			var modAttack = msg[19];
 			var r1 = msg[20];
 			var ampAtkCurve = msg[21], modAtkCurve = msg[22], modDecCurve = msg[23];
+			var pan = msg[24];
 			var spec, edges, carriers, amEdges, cgain, weights, amWeights, pmIndex, amDepth, voice;
 
 			spec = algorithms[algo - 1];
@@ -284,7 +287,7 @@ Engine_Potionshop : CroneEngine {
 				\ampAtkCurve, ampAtkCurve, \ampDecCurve, ampDecCurve,
 				\modAttack, modAttack, \modDecay, modDecay,
 				\modAtkCurve, modAtkCurve, \modDecCurve, modDecCurve,
-				\drive, drive
+				\drive, drive, \pan, pan
 			], fmGroup);
 			voices[ch - 1] = voice;
 			// clear the slot when the voice frees itself (perc done or gate release)

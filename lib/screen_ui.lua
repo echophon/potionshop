@@ -57,11 +57,12 @@ for _, p in ipairs(PARAMS) do if GridUI.has_b(p) then B_PARAMS[#B_PARAMS + 1] = 
 -- map onto the same pages (see _sync_page_from_grid).
 local PAGES  = {'main', 'alt', 'perf', 'prob', 'scale', 'mix'}
 -- main line 1 = run + all params; alt line 1 = run + the B-capable params.
--- scale = root + 12 chromatic keys = 13 stops. mix = channel level + 4 op levels = 5
--- (all four op ratios are sequenced, edited on the main/alt seq pages). prob =
--- prob/mode/note trig + op1..4 ratio-seq trig + amp/mod env trig = 9. PERF carries 4
--- lines (reset/oct/rate/quantize); the scale page is root + 12 keys.
-local LINES_PER_PAGE = {1 + #PARAMS, 1 + #B_PARAMS, 4, 9, 13, 9}
+-- scale = root + 12 chromatic keys = 13 stops. mix = pan + channel level + 4 op
+-- levels + mod index/amp punch/fm fb/algo = 10 (all four op ratios are sequenced,
+-- edited on the main/alt seq pages). prob = prob/mode/note trig + op1..4 ratio-seq
+-- trig + amp/mod env trig = 9. PERF carries 4 lines (reset/oct/rate/quantize); the
+-- scale page is root + 12 keys.
+local LINES_PER_PAGE = {1 + #PARAMS, 1 + #B_PARAMS, 4, 9, 13, 10}
 local PAGE_PERF, PAGE_PROB, PAGE_SCALE, PAGE_MIX = 3, 4, 5, 6
 
 local NOTE_NAMES = {'c','c#','d','d#','e','f','f#','g','g#','a','a#','b'}
@@ -423,24 +424,26 @@ local function step_table(cur, tbl, d)
   return tbl[clamp(idx + d, 1, #tbl)]
 end
 
--- MIX page cursor: line 1 = channel level, lines 2..5 = op1..op4 level (0..1 grid),
--- then lines 6/7/8/9 = mod index / amp punch / FM feedback / FM algorithm voice
--- scalars, each stepping its own grid. (All four op ratios are sequenced — edited on
--- the seq pages, not here.)
+-- MIX page cursor: line 1 = pan, line 2 = channel level, lines 3..6 = op1..op4 level
+-- (0..1 grid), then lines 7/8/9/10 = mod index / amp punch / FM feedback / FM
+-- algorithm voice scalars, each stepping its own grid. (All four op ratios are
+-- sequenced — edited on the seq pages, not here.)
 function Screen:_edit_mix(d)
   local ch = self.sel_ch
   local c = self.engine.channels[ch + 1]
   local line = self.sel_line[PAGE_MIX]
-  if line == 6 then
-    self.ctl:set_scalar(ch, 'modIndex', step_table(c.modIndex, GridUI.MOD_INDEX_VALUES, d))
+  if line == 1 then
+    self.ctl:set_scalar(ch, 'pan', step_table(c.pan, GridUI.PAN_VALUES, d))
   elseif line == 7 then
-    self.ctl:set_scalar(ch, 'ampPunch', step_table(c.ampPunch, GridUI.AMP_PUNCH_VALUES, d))
+    self.ctl:set_scalar(ch, 'modIndex', step_table(c.modIndex, GridUI.MOD_INDEX_VALUES, d))
   elseif line == 8 then
-    self.ctl:set_scalar(ch, 'fmFeedback', step_table(c.fmFeedback, GridUI.FM_FEEDBACK_VALUES, d))
+    self.ctl:set_scalar(ch, 'ampPunch', step_table(c.ampPunch, GridUI.AMP_PUNCH_VALUES, d))
   elseif line == 9 then
+    self.ctl:set_scalar(ch, 'fmFeedback', step_table(c.fmFeedback, GridUI.FM_FEEDBACK_VALUES, d))
+  elseif line == 10 then
     self.ctl:set_scalar(ch, 'algo', step_table(c.algo, GridUI.ALGO_VALUES, d))
   else
-    local field = (line == 1) and 'level' or ('opLevel' .. (line - 1))  -- line 2->op1 .. 5->op4
+    local field = (line == 2) and 'level' or ('opLevel' .. (line - 2))  -- line 3->op1 .. 6->op4
     self.ctl:set_scalar(ch, field, step_table(c[field], GridUI.OP_LEVEL_VALUES, d))
   end
 end
@@ -629,10 +632,11 @@ function Screen:page_lines()
   end
   local lines
   if self.page == PAGE_MIX then
-    -- channel level + four static op levels + the mod index / amp punch / FM feedback
-    -- / FM algorithm voice scalars. All four op ratios are sequenced (shown/edited on
-    -- the main/alt seq pages), so they're absent here.
+    -- stereo pan + channel level + four static op levels + the mod index / amp punch
+    -- / FM feedback / FM algorithm voice scalars. All four op ratios are sequenced
+    -- (shown/edited on the main/alt seq pages), so they're absent here.
     lines = {
+      {'pan',   GridUI.pan_label(c.pan)},
       {'level', string.format('%.2f', c.level)},
       {'op1 l', string.format('%.2f', c.opLevel1)},
       {'op2 l', string.format('%.2f', c.opLevel2)},

@@ -292,10 +292,10 @@ check('env-shape step arpeggiates the shape per hit',
 
 -- all four op ratios are sequenced (A value + B offset, drawn per burst). The drawn
 -- op2/3/4 values pass straight to trig args 4/5/6 (r2/r3/r4); op1's drawn value rides
--- as r1 at arg 20.
+-- as r1 at arg 20; the per-channel pan rides at arg 24 (appended last).
 -- engine.trig(freq, amp, algo, r2, r3, r4, modIndex,
 --             atk, aDec, ampDecCurve, mDec, feedback, drive, ch, op1..op4, modAtk, r1,
---             ampAtkCurve, modAtkCurve, modDecCurve).
+--             ampAtkCurve, modAtkCurve, modDecCurve, pan).
 local function first_trig()
   clock._reset()
   local saved = engine
@@ -309,6 +309,7 @@ local function first_trig()
   e.channels[1].opRatio2 = seqx.new{2}
   e.channels[1].opRatio3 = seqx.new{3}
   e.channels[1].opRatio4 = seqx.new{7}
+  e.channels[1].pan = -0.5
   e:launch(1)
   clock._run_until(2)
   engine = saved
@@ -320,6 +321,7 @@ check('sequenced op2/3/4 ratios pass at trig args 4/5/6',
   off and approx(off[4], 2) and approx(off[5], 3) and approx(off[6], 7))
 -- op1 ratio (sequenced): its drawn value rides as r1 at trig arg 20 (appended last).
 check('op1 ratio passes at trig arg 20', off and approx(off[20], 0.5))
+check('pan passes at trig arg 24', off and approx(off[24], -0.5))
 
 -- op ratio B lane is an INDEX OFFSET: it shifts A's position in the sorted
 -- RATIO_VALUES list (never an off-grid sum), walking UP into the finer in-between
@@ -1021,13 +1023,21 @@ ctl:press(9, 0)
 ctl:press(13, 6)
 check('PROB mode exited', ctl.probMode == false)
 
--- MIX page (row6 col 11): channel level (col 7) + per-op level (cols 8-11). All four
--- op ratios moved to their own sequence pages, so cols 0-6 of the MIX page are inert.
+-- MIX page (row6 col 11): pan (col 6) + channel level (col 7) + per-op level (cols
+-- 8-11). All four op ratios moved to their own sequence pages, so cols 0-5 are inert.
 ctl:press(11, 6)
 check('MIX mode entered', ctl.mixMode == true)
 -- col0 (the old op1 ratio slot) is now inert — op ratios are sequenced.
 ctl:press(0, 0)
 check('MIX col0 is inert (op1 ratio is sequenced now)', ctl.picker == nil)
+ctl:press(6, 0)   -- col6 -> pan picker
+check('MIX col6 opens the pan scalar picker',
+  ctl.picker and ctl.picker.field == 'pan')
+ctl:press(0, 6)   -- value grid row 6 col 0 -> PAN_VALUES[1] = -1 (hard left)
+check('MIX pan picker sets c.pan hard left', approx(geng.channels[1].pan, -1))
+ctl:press(6, 0)   -- reopen pan picker
+ctl:press(0, 7)   -- value grid row 7 col 0 -> PAN_VALUES[17] = 0 (centre, grid-exact)
+check('MIX pan picker can return to dead centre', approx(geng.channels[1].pan, 0))
 ctl:press(7, 0)   -- col7 -> channel level picker
 check('MIX col7 opens the channel level scalar picker',
   ctl.picker and ctl.picker.field == 'level')
@@ -1137,18 +1147,23 @@ check('prob page mod env trig line steps to step', seng.channels[1].modShapeTrig
 sui:enc(3, -1)
 check('prob page mod env trig line steps back to hold', seng.channels[1].modShapeTrig == 0)
 
--- mix page: line 1 = channel level, lines 2..5 = op1..op4 level. All four op ratios
--- are sequenced now (edited on the main/alt seq pages), so they're absent here.
+-- mix page: line 1 = pan, line 2 = channel level, lines 3..6 = op1..op4 level. All
+-- four op ratios are sequenced now (edited on the main/alt seq pages), absent here.
 sui:set_page(6)
-sui.sel_line[6] = 1   -- channel level
+sui.sel_line[6] = 1   -- pan
+seng.channels[1].pan = 0
+sui:enc(3, -1)
+check('mix page line 1 steps pan left down the -1..1 grid',
+  in_set(seng.channels[1].pan, GridUI.PAN_VALUES) and seng.channels[1].pan < 0)
+sui.sel_line[6] = 2   -- channel level
 seng.channels[1].level = 1.0
 sui:enc(3, -1)
-check('mix page line 1 steps channel level down the 0..1 grid',
+check('mix page line 2 steps channel level down the 0..1 grid',
   in_set(seng.channels[1].level, GridUI.OP_LEVEL_VALUES) and seng.channels[1].level < 1.0)
-sui.sel_line[6] = 2   -- op1 level
+sui.sel_line[6] = 3   -- op1 level
 seng.channels[1].opLevel1 = 1.0
 sui:enc(3, -1)
-check('mix page line 2 steps opLevel1 down the 0..1 grid',
+check('mix page line 3 steps opLevel1 down the 0..1 grid',
   in_set(seng.channels[1].opLevel1, GridUI.OP_LEVEL_VALUES) and seng.channels[1].opLevel1 < 1.0)
 
 -- op1/2/3/4 ratios are now sequenced — editable on the main seq page like any lane.
@@ -1520,6 +1535,17 @@ check('channel level 0 -> 0.0', approx(peng.channels[1].level, 0))
 fake:set('ch1_level', 31)
 check('channel level 31 -> 1.0', approx(peng.channels[1].level, 1))
 
+-- pan is a static scalar on a 0..31 grid mapped to -1..1 (index 16 = centre)
+fake:set('ch1_pan', 1)
+check('pan 1 -> hard left (-1)', approx(peng.channels[1].pan, -1))
+fake:set('ch1_pan', 16)
+check('pan 16 -> dead centre (0)', approx(peng.channels[1].pan, 0))
+fake:set('ch1_pan', 31)
+check('pan 31 -> hard right (+1)', approx(peng.channels[1].pan, 1))
+peng.channels[1].pan = 0
+psync:reflect_scalars(1)
+check('engine pan reflects back to param index 16 (centre)', fake:get('ch1_pan') == 16)
+
 -- engine/UI -> params: silent reflection only (zero action fires)
 local f0 = fake.fires
 pctl:press(0, 7)  -- row 7 col 0 = div/reps page
@@ -1565,6 +1591,7 @@ peng.channels[1].modIndex = 9
 peng.channels[1].ampPunch = 7
 peng.channels[1].fmFeedback = 3
 peng.channels[1].algo = 5
+peng.channels[1].pan = -1
 fake:set('ch1_copy', 1)
 fake:set('ch5_paste', 1)
 local cp_ok = true
@@ -1579,8 +1606,10 @@ local mix_ok = approx(peng.channels[5].level, 0.7)
   and approx(peng.channels[5].opLevel2, 0.3)
   and peng.channels[5].modIndex == 9 and peng.channels[5].ampPunch == 7
   and peng.channels[5].fmFeedback == 3 and peng.channels[5].algo == 5
+  and approx(peng.channels[5].pan, -1)
 check('copy+paste duplicates MIX-page static scalars across channels', mix_ok)
 check('paste reflected into dest scalar param', fake:get('ch5_algorithm') == 5)
+check('paste reflected pan into dest scalar param', fake:get('ch5_pan') == 1)  -- pan -1 -> grid index 1
 
 -- clear: resets BOTH layers (A + B where present) to defaults, so the channel is blank
 fake:set('ch6_div_a', '4 8 16')

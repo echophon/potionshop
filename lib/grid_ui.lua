@@ -42,11 +42,11 @@
 --   CLR clears BOTH layers (A + the B/alt layer where present) of the tapped
 --   channel; COPY/PASTE act on the MAIN (A-layer) sequins only, leaving the B (alt)
 --   layer intact so it can keep variating the copied sequins.
---   MIX:   rows 0-5 = channel LEVEL (col 7) + per-op LEVEL (cols 8-11) + voice
---          scalars mod index (12) / amp punch (13) / FM feedback (14) / FM ALGORITHM
---          (15, per-channel). Tap a cell to open its value picker on rows 6-7. (All
---          four op ratios are sequenced — edited on their row-7 pages, not here, so
---          cols 0-6 of the MIX channel rows are dark.)
+--   MIX:   rows 0-5 = PAN (col 6) + channel LEVEL (col 7) + per-op LEVEL (cols 8-11)
+--          + voice scalars mod index (12) / amp punch (13) / FM feedback (14) / FM
+--          ALGORITHM (15, per-channel). Tap a cell to open its value picker on rows
+--          6-7. (All four op ratios are sequenced — edited on their row-7 pages, not
+--          here, so cols 0-5 of the MIX channel rows are dark.)
 --   PROB:  rows 0-5 = note alt-trig hold/step (cols 0-1)
 --          · op1/2/3/4 ratio-seq trig toggles (cols 3-6, single button each:
 --            off=hold, on=step)
@@ -140,10 +140,11 @@ local function launch_channel_at(x, y)
   end
   return nil
 end
--- MIX page channel-row layout: channel LEVEL on col 7, op1..4 LEVEL on cols 8..11
--- (one contiguous strip), then the three per-channel voice scalars — FM mod index
--- (col 12), amp punch (col 13), FM feedback (col 14). All four op ratios are sequenced
--- (row-7 pages), not here, so cols 0..6 of the MIX page are dark.
+-- MIX page channel-row layout: stereo PAN on col 6, channel LEVEL on col 7, op1..4
+-- LEVEL on cols 8..11 (one contiguous strip), then the per-channel voice scalars —
+-- FM mod index (col 12), amp punch (col 13), FM feedback (col 14), algorithm (col 15).
+-- All four op ratios are sequenced (row-7 pages), not here, so cols 0..5 are dark.
+local PAN_COL = 6          -- per-channel stereo pan, just left of the level strip
 local MIX_LEVEL_COL = 7
 local OP_LEVEL_COL0 = 8
 local MOD_INDEX_COL = 12
@@ -343,6 +344,11 @@ local MOD_INDEX_VALUES  = range(32, function(i) return i end)            -- 1..3
 local AMP_PUNCH_VALUES  = range(32, function(i) return i - 1 end)        -- 0..31 (curve exaggeration)
 local FM_FEEDBACK_VALUES = range(32, function(i) return (i - 1) * 4 / 31 end) -- 0..4 rad, 1/31-of-4 steps
 local ALGO_VALUES = range(32, function(i) return i end)  -- 1..32 FM algorithm (per-channel; 17..32 = AM/ring & hybrid)
+-- stereo pan, -1 (hard left) .. +1 (hard right) across the 32-cell grid. `range`
+-- feeds i = 0..31, so i = 16 (the 17th cell) is exactly 0 (centre), the grid-exact
+-- default; i = 0 clamps to -1 (a duplicate of i = 1, since 32 cells can't be
+-- symmetric about a centre cell otherwise). Param/grid index = i (0-based).
+local PAN_VALUES = range(32, function(i) return math.max(-1, math.min(1, (i - 16) / 15)) end)
 -- Curated per-channel quantize grids (events per whole note). Mirrors
 -- Burst.QUANTIZE_VALUES — keep in sync. Edited on the per-channel QNT page.
 local QUANTIZE_VALUES = {3, 4, 6, 8, 12, 16, 24, 32}
@@ -350,6 +356,13 @@ local QUANTIZE_COLS   = {0, 1, 2, 3, 4, 5, 6, 7}
 
 local function round(x) return math.floor(x + 0.5) end
 local function clamp(v, lo, hi) return math.max(lo, math.min(hi, v)) end
+
+-- Human-readable pan: 'C' centre, 'L<n>'/'R<n>' as a 0..100 distance from centre.
+local function pan_label(p)
+  p = p or 0
+  if math.abs(p) < 1e-6 then return 'C' end
+  return (p < 0 and 'L' or 'R') .. round(math.abs(p) * 100)
+end
 local function eq(a, b) return math.abs(a - b) < 1e-6 end
 
 local function contains(t, v)
@@ -456,6 +469,8 @@ GridUI.MOD_INDEX_VALUES = MOD_INDEX_VALUES
 GridUI.AMP_PUNCH_VALUES = AMP_PUNCH_VALUES
 GridUI.FM_FEEDBACK_VALUES = FM_FEEDBACK_VALUES
 GridUI.ALGO_VALUES = ALGO_VALUES
+GridUI.PAN_VALUES = PAN_VALUES
+GridUI.pan_label = pan_label
 
 -- opts.on_status(string): pushed status text (for screen). opts.on_redraw():
 -- called after any state change so the screen can refresh too. opts.on_edit(ev):
@@ -620,10 +635,13 @@ function GridUI:handle_normal_press(x, y)
       return
     end
     if self.mixMode then
-      -- channel level on col 7, op1..op4 levels on cols 8..11 (one contiguous strip),
-      -- then the three voice scalars (mod index 12, amp punch 13, FM feedback 14).
-      -- All four op ratios are sequenced now (their own row-7 pages), so cols 0..6 are dark.
-      if x == MIX_LEVEL_COL then                -- channel level
+      -- pan on col 6, channel level on col 7, op1..op4 levels on cols 8..11 (one
+      -- contiguous strip), then the voice scalars (mod index 12, amp punch 13, FM
+      -- feedback 14, algorithm 15). All four op ratios are sequenced now (their own
+      -- row-7 pages), so cols 0..5 are dark.
+      if x == PAN_COL then                      -- stereo pan
+        self:open_scalar_picker(y, 'pan', PAN_VALUES, 'pan')
+      elseif x == MIX_LEVEL_COL then            -- channel level
         self:open_scalar_picker(y, 'level', OP_LEVEL_VALUES, 'level')
       elseif x == MOD_INDEX_COL then            -- FM mod index
         self:open_scalar_picker(y, 'modIndex', MOD_INDEX_VALUES, 'index')
@@ -885,11 +903,11 @@ end
 -- CLR resets BOTH layers — A and (where present) the B (alt) layer — so a cleared
 -- channel is fully blank. COPY/PASTE act on the MAIN (A-layer) sequins only,
 -- leaving the B (alt) layer untouched so it can keep variating the pasted sequins,
--- AND on the per-channel MIX-page static scalars (channel level, op levels, mod
--- index, amp punch, fm feedback, algorithm) so a copied channel carries its whole
--- voicing. CLR leaves the scalars alone (they are not in PARAMS).
+-- AND on the per-channel MIX-page static scalars (pan, channel level, op levels,
+-- mod index, amp punch, fm feedback, algorithm) so a copied channel carries its
+-- whole voicing. CLR leaves the scalars alone (they are not in PARAMS).
 local MIX_SCALARS = {
-  'level', 'opLevel1', 'opLevel2', 'opLevel3', 'opLevel4',
+  'pan', 'level', 'opLevel1', 'opLevel2', 'opLevel3', 'opLevel4',
   'modIndex', 'ampPunch', 'fmFeedback', 'algo',
 }
 
@@ -1163,6 +1181,7 @@ function GridUI:render_mix_row(ch)
   local c = self:chan(ch)
   local function bright(frac) return math.max(2, round(2 + clamp(frac, 0, 1) * 11)) end
   for x = 0, GRID_W - 1 do self.g:set_led(x, ch, 0); self.g:set_strobe(x, ch, 'off') end
+  self.g:set_led(PAN_COL, ch, bright(((c.pan or 0) + 1) / 2))  -- -1..1 -> 0..1 brightness
   self.g:set_led(MIX_LEVEL_COL, ch, bright(c.level or 0))
   for op = 1, 4 do
     self.g:set_led(OP_LEVEL_COL0 + (op - 1), ch, bright(c['opLevel' .. op] or 1))
@@ -1173,7 +1192,8 @@ function GridUI:render_mix_row(ch)
   self.g:set_led(ALGO_COL, ch, bright(((c.algo or 1) - 1) / 31))
   if self.picker and self.picker.kind == 'scalar' and self.picker.ch == ch then
     local f = self.picker.field
-    if f == 'level' then self.g:set_led(MIX_LEVEL_COL, ch, 15)
+    if f == 'pan' then self.g:set_led(PAN_COL, ch, 15)
+    elseif f == 'level' then self.g:set_led(MIX_LEVEL_COL, ch, 15)
     elseif f == 'modIndex' then self.g:set_led(MOD_INDEX_COL, ch, 15)
     elseif f == 'ampPunch' then self.g:set_led(AMP_PUNCH_COL, ch, 15)
     elseif f == 'fmFeedback' then self.g:set_led(FM_FEEDBACK_COL, ch, 15)
@@ -1507,7 +1527,7 @@ function GridUI:_status()
   elseif self.qntMode then
     s = 'QNT — cols0-7 per-channel quantize (1/3..1/32)'
   elseif self.mixMode then
-    s = 'MIX — 7 lvl, 8-11 op, 12 idx 13 punch 14 fb 15 alg'
+    s = 'MIX — 6 pan 7 lvl, 8-11 op, 12 idx 13 punch 14 fb 15 alg'
   elseif self.actionMode then
     s = string.upper(self.actionMode) .. ' — tap a channel'
   elseif self.picker and self.picker.kind == 'scalar' then
@@ -1515,6 +1535,8 @@ function GridUI:_status()
     local val = self:chan(self.picker.ch)[f]
     if f == 'algo' then
       s = 'edit ch' .. (self.picker.ch + 1) .. ' algo=' .. (ALGO_NAMES[val] or '?')
+    elseif f == 'pan' then
+      s = 'edit ch' .. (self.picker.ch + 1) .. ' pan=' .. pan_label(val)
     else
       local lbl = f:match('^opLevel') and ('op' .. f:sub(-1) .. ' level')
         or ({modIndex = 'mod index', ampPunch = 'amp punch', fmFeedback = 'fm fb'})[f]

@@ -87,7 +87,7 @@ defs = [
 		modIndex = 4, amDepth = 0, feedback = 0,
 		attack = 0.001, ampDecay = 0.4, ampAtkCurve = -4, ampDecCurve = -4,
 		modAttack = 0.001, modDecay = 0.2, modAtkCurve = -4, modDecCurve = -4,
-		drive = 1, gate = 1;
+		drive = 1, gate = 1, pan = 0;
 		var ampEnv, cut, mEnv, modEnv, amEnv, o1, o2, o3, o4, sig, driveMix;
 		mEnv = EnvGen.kr(
 			Env.new([0, 1, 0], [modAttack, max(0.01, modDecay)], [modAtkCurve, modDecCurve])
@@ -113,7 +113,7 @@ defs = [
 		sig = sig * ampEnv * cut * amp * 0.5;
 		driveMix = (drive - 1).linlin(0, 7, 0, 1);
 		sig = (sig * (1 - driveMix)) + ((sig * drive).tanh * driveMix);
-		Out.ar(out, sig ! 2);
+		Out.ar(out, Pan2.ar(sig, pan));
 	}),
 	SynthDef("PotionMaster", { arg in = 0, out = 0;
 		var sig = In.ar(in, 2);

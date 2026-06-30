@@ -400,6 +400,17 @@ function M:_add_channel_params(n)
       self:request_render()
     end)
   end)
+  -- stereo pan — static per-channel scalar on a 0..31 grid mapped to -1..1 (index 16
+  -- = centre, the grid-exact default), the same discrete set (PAN_VALUES, index = i)
+  -- the MIX picker uses so a grid/menu edit reflects exactly. Displays as L<n>/C/R<n>.
+  def(1, function()
+    params:add_number(id('pan'), 'pan', 0, 31, round(c.pan * 15 + 16),
+      function(p) return GridUI.pan_label(clamp((p:get() - 16) / 15, -1, 1)) end)
+    params:set_action(id('pan'), function(v)
+      c.pan = clamp((v - 16) / 15, -1, 1)
+      self:request_render()
+    end)
+  end)
   -- per-operator output levels (op1..4) — static scalars on the 0..1 (1/31) grid
   for op = 1, 4 do
     local field = 'opLevel' .. op
@@ -612,6 +623,7 @@ function M:reflect_scalars(n)
   params:set(id('reset'), GridUI.nearest_index(GridUI.RESET_INTERVALS, c.resetInterval), true)
   params:set(id('octave'), c.octave, true)
   params:set(id('level'), round(c.level * 31), true)
+  params:set(id('pan'), round(c.pan * 15 + 16), true)
   for op = 1, 4 do params:set(id('level' .. op), round(c['opLevel' .. op] * 31), true) end
   params:set(id('mod_index'), round(c.modIndex), true)
   params:set(id('amp_punch'), round(c.ampPunch), true)

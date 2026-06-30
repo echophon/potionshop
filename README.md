@@ -150,16 +150,20 @@ launch block (cols 8-10, rows 6-7) to apply. press again to disarm.
 > CLR resets both layers; COPY / PASTE act on the **A** layer (leaving B to keep
 > variating) and carry the channel's MIX-page voicing scalars along.
 
-### OP page
+### MIX page
 
-rows 0–5, per channel — the voice's static **timbre**, edited as per-operator
-scalars (op1 is the fundamental, default ratio 1.0, but fully editable):
+rows 0–5, per channel — the voice's static **mix + timbre** scalars (op ratios are
+sequenced now, edited on their own row-7 pages, so they're not here):
 
-- per-op **ratio** `[x: 0-3]` — op1..op4 frequency ratios, from a curated set
+- **pan** `[x: 6]` — stereo position, hard-left (-1) … centre … hard-right (+1)
+- channel **level** `[x: 7]` — overall channel volume
 - per-op **level** `[x: 8-11]` — op1..op4 output level (FM depth when the op is a
   modulator, mix gain when it's a carrier)
+- **mod index** `[x: 12]` · **amp punch** `[x: 13]` · **FM feedback** `[x: 14]` ·
+  **algorithm** `[x: 15]`
 
-tap any cell to open its value picker on rows 6–7.
+tap any cell to open its value picker on rows 6–7. these are all exempt from
+randomize/mutate and travel with copy/paste.
 
 ### PROB page
 

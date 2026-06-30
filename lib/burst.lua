@@ -352,6 +352,10 @@ local function default_channel()
     -- 15). Like level/opLevel they're exempt from randomize/mutate and survive
     -- clear/copy/paste. Drawn straight at fire time.
     modIndex = 2, ampPunch = 4, fmFeedback = 0, algo = 1,
+    -- per-channel STATIC stereo pan (MIX page): -1 = hard left, 0 = centre,
+    -- +1 = hard right. Like the other MIX scalars it's exempt from randomize/mutate
+    -- and survives clear/copy/paste. Drawn straight at fire time (SC Pan2).
+    pan = 0,
     burstProb = 1,
     probHit = false,
     resetInterval = 0,
@@ -762,6 +766,7 @@ function Burst:fire(ch, beat, freq, level, amp_shape, mod_shape, div, total, hit
   -- per-channel static voice macros (MIX page) + the engine-wide drive macro.
   local mod_index = c.modIndex
   local feedback  = c.fmFeedback
+  local pan       = c.pan or 0
   local drive     = self.drive
   -- per-channel static operator levels, passed straight to the voice.
   local ol = {c.opLevel1, c.opLevel2, c.opLevel3, c.opLevel4}
@@ -774,12 +779,13 @@ function Burst:fire(ch, beat, freq, level, amp_shape, mod_shape, div, total, hit
     -- curves (arg 10 amp-decay, 21 amp-attack, 22 mod-attack, 23 mod-decay).
     -- ol[1..4] are this channel's static operator levels, geode-shaped per hit
     -- above. ratio1 (op1's per-burst sequenced fundamental) rides as r1 (arg 20).
-    -- New curve args are appended (21..23) so the older positional args keep theirs.
+    -- New curve args are appended (21..23) so the older positional args keep theirs;
+    -- pan (24) is appended for the same reason.
     engine.trig(geo_freq, actual_level, c.algo,
                 ratio2, ratio3, ratio4, mod_index,
                 attack, amp_dec, amp_dec_curve, mod_dec, feedback, drive, ch,
                 ol[1], ol[2], ol[3], ol[4], mod_attack, ratio1,
-                amp_atk_curve, mod_atk_curve, mod_dec_curve)
+                amp_atk_curve, mod_atk_curve, mod_dec_curve, pan)
   end
   if out then
     -- external voices can't render FM timbre; hand them the channel's brightness
