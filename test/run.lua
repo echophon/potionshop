@@ -334,6 +334,7 @@ local function first_trig()
   e.channels[1].opRatio3 = seqx.new{3}
   e.channels[1].opRatio4 = seqx.new{7}
   e.channels[1].pan = -0.5
+  e.channels[1].chorusMix = 0.75
   e:launch(1)
   clock._run_until(2)
   engine = saved
@@ -346,6 +347,8 @@ check('sequenced op2/3/4 ratios pass at trig args 4/5/6',
 -- op1 ratio (sequenced): its drawn value rides as r1 at trig arg 14.
 check('op1 ratio passes at trig arg 14', off and approx(off[14], 0.5))
 check('pan passes at trig arg 15', off and approx(off[15], -0.5))
+-- chorus dry/wet rides at trig arg 32 (per-hit, like pan)
+check('chorus mix passes at trig arg 32', off and approx(off[32], 0.75))
 
 -- op ratio B lane is an INDEX OFFSET: it shifts A's position UP the op's ROLE SET
 -- (never an off-grid sum), reaching the higher upper-32 ratios. Under algo 1 op2 is a

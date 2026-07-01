@@ -445,6 +445,10 @@ local function default_channel()
     -- +1 = hard right. Like the other MIX scalars it's exempt from randomize/mutate
     -- and survives clear/copy/paste. Drawn straight at fire time (SC Pan2).
     pan = 0,
+    -- per-channel STATIC chorus dry/wet (MIX page): 0 = dry (default, no chorus),
+    -- 1 = fully wet. Like pan it's exempt from randomize/mutate, survives
+    -- clear/copy/paste, and rides the voice as a per-hit trig arg (SC per-voice chorus).
+    chorusMix = 0,
     burstProb = 1,
     probHit = false,
     resetInterval = 0,
@@ -874,6 +878,7 @@ function Burst:fire(ch, beat, freq, level, env1, env2, env3, env4, div, total, h
   local mod_index = c.modIndex
   local feedback  = c.fmFeedback
   local pan       = c.pan or 0
+  local chorus    = c.chorusMix or 0
   -- per-channel static operator levels, passed straight to the voice.
   local ol = {c.opLevel1, c.opLevel2, c.opLevel3, c.opLevel4}
   local out = self.outputs
@@ -883,6 +888,7 @@ function Burst:fire(ch, beat, freq, level, env1, env2, env3, env4, div, total, h
     -- rides at arg 14. Each operator now carries its OWN envelope (per-op EG, DX-style)
     -- from its sequenced SHAPE index, resolved above to {atk, dec, atkCurve, decCurve}
     -- and grouped per op at args 16..31 (op1 16-19, op2 20-23, op3 24-27, op4 28-31).
+    -- The per-channel chorus dry/wet rides at arg 32 (per-hit, like pan at arg 15).
     -- ol[1..4] are this channel's static operator levels, geode-shaped per hit above.
     -- See the trig command header in Engine_Potionshop.sc for the full arg order.
     engine.trig(geo_freq, actual_level, c.algo,
@@ -892,7 +898,8 @@ function Burst:fire(ch, beat, freq, level, env1, env2, env3, env4, div, total, h
                 atk1, dec1, atkC1, decC1,
                 atk2, dec2, atkC2, decC2,
                 atk3, dec3, atkC3, decC3,
-                atk4, dec4, atkC4, decC4)
+                atk4, dec4, atkC4, decC4,
+                chorus)
   end
   if out then
     -- external voices can't render FM timbre; hand them the channel's brightness

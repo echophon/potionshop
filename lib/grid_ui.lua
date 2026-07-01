@@ -41,11 +41,11 @@
 --   CLR clears BOTH layers (A + the B/alt layer where present) of the tapped
 --   channel; COPY/PASTE act on the MAIN (A-layer) sequins only, leaving the B (alt)
 --   layer intact so it can keep variating the copied sequins.
---   MIX:   rows 0-5 = PAN (col 6) + channel LEVEL (col 7) + per-op LEVEL (cols 8-11)
+--   MIX:   rows 0-5 = chorus dry/WET (col 5) + PAN (col 6) + channel LEVEL (col 7) + per-op LEVEL (cols 8-11)
 --          + voice scalars mod index (12) / FM feedback (13) / FM
 --          ALGORITHM (15, per-channel; col 14 dark). Tap a cell to open its value picker on rows
 --          6-7. (All four op ratios are sequenced — edited on their row-7 pages, not
---          here, so cols 0-5 of the MIX channel rows are dark.)
+--          here, so cols 0-4 of the MIX channel rows are dark.)
 --   PROB:  rows 0-5 = note alt-trig hold/step (cols 0-1)
 --          · op1/2/3/4 ratio-seq trig toggles (cols 3-6, single button each:
 --            off=hold, on=step)
@@ -149,7 +149,8 @@ end
 -- LEVEL on cols 8..11 (one contiguous strip), then the per-channel voice scalars —
 -- FM mod index (col 12), FM feedback (col 13), algorithm (col 15). Col 14 is dark,
 -- separating the scalar strip from the algorithm picker.
--- All four op ratios are sequenced (row-7 pages), not here, so cols 0..5 are dark.
+-- All four op ratios are sequenced (row-7 pages), not here, so cols 0..4 are dark.
+local CHORUS_COL = 5       -- per-channel chorus dry/wet, just left of pan
 local PAN_COL = 6          -- per-channel stereo pan, just left of the level strip
 local MIX_LEVEL_COL = 7
 local OP_LEVEL_COL0 = 8
@@ -696,11 +697,13 @@ function GridUI:handle_normal_press(x, y)
       return
     end
     if self.mixMode then
-      -- pan on col 6, channel level on col 7, op1..op4 levels on cols 8..11 (one
-      -- contiguous strip), then the voice scalars (mod index 12, FM feedback 13,
-      -- algorithm 15; col 14 is dark). All four op ratios are sequenced now (their own
-      -- row-7 pages), so cols 0..5 are dark.
-      if x == PAN_COL then                      -- stereo pan
+      -- chorus dry/wet on col 5, pan on col 6, channel level on col 7, op1..op4 levels
+      -- on cols 8..11 (one contiguous strip), then the voice scalars (mod index 12, FM
+      -- feedback 13, algorithm 15; col 14 is dark). All four op ratios are sequenced now
+      -- (their own row-7 pages), so cols 0..4 are dark.
+      if x == CHORUS_COL then                   -- chorus dry/wet
+        self:open_scalar_picker(y, 'chorusMix', OP_LEVEL_VALUES, 'wet')
+      elseif x == PAN_COL then                   -- stereo pan
         self:open_scalar_picker(y, 'pan', PAN_VALUES, 'pan')
       elseif x == MIX_LEVEL_COL then            -- channel level
         self:open_scalar_picker(y, 'level', OP_LEVEL_VALUES, 'level')
@@ -997,7 +1000,7 @@ end
 -- a copied channel carries its whole voicing. CLR leaves the scalars alone (they are
 -- not in PARAMS). quantize stays out — it's a per-channel performance grid, not voicing.
 local MIX_SCALARS = {
-  'pan', 'level', 'opLevel1', 'opLevel2', 'opLevel3', 'opLevel4',
+  'chorusMix', 'pan', 'level', 'opLevel1', 'opLevel2', 'opLevel3', 'opLevel4',
   'modIndex', 'fmFeedback', 'algo', 'envMode', 'geodeMode',
 }
 
@@ -1263,15 +1266,16 @@ function GridUI:render_channel_row(ch)
   end
 end
 
--- MIX page: channel level (col 7) + per-op level (cols 8..11) + the voice scalars
--- mod index/FM feedback (cols 12..13) + per-channel FM algorithm (col 15),
--- each cell's brightness encoding its value (normalised to its own range); picker
--- opens on tap. All four op ratios are sequenced (their own row-7 pages), so cols
--- 0..6 stay dark here.
+-- MIX page: chorus dry/wet (col 5) + pan (col 6) + channel level (col 7) + per-op
+-- level (cols 8..11) + the voice scalars mod index/FM feedback (cols 12..13) +
+-- per-channel FM algorithm (col 15), each cell's brightness encoding its value
+-- (normalised to its own range); picker opens on tap. All four op ratios are
+-- sequenced (their own row-7 pages), so cols 0..4 stay dark here.
 function GridUI:render_mix_row(ch)
   local c = self:chan(ch)
   local function bright(frac) return math.max(2, round(2 + clamp(frac, 0, 1) * 11)) end
   for x = 0, GRID_W - 1 do self.g:set_led(x, ch, 0); self.g:set_strobe(x, ch, 'off') end
+  self.g:set_led(CHORUS_COL, ch, bright(c.chorusMix or 0))       -- 0..1 dry/wet
   self.g:set_led(PAN_COL, ch, bright(((c.pan or 0) + 1) / 2))  -- -1..1 -> 0..1 brightness
   self.g:set_led(MIX_LEVEL_COL, ch, bright(c.level or 0))
   for op = 1, 4 do
@@ -1282,7 +1286,8 @@ function GridUI:render_mix_row(ch)
   self.g:set_led(ALGO_COL, ch, bright(((c.algo or 1) - 1) / 31))
   if self.picker and self.picker.kind == 'scalar' and self.picker.ch == ch then
     local f = self.picker.field
-    if f == 'pan' then self.g:set_led(PAN_COL, ch, 15)
+    if f == 'chorusMix' then self.g:set_led(CHORUS_COL, ch, 15)
+    elseif f == 'pan' then self.g:set_led(PAN_COL, ch, 15)
     elseif f == 'level' then self.g:set_led(MIX_LEVEL_COL, ch, 15)
     elseif f == 'modIndex' then self.g:set_led(MOD_INDEX_COL, ch, 15)
     elseif f == 'fmFeedback' then self.g:set_led(FM_FEEDBACK_COL, ch, 15)
@@ -1632,7 +1637,7 @@ function GridUI:_status()
   elseif self.prismMode then
     s = 'PRISM — 0-7 quant, 9-11 env, 13-15 geode'
   elseif self.mixMode then
-    s = 'MIX — 6 pan 7 lvl, 8-11 op, 12 idx 13 fb 15 alg'
+    s = 'MIX — 5 wet 6 pan 7 lvl, 8-11 op, 12 idx 13 fb 15 alg'
   elseif self.actionMode then
     s = string.upper(self.actionMode) .. ' — tap a channel'
   elseif self.picker and self.picker.kind == 'scalar' then

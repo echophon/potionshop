@@ -407,6 +407,16 @@ function M:_add_channel_params(n)
       self:request_render()
     end)
   end)
+  -- chorus dry/wet — static per-channel scalar on the 0..1 (1/31) grid (0 = dry
+  -- default), the same discrete set the MIX picker uses. Rides the voice per hit.
+  def(1, function()
+    params:add_number(id('chorus'), 'chorus', 0, 31, round(c.chorusMix * 31),
+      function(p) return string.format('%.2f', p:get() / 31) end)
+    params:set_action(id('chorus'), function(v)
+      c.chorusMix = v / 31
+      self:request_render()
+    end)
+  end)
   -- per-operator output levels (op1..4) — static scalars on the 0..1 (1/31) grid
   for op = 1, 4 do
     local field = 'opLevel' .. op
@@ -617,6 +627,7 @@ function M:reflect_scalars(n)
   params:set(id('octave'), c.octave, true)
   params:set(id('level'), round(c.level * 31), true)
   params:set(id('pan'), round(c.pan * 15 + 16), true)
+  params:set(id('chorus'), round(c.chorusMix * 31), true)
   for op = 1, 4 do params:set(id('level' .. op), round(c['opLevel' .. op] * 31), true) end
   params:set(id('mod_index'), round(c.modIndex), true)
   params:set(id('fm_feedback'), round(c.fmFeedback / 4 * 31), true)

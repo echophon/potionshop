@@ -24,6 +24,10 @@
 // pinned. This replaced the old single `harm` macro
 // that fanned all three ratios out from unison via one scalar.
 //
+// Each voice carries a per-voice stereo CHORUS insert (post-pan), crossfaded by a
+// per-channel `chorusMix` (0 = dry default). Like `pan` it's a per-hit trig arg, not a
+// persistent send, so it rides the monophonic hit lifecycle (no tail between hits).
+//
 // Signal flow: PotionFM synths (in fmGroup, head) -> masterBus -> PotionMaster
 // (Compander compressor -> makeup -> Limiter, at tail) -> engine output. The
 // compressor evens out the loudness swing between algorithms (additive vs single
@@ -117,8 +121,9 @@ Engine_Potionshop : CroneEngine {
 			atk3 = 0.001, dec3 = 0.2, atkCurve3 = -4, decCurve3 = -4,  // op3 EG
 			atk4 = 0.001, dec4 = 0.2, atkCurve4 = -4, decCurve4 = -4,  // op4 EG
 			gate = 1,                                       // voice gate
-			pan = 0;                                        // stereo position (-1 L .. +1 R)
-			var e1, e2, e3, e4, cut, free, maxTime, o1, o2, o3, o4, sig;
+			pan = 0,                                        // stereo position (-1 L .. +1 R)
+				chorusMix = 0;                                  // per-voice dry/wet chorus (0 = dry, 1 = wet)
+			var e1, e2, e3, e4, cut, free, maxTime, o1, o2, o3, o4, sig, wet;
 
 			// PER-OPERATOR envelope generators (DX-style EG): each shapes its own
 			// operator's output (unit 0->1->0). A carrier's eN is its amplitude
@@ -181,7 +186,23 @@ Engine_Potionshop : CroneEngine {
 			sig = sig * cut * amp * 0.5;
 
 			// mono voice -> stereo field at the per-channel pan position.
-			Out.ar(out, Pan2.ar(sig, pan));
+			sig = Pan2.ar(sig, pan);
+
+			// per-voice stereo CHORUS: three modulated delay taps (6-19ms), the L and R
+			// legs driven by slightly detuned LFOs so the wet legs decorrelate into a wide
+			// shimmer. `chorusMix` crossfades dry -> wet (0 = dry, the default, so a stored
+			// patch is unchanged until dialed up). This is a per-VOICE insert, not a
+			// persistent send: it shares the same monophonic hit lifecycle as `pan`, so no
+			// chorus tail carries between hits -- fine for a retriggering burst voice, and
+			// it keeps the wiring identical to the other per-hit MIX scalars.
+			wet = Mix.fill(3, { |i|
+				var lfoL = SinOsc.kr([0.11, 0.17, 0.23].at(i), (i / 3) * 2pi).range(0.006, 0.019);
+				var lfoR = SinOsc.kr([0.13, 0.19, 0.29].at(i), ((i / 3) + 0.25) * 2pi).range(0.006, 0.019);
+				DelayC.ar(sig, 0.05, [lfoL, lfoR]);
+			}) * (1 / 3);
+			sig = XFade2.ar(sig, wet, (chorusMix * 2) - 1);
+
+			Out.ar(out, sig);
 		}).add;
 
 		// --- master compressor + limiter ---
@@ -220,7 +241,8 @@ Engine_Potionshop : CroneEngine {
 		//      atk1, dec1, atkCurve1, decCurve1,   // op1 EG
 		//      atk2, dec2, atkCurve2, decCurve2,   // op2 EG
 		//      atk3, dec3, atkCurve3, decCurve3,   // op3 EG
-		//      atk4, dec4, atkCurve4, decCurve4)   // op4 EG  -- 31 floats total
+		//      atk4, dec4, atkCurve4, decCurve4,   // op4 EG
+		//      chorusMix)                          // per-voice dry/wet chorus -- 32 floats total
 		//
 		// `algo` (1..32) selects the routing/carrier data; the rest are the final
 		// per-hit values Burst:fire already computes. The handler expands `algo`
@@ -231,7 +253,7 @@ Engine_Potionshop : CroneEngine {
 		// operator carries its OWN envelope (per-op EG) from its sequenced opEnvN
 		// shape, resolved in Burst:fire to {atk, dec, atkCurve, decCurve} and grouped
 		// per op at args 16..31.
-		this.addCommand("trig", "fffffffffffffffffffffffffffffff", { arg msg;
+		this.addCommand("trig", "ffffffffffffffffffffffffffffffff", { arg msg;
 			var freq = msg[1], amp = msg[2];
 			var algo = msg[3].asInteger.clip(1, 32);
 			var r2 = msg[4], r3 = msg[5], r4 = msg[6];
@@ -245,6 +267,7 @@ Engine_Potionshop : CroneEngine {
 			var atk2 = msg[20], dec2 = msg[21], atkCurve2 = msg[22], decCurve2 = msg[23];
 			var atk3 = msg[24], dec3 = msg[25], atkCurve3 = msg[26], decCurve3 = msg[27];
 			var atk4 = msg[28], dec4 = msg[29], atkCurve4 = msg[30], decCurve4 = msg[31];
+				var chorusMix = msg[32];
 			var spec, edges, carriers, amEdges, cgain, weights, amWeights, pmIndex, amDepth, voice;
 
 			spec = algorithms[algo - 1];
@@ -305,7 +328,7 @@ Engine_Potionshop : CroneEngine {
 				\atk2, atk2, \dec2, dec2, \atkCurve2, atkCurve2, \decCurve2, decCurve2,
 				\atk3, atk3, \dec3, dec3, \atkCurve3, atkCurve3, \decCurve3, decCurve3,
 				\atk4, atk4, \dec4, dec4, \atkCurve4, atkCurve4, \decCurve4, decCurve4,
-				\pan, pan
+				\pan, pan, \chorusMix, chorusMix
 			], fmGroup);
 			voices[ch - 1] = voice;
 			// clear the slot when the voice frees itself (perc done or gate release)

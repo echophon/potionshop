@@ -59,12 +59,12 @@ for _, p in ipairs(PARAMS) do if GridUI.has_b(p) then B_PARAMS[#B_PARAMS + 1] = 
 local PAGES  = {'main', 'alt', 'perf', 'prob', 'scale', 'mix'}
 -- main line 1 = run + all params; alt line 1 = run + the B-capable params.
 -- scale = root + 12 chromatic keys = 13 stops. mix = pan + channel level + 4 op
--- levels + mod index/fm fb/algo = 9 (all four op ratios are sequenced,
+-- levels + mod index/fm fb/algo + chorus wet = 10 (all four op ratios are sequenced,
 -- edited on the main/alt seq pages). prob = prob/mode/note trig + op1..4 ratio-seq
 -- trig + op1..4 env-seq trig = 11. PERF carries 6 lines (reset/oct/rate/quantize/env
 -- mode/geode — the grid splits quantize+env+geode onto its PRISM page); the scale
 -- page is root + 12 keys.
-local LINES_PER_PAGE = {1 + #PARAMS, 1 + #B_PARAMS, 6, 11, 13, 9}
+local LINES_PER_PAGE = {1 + #PARAMS, 1 + #B_PARAMS, 6, 11, 13, 10}
 local PAGE_PERF, PAGE_PROB, PAGE_SCALE, PAGE_MIX = 3, 4, 5, 6
 
 local NOTE_NAMES = {'c','c#','d','d#','e','f','f#','g','g#','a','a#','b'}
@@ -432,8 +432,8 @@ end
 
 -- MIX page cursor: line 1 = pan, line 2 = channel level, lines 3..6 = op1..op4 level
 -- (0..1 grid), then lines 7/8/9 = mod index / FM feedback / FM algorithm voice
--- scalars, each stepping its own grid. (All four op ratios are sequenced — edited
--- on the seq pages, not here.)
+-- scalars, and line 10 = chorus dry/wet (0..1 grid), each stepping its own grid.
+-- (All four op ratios are sequenced — edited on the seq pages, not here.)
 function Screen:_edit_mix(d)
   local ch = self.sel_ch
   local c = self.engine.channels[ch + 1]
@@ -446,6 +446,8 @@ function Screen:_edit_mix(d)
     self.ctl:set_scalar(ch, 'fmFeedback', step_table(c.fmFeedback, GridUI.FM_FEEDBACK_VALUES, d))
   elseif line == 9 then
     self.ctl:set_scalar(ch, 'algo', step_table(c.algo, GridUI.ALGO_VALUES, d))
+  elseif line == 10 then
+    self.ctl:set_scalar(ch, 'chorusMix', step_table(c.chorusMix, GridUI.OP_LEVEL_VALUES, d))
   else
     local field = (line == 2) and 'level' or ('opLevel' .. (line - 2))  -- line 3->op1 .. 6->op4
     self.ctl:set_scalar(ch, field, step_table(c[field], GridUI.OP_LEVEL_VALUES, d))
@@ -654,6 +656,7 @@ function Screen:page_lines()
       {'index', string.format('%d', c.modIndex)},
       {'fm fb', string.format('%.2f', c.fmFeedback)},
       {'alg',   GridUI.ALGO_NAMES[c.algo] or '?'},
+      {'wet',   string.format('%.2f', c.chorusMix)},
     }
   elseif self.page == PAGE_PROB then
     local function trig(v) return GridUI.ALT_TRIG_MODE_NAMES[v + 1] end
