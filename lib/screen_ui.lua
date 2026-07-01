@@ -29,9 +29,10 @@
 -- the selected channel's mode fields — the same fields the grid's perfMode/
 -- probMode presses set, picking only from GridUI's shared value tables. The
 -- screen's perf page also carries the per-channel quantize + env mode + geode (the
--- grid keeps those on its own PRISM page). `scale` edits the global musical state
--- (root, key mask) the grid's scale picker drives — its E2 cursor walks root and the
--- twelve chromatic keys, and E3 sets/toggles via the controller's set_root / set_mask.
+-- grid keeps those on its own PRISM page). `scale` edits the selected channel's root
+-- (per-channel) plus the global key mask that the grid's ROOT/scale page drives — its
+-- E2 cursor walks root and the twelve chromatic keys, and E3 sets/toggles via the
+-- controller's set_root (per-channel) / set_mask (global).
 -- The grid's PERF/PROB/SCALE/PRISM buttons switch the matching pages (SCALE opens
 -- the shared scale picker; the grid PRISM page maps to the screen's perf tab); the
 -- screen tab follows, and main/alt drive the grid's paramLayer.
@@ -349,17 +350,18 @@ function Screen:_edit_value(d)
   self.ctl:render_all()
 end
 
--- Scale page cursor: line 1 = root, lines 2..13 = the twelve chromatic keys
--- (pitch class = line - 2). E3 turns right/left to raise or lower the root; on a
--- key, right adds it to the mask, left removes it (mirroring the run line's
--- right=on / left=off feel). All edits route through the controller's global
--- setters so on_edit reflects them into the params. (quantize is per-channel now
--- — it lives on the perf page, not here.)
+-- Scale page cursor: line 1 = root (the selected channel's tonic transpose,
+-- -12..+11 semitones), lines 2..13 = the twelve chromatic keys (pitch class =
+-- line - 2). E3 raises/lowers the root of the selected channel; on a key, right adds
+-- it to the (global) mask, left removes it. Root routes through the controller's
+-- per-channel set_root; the mask through set_mask (global). (quantize is on the perf
+-- page, not here.)
 function Screen:_edit_scale(d)
   local c = self.ctl
   local line = self.sel_line[PAGE_SCALE]
   if line == 1 then
-    c:set_root(((self.engine.root or 0) + d) % 12)
+    local cur = self.engine.channels[self.sel_ch + 1].root or 0
+    c:set_root(self.sel_ch, clamp(cur + d, -12, 11))
   else
     local pc = line - 2
     local cur, has = {}, false
@@ -783,13 +785,15 @@ function Screen:_draw_mini_kb(yb, lit, cursor_pc)
   end
 end
 
--- Scale page: shown while the grid's scale picker is open. Displays — and, via
--- E2/E3, edits — the two global musical params the picker drives: root (its own
--- single-select keyboard, mirroring the grid) and key mask (a membership
--- keyboard). The E2 cursor ticks above the focused key dot, or underlines the
--- root label. (quantize moved to the per-channel perf page.)
+-- Scale page: shown while the grid's ROOT/scale page is open. Displays — and, via
+-- E2/E3, edits — the SELECTED channel's root (per-channel tonic, pitch class on the
+-- keyboard + octave in the label) and the global key mask (a membership keyboard).
+-- The E2 cursor ticks above the focused key dot, or underlines the root label.
+-- (quantize moved to the per-channel perf page.)
 function Screen:draw_scale_lines()
-  local root = (self.engine.root or 0) % 12
+  local rootOffset = self.engine.channels[self.sel_ch + 1].root or 0  -- -12..+11
+  local root = rootOffset % 12                                        -- pitch class
+  local rootOct = math.floor(rootOffset / 12)                         -- -1 / 0
   local cursor = self.sel_line[PAGE_SCALE]
   local on = {}
   for _, s in ipairs(self.engine.scale) do on[s % 12] = true end
@@ -802,9 +806,11 @@ function Screen:draw_scale_lines()
     if focus then screen.rect(LABEL_X, y + 2, screen.text_extents(str), 1); screen.fill() end
   end
 
-  -- root keyboard (single selection) + key-mask keyboard (membership)
+  -- root keyboard (per-channel tonic, pitch class shown; octave in the label) +
+  -- key-mask keyboard (global membership)
   self:_draw_mini_kb(15, function(pc) return pc == root end, (cursor == 1) and root or nil)
-  label(19, cursor == 1, 'root ' .. NOTE_NAMES[root + 1])
+  local octLabel = (rootOct == 0) and '' or ('' .. rootOct)   -- '' or '-1'
+  label(19, cursor == 1, 'root ' .. NOTE_NAMES[root + 1] .. octLabel)
 
   self:_draw_mini_kb(31, function(pc) return on[pc] end,
     (cursor >= 2 and cursor <= 13) and (cursor - 2) or nil)

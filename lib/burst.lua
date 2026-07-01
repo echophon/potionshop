@@ -456,6 +456,10 @@ local function default_channel()
     -- macros; now per channel, edited on the PRISM page alongside quantize.
     envMode = 0,
     geodeMode = 1,
+    -- per-channel tonic transposition (ROOT/scale page), signed semitones -12..+11
+    -- (0 = base tonic C1, no transpose). Spans the two-octave root keyboard; sums with
+    -- `octave` below at fire time. The scale MASK stays global (self.scale).
+    root = 0,
     octave = 0,     -- -2..2, whole-octave pitch shift (perf page)
     altTrig = 0,    -- alt(B) note layering: 0=hold (add&hold) 1=step (per-hit)
     -- per-op-ratio sequence trig mode (prob page): 0=hold (the ratio is drawn once
@@ -475,8 +479,8 @@ function Burst.new()
   local self = setmetatable({}, Burst)
   self.launchGrid = 4   -- launches snap to the next quarter-note boundary
   -- (event snap grid is per-channel now: channels[ch].quantize, from QUANTIZE_VALUES)
-  self.scale = scales.by_name.major
-  self.root = 0         -- tonic transposition in semitones (0..11; 0 = C)
+  self.scale = scales.by_name.major   -- GLOBAL scale mask (shared by all channels)
+  -- (root is per-channel now: channels[ch].root, a signed semitone transpose)
   self.channels = {}
   self.running = {}
   self.clocks = {}      -- per-channel clock.run id (or nil)
@@ -698,7 +702,7 @@ function Burst:run_burst(ch, token, target_in)
     local env2 = op_env(env2A, env2B)
     local env3 = op_env(env3A, env3B)
     local env4 = op_env(env4A, env4B)
-    local freq = scales.degree_to_freq(degreeA + degreeB, self.scale, self.root)
+    local freq = scales.degree_to_freq(degreeA + degreeB, self.scale, c.root)
 
     -- REST: reps <= 0 fires nothing but still consumes (1 - reps) div-steps of
     -- time so the rhythm holds. We drew all the sequins above (so they advance
@@ -742,7 +746,7 @@ function Burst:run_burst(ch, token, target_in)
       -- beat grid: a skipped hit still consumes a B value.
       if c.altTrig == 1 and i > 0 then
         degreeB = note_seqB()
-        freq = scales.degree_to_freq(degreeA + degreeB, self.scale, self.root)
+        freq = scales.degree_to_freq(degreeA + degreeB, self.scale, c.root)
       end
 
       -- OP-RATIO STEP MODE: per sequence, when opRatioNTrig == 1 the B (offset) lane

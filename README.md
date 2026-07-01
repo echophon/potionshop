@@ -134,7 +134,7 @@ channel level + per-op levels are **static** scalars on the MIX page, not sequen
 - `11` **OP** — per-operator ratios + levels (per channel)
 - `12` **PERF** — perf page (reset / octave / rate / quantize)
 - `13` **PROB** — prob page (probability / alt-trig)
-- `14` **SCALE** — scale & root picker
+- `14` **SCALE** — ROOT page: global scale mask + per-channel root (2-octave kb)
 - `15` **PRISM** — per-channel quantize + env mode + geode page
 
 ### channel actions
@@ -205,17 +205,23 @@ rows 0–5, per channel — three selectors sharing one page:
 
 cols 8 and 12 are dark separators. env mode + geode are also on the screen PERF page.
 
-### scale & root picker
+### ROOT page (scale mask + per-channel root)
 
-opened by **SCALE** (row 6, col 14):
+opened by **SCALE** (row 6, col 14). scale presets moved to the PARAMETERS menu
+(expanded list), freeing room for three stacked mini-keyboards:
 
-- scale presets `[x: 0-6, y: 0]` — major · minor · pentatonic · dorian · akebono ·
-  hijaz · rast
-- degree (note-mask) keyboard `[x: 0-6, y: 1-2]` — compact piano (black row above
-  white); toggle scale degrees in/out
-- root keyboard `[x: 0-6, y: 4-5]` — pick the tonic
+- note-**mask** keyboard `[x: 0-6, y: 0-1]` — compact piano (black row above white);
+  toggle scale degrees in/out. the mask is **global** (shared by all channels).
+- **root** keyboard, two octaves — upper `[x: 0-6, y: 2-3]` = offsets 0..+11 (white
+  pc0 = base tonic, no transpose), lower `[x: 0-6, y: 4-5]` = offsets −12..−1. one
+  press sets the targeted channel(s)' **root** as a signed semitone transpose (±1
+  octave). **root is per-channel.**
+- channel **selectors** `[x: 5-10, y: 7]` — the launch strip becomes channel
+  selectors here: lit = targeted. a root press applies to **all** selected channels.
+  with a **single** target, each press then auto-advances the target to the next
+  channel; with **multiple** targets it applies to all and does not advance.
 
-press **SCALE** again to exit.
+the per-channel root sums with the PERF-page `octave` (±2). press **SCALE** again to exit.
 
 ## norns UI
 
@@ -284,11 +290,12 @@ the current algorithm.
 the entire instrument is norns params (`lib/params_sync.lua`), so everything saves
 to PSETs and is MIDI-mappable:
 
-- **globals** — `scale`, `root` (there is no VOICE group anymore — its last two
-  members, `env mode` and `geode`, are per-channel now)
+- **globals** — `scale` (the shared mask; expanded preset list). `root` is
+  per-channel now, and there is no VOICE group anymore — `env mode` and `geode` are
+  per-channel too.
 - **OUTPUTS** — per-channel destination (see [outputs](#outputs))
-- **ch1–ch6 groups** — run, rate, quantize, `env mode`, `geode`, prob, alt-trig,
-  reset, octave, the
+- **ch1–ch6 groups** — run, rate, quantize, `root` (−12..+11 transpose), `env mode`,
+  `geode`, prob, alt-trig, reset, octave, the
   per-channel voice scalars (`mod index`, `fm feedback`, `algorithm`), the
   per-op ratios/levels, the randomize/mutate/clear/copy/paste triggers, and every
   sequence × layer as a text param (the whole sequence as a string) plus step/value

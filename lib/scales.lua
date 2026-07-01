@@ -80,14 +80,25 @@ local function std(mu_name, fallback)
   return mu_intervals(mu_name) or fallback
 end
 
--- Keyed exactly like SCALE_NAMES in src/grid-controller.ts. Order matters: the
--- scale picker maps grid columns 0..11 to these in this sequence.
+-- The shared scale mask is chosen from this set (PARAMETERS menu `scale` option;
+-- the grid no longer has a preset row — presets moved to the menu, so the list is
+-- free to grow). Diatonic modes prefer musicutil intervals; the Eastern/maqam and
+-- pentatonic customs stay literal semitone approximations. bare 0..11 offsets.
 scales.by_name = {
-  chromatic  = std('Chromatic',        {0,1,2,3,4,5,6,7,8,9,10,11}),
-  major      = std('Major',            {0,2,4,5,7,9,11}),
-  minor      = std('Natural Minor',    {0,2,3,5,7,8,10}),
-  pentatonic = std('Major Pentatonic', {0,2,4,7,9}),
-  dorian     = std('Dorian',           {0,2,3,5,7,9,10}),
+  chromatic     = std('Chromatic',        {0,1,2,3,4,5,6,7,8,9,10,11}),
+  major         = std('Major',            {0,2,4,5,7,9,11}),
+  minor         = std('Natural Minor',    {0,2,3,5,7,8,10}),
+  harmonicMinor = std('Harmonic Minor',   {0,2,3,5,7,8,11}),
+  melodicMinor  = std('Melodic Minor',    {0,2,3,5,7,9,11}),
+  dorian        = std('Dorian',           {0,2,3,5,7,9,10}),
+  phrygian      = std('Phrygian',         {0,1,3,5,7,8,10}),
+  lydian        = std('Lydian',           {0,2,4,6,7,9,11}),
+  mixolydian    = std('Mixolydian',       {0,2,4,5,7,9,10}),
+  locrian       = std('Locrian',          {0,1,3,5,6,8,10}),
+  pentatonic    = std('Major Pentatonic', {0,2,4,7,9}),
+  minPentatonic = std('Minor Pentatonic', {0,3,5,7,10}),
+  blues         = std('Blues Minor',      {0,3,5,6,7,10}),
+  wholeTone     = std('Whole Tone',       {0,2,4,6,8,10}),
   -- Custom scales (semitone approximations) — kept literal; see src/scales.ts.
   akebono    = {0,2,3,7,8},        -- Japanese pentatonic
   hijaz      = {0,1,4,5,7,8,10},   -- Arabic maqam Hijaz (b2, M3)
@@ -98,17 +109,12 @@ scales.by_name = {
   wuSheng    = {0,2,4,7,9},        -- Chinese pentatonic
 }
 
--- Display/selection order used by the grid scale picker (12 entries).
+-- Display/selection order used by the PARAMETERS-menu `scale` option.
 scales.names = {
-  'chromatic', 'major', 'minor', 'pentatonic', 'dorian',
+  'chromatic', 'major', 'minor', 'harmonicMinor', 'melodicMinor',
+  'dorian', 'phrygian', 'lydian', 'mixolydian', 'locrian',
+  'pentatonic', 'minPentatonic', 'blues', 'wholeTone',
   'akebono', 'hijaz', 'kurd', 'bayati', 'rast', 'zen', 'wuSheng',
-}
-
--- Curated 7-preset set shown on the scale picker's top row (grid cols 0..6).
--- A strict subset of scales.names, so picker selections still resolve to a
--- valid PARAMETERS-menu scale index.
-scales.picker_names = {
-  'major', 'minor', 'pentatonic', 'dorian', 'akebono', 'hijaz', 'rast',
 }
 
 -- Octave-aware degree lookup. Degree 7 in major wraps to the next octave's

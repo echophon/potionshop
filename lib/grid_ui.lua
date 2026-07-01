@@ -58,10 +58,14 @@
 --          {3,4,6,8,12,16,24,32} = 1/3..1/32 events per whole note) · env mode
 --          (shape/burst/hit) on cols 9-11 · geode (transient/sustain/cycle) on cols
 --          13-15. Cols 8 and 12 are dark separators.
---   scale picker: row 0 cols 0-6 scale presets (7)
---                 rows 1-2 cols 0-6 degree (note-mask) keyboard: black row 1 / white row 2
---                 rows 4-5 cols 0-6 root keyboard: black row 4 / white row 5
---                 (quantize is no longer here — it is per-channel on the PRISM page)
+--   ROOT/scale page: three stacked mini-keyboards (cols 0-6). Scale presets moved to
+--                 the PARAMETERS menu, so no preset row here.
+--                 rows 0-1 = global note-MASK keyboard: black row 0 / white row 1
+--                 rows 2-3 = root UPPER octave (offset 0..+11; white pc0 = base tonic)
+--                 rows 4-5 = root LOWER octave (offset -12..-1)
+--                 row 7 cols 5-10 = channel SELECTORS (which channel(s) root edits
+--                 target); a root press applies to all selected, single target
+--                 auto-advances to the next channel. root is per-channel.
 --                 keyboards are a compact piano: white keys packed at cols 0-6,
 --                 black keys offset above the white key they follow
 --   step picker:  value grid on rows 6-7 (the control rows, borrowed while
@@ -126,7 +130,7 @@ local MUTATE_BUTTON_COL = 15
 local ROW6_MIX_COL = 11   -- per-channel MIX page (took the old ALG slot; channel level + op level statics)
 local ROW6_PERF_COL = 12
 local ROW6_PROB_COL = 13
-local ROW6_SCALE_COL = 14 -- opens the scale picker (scale preset / degrees / root)
+local ROW6_SCALE_COL = 14 -- opens the ROOT/scale page (global mask + per-channel root)
 local ROW6_PRISM_COL = 15   -- per-channel PRISM page (quantize + env mode + geode)
 -- Channel launch/stop (and action-target) buttons: a single contiguous 1x6 strip on
 -- ROW 7 at cols 5..10 (channel ch -> col 5 + ch, so ch0..5 = channels 1..6). Sits
@@ -169,12 +173,15 @@ local WHITE_KEYS = {0, 2, 4, 5, 7, 9, 11}
 -- no black key, matching a real keyboard's E-F and B-C gaps).
 local KB_WHITE_COL = {[0] = 0, [1] = 2, [2] = 4, [3] = 5, [4] = 7, [5] = 9, [6] = 11}
 local KB_BLACK_COL = {[0] = 1, [1] = 3, [3] = 6, [4] = 8, [5] = 10}
--- Scale-picker row assignments.
-local SCALE_PRESET_ROW = 0
-local DEG_BLACK_ROW, DEG_WHITE_ROW = 1, 2
-local ROOT_BLACK_ROW, ROOT_WHITE_ROW = 4, 5
--- (the scale picker no longer hosts a quantize block — quantize is per-channel on
--- its own PRISM page; the right side of the scale picker is now unused.)
+-- ROOT/scale-page row assignments — three stacked mini-keyboards (each = a black
+-- key row over a white key row). The scale-preset row was removed (presets live in
+-- the PARAMETERS menu now), freeing room for a two-octave per-channel root keyboard:
+--   rows 0-1 = global scale MASK (membership)
+--   rows 2-3 = root UPPER octave (offset 0..+11; white pc0 = base tonic, offset 0)
+--   rows 4-5 = root LOWER octave (offset -12..-1)
+local MASK_BLACK_ROW,   MASK_WHITE_ROW   = 0, 1
+local ROOTHI_BLACK_ROW, ROOTHI_WHITE_ROW = 2, 3
+local ROOTLO_BLACK_ROW, ROOTLO_WHITE_ROW = 4, 5
 local RESET_INTERVALS = {0, 1, 2, 4}
 local RESET_COLS      = {0, 1, 2, 3}
 local OCTAVE_VALUES = {-2, -1, 0, 1, 2}
@@ -726,6 +733,10 @@ function GridUI:handle_picker_press(x, y)
   if p.kind == 'scale' then
     if y < 6 then self:apply_picker_value(p, x, y); return end
     if y == 6 and x == ROW6_SCALE_COL then self:close_picker(); return end
+    -- row 7 cols 5..10: channel selectors for root editing (not launch on this page)
+    if y == LAUNCH_ROW and x >= LAUNCH_COL0 and x < LAUNCH_COL0 + NUM_CHANNELS then
+      self:toggle_root_target(x - LAUNCH_COL0); return
+    end
     self:close_picker()
     self:handle_normal_press(x, y)
     return
@@ -777,26 +788,22 @@ function GridUI:apply_picker_value(p, x, y)
     self:set_scalar(p.ch, p.field, v)  -- single edit path: fires on_edit{scalar}
     self:close_picker()
   elseif p.kind == 'scale' then
-    if y == SCALE_PRESET_ROW then
-      local name = scales.picker_names[x + 1]
-      if not name then return end
-      self.selectedScaleName = name
-      self.customMask = {}
-      for _, vv in ipairs(scales.by_name[name]) do self.customMask[#self.customMask + 1] = vv end
-      self.engine.scale = self.customMask
-    elseif y == DEG_BLACK_ROW or y == DEG_WHITE_ROW then
-      local semitone = (y == DEG_BLACK_ROW) and KB_BLACK_COL[x] or KB_WHITE_COL[x]
+    if y == MASK_BLACK_ROW or y == MASK_WHITE_ROW then
+      -- global scale mask keyboard (rows 0-1)
+      local semitone = (y == MASK_BLACK_ROW) and KB_BLACK_COL[x] or KB_WHITE_COL[x]
       if semitone == nil then return end
       self:toggle_mask_note(semitone)
-    elseif y == ROOT_BLACK_ROW or y == ROOT_WHITE_ROW then
-      local semitone = (y == ROOT_BLACK_ROW) and KB_BLACK_COL[x] or KB_WHITE_COL[x]
-      if semitone == nil then return end
-      self.engine.root = semitone
+      self.on_edit{ type = 'global' }   -- mask stays global
+      self:render_all()
     else
-      return
+      -- root keyboard rows 2-5. upper pair (2-3) = offset pc (0..+11); lower pair
+      -- (4-5) = pc-12. apply_root reflects per targeted channel + renders.
+      local black = (y == ROOTHI_BLACK_ROW or y == ROOTLO_BLACK_ROW)
+      local semitone = black and KB_BLACK_COL[x] or KB_WHITE_COL[x]
+      if semitone == nil then return end
+      local lower = (y == ROOTLO_BLACK_ROW or y == ROOTLO_WHITE_ROW)
+      self:apply_root(lower and (semitone - 12) or semitone)
     end
-    self.on_edit{ type = 'global' }
-    self:render_all()
   end
 end
 
@@ -817,7 +824,8 @@ function GridUI:toggle_mask_note(semitone)
 end
 
 -- preset scale name whose intervals match `mask` exactly, or nil (custom mask).
--- Lets a whole-mask edit re-light the matching preset on the scale picker.
+-- Keeps selectedScaleName in step so the PARAMETERS-menu `scale` option reflects a
+-- whole-mask edit (the grid no longer shows presets).
 function GridUI:_mask_preset_name(mask)
   for _, name in ipairs(scales.names) do
     local ref = scales.by_name[name]
@@ -852,13 +860,40 @@ function GridUI:set_mask(semitones)
   self.on_edit{ type = 'global' }
 end
 
--- Global musical scalars (root tonic). Like set_mask this is the single mutation
--- path so on_edit{global} fires and the params/screen reflect; the screen scale
--- page edits through it. (quantize is per-channel now — edited via set_scalar on
--- the PRISM page / chN_quantize param, not here.)
-function GridUI:set_root(semitone)
-  self.engine.root = semitone % 12
-  self.on_edit{ type = 'global' }
+-- Per-channel tonic (root) is a signed semitone transpose (-12..+11), edited via
+-- set_scalar so on_edit{scalar} reflects into params/screen like any other channel
+-- scalar. ch is 0-based. Used by the screen scale page and the grid root keyboard.
+function GridUI:set_root(ch, offset)
+  self:set_scalar(ch, 'root', clamp(offset, -12, 11))
+end
+
+-- Toggle a channel in the root-edit target set (ROOT-page channel selectors, row 7
+-- cols 5..10). Refuses to empty the set — at least one channel stays targeted.
+function GridUI:toggle_root_target(ch)
+  self.rootTargets = self.rootTargets or {}
+  if self.rootTargets[ch] then
+    local n = 0
+    for _ in pairs(self.rootTargets) do n = n + 1 end
+    if n > 1 then self.rootTargets[ch] = nil end
+  else
+    self.rootTargets[ch] = true
+  end
+  self:render_all()
+end
+
+-- Apply a root offset to every targeted channel. Single target => cycle to the next
+-- channel after applying (auto-advance); multiple => apply to all, no advance.
+function GridUI:apply_root(offset)
+  local targets = {}
+  for ch in pairs(self.rootTargets or {}) do targets[#targets + 1] = ch end
+  table.sort(targets)
+  for _, ch in ipairs(targets) do self:set_root(ch, offset) end
+  if #targets == 1 then
+    local nextch = (targets[1] + 1) % NUM_CHANNELS
+    self.rootTargets = { [nextch] = true }
+    self:_focus(nextch)
+  end
+  self:render_all()
 end
 
 -- ---- picker enter/exit -------------------------------------------------
@@ -898,6 +933,8 @@ function GridUI:open_scale_picker()
   self:_clear_latches()
   self.customMask = {}
   for _, v in ipairs(self.engine.scale) do self.customMask[#self.customMask + 1] = v end
+  -- seed root-edit target with the currently focused channel (auto-advance single).
+  self.rootTargets = { [self.focusCh or 0] = true }
   self.picker = {kind = 'scale'}
   self:render_all()
 end
@@ -1162,28 +1199,32 @@ function GridUI:render_scale_picker()
   -- clear the whole picker area first (rows 0..5)
   for y = 0, 5 do for x = 0, GRID_W - 1 do self.g:set_led(x, y, 0) end end
 
-  -- row 0: 7 scale presets, left justified
-  for x = 0, #scales.picker_names - 1 do
-    local name = scales.picker_names[x + 1]
-    self.g:set_led(x, SCALE_PRESET_ROW, name == self.selectedScaleName and 15 or 5)
-  end
-
-  -- degree (note-mask) keyboard: black row above white row
+  -- rows 0-1: global scale MASK keyboard (membership), black row above white row
   for x, semi in pairs(KB_BLACK_COL) do
-    self.g:set_led(x, DEG_BLACK_ROW, contains(self.customMask, semi) and 12 or 3)
+    self.g:set_led(x, MASK_BLACK_ROW, contains(self.customMask, semi) and 12 or 3)
   end
   for x, semi in pairs(KB_WHITE_COL) do
-    self.g:set_led(x, DEG_WHITE_ROW, contains(self.customMask, semi) and 12 or 3)
+    self.g:set_led(x, MASK_WHITE_ROW, contains(self.customMask, semi) and 12 or 3)
   end
 
-  -- root keyboard: highlights the single selected tonic
-  local root = self.engine.root or 0
-  for x, semi in pairs(KB_BLACK_COL) do
-    self.g:set_led(x, ROOT_BLACK_ROW, semi == root and 15 or 3)
+  -- rows 2-5: two-octave root keyboard. Highlight the key for every targeted
+  -- channel's root: offset >= 0 -> upper octave (pitch class = offset); offset < 0
+  -- -> lower octave (pitch class = offset + 12).
+  local hiPc, loPc = {}, {}
+  for ch in pairs(self.rootTargets or {}) do
+    local r = self:chan(ch).root or 0
+    if r >= 0 then hiPc[r] = true else loPc[r + 12] = true end
   end
-  for x, semi in pairs(KB_WHITE_COL) do
-    self.g:set_led(x, ROOT_WHITE_ROW, semi == root and 15 or 3)
+  local function draw_oct(blackRow, whiteRow, sel)
+    for x, semi in pairs(KB_BLACK_COL) do
+      self.g:set_led(x, blackRow, sel[semi] and 15 or 3)
+    end
+    for x, semi in pairs(KB_WHITE_COL) do
+      self.g:set_led(x, whiteRow, sel[semi] and 15 or 3)
+    end
   end
+  draw_oct(ROOTHI_BLACK_ROW, ROOTHI_WHITE_ROW, hiPc)
+  draw_oct(ROOTLO_BLACK_ROW, ROOTLO_WHITE_ROW, loPc)
 end
 
 function GridUI:render_channel_row(ch)
@@ -1329,6 +1370,16 @@ end
 -- it gently 'pulse'-oscillates (smooth sine fade, driven by the strobe metro) as
 -- an onboarding cue inviting a first press.
 function GridUI:render_launch_block()
+  -- ROOT/scale page: the launch strip becomes channel selectors (which channel(s)
+  -- root edits target). Lit = targeted.
+  if self.picker and self.picker.kind == 'scale' then
+    for ch = 0, NUM_CHANNELS - 1 do
+      local x = LAUNCH_COL0 + ch
+      self.g:set_strobe(x, LAUNCH_ROW, 'off')
+      self.g:set_led(x, LAUNCH_ROW, (self.rootTargets and self.rootTargets[ch]) and 15 or 4)
+    end
+    return
+  end
   local action = self.actionMode
   local mark_running = action == 'randomize' or action == 'mutate'
   local onboarding = not self.hasLaunched
@@ -1557,7 +1608,7 @@ end
 
 function GridUI:current_page()
   if self.kbMode then return 'KB' end
-  if self.picker and self.picker.kind == 'scale' then return 'SCALE' end
+  if self.picker and self.picker.kind == 'scale' then return 'ROOT' end
   if self.picker and self.picker.kind == 'step' then return 'PICK' end
   if self.picker and self.picker.kind == 'scalar' then return 'MIX' end
   if self.perfMode then return 'PERF' end
@@ -1606,7 +1657,7 @@ function GridUI:_status()
     s = 'edit ch' .. (self.picker.ch + 1) .. ' step ' .. self.picker.col .. ' ' ..
         pp .. (self.picker.layer == 'B' and 'B' or '') .. '=' .. tostring(v)
   elseif self.picker and self.picker.kind == 'scale' then
-    s = 'scale: row0 preset, rows1-2 keys, rows4-5 root'
+    s = 'ROOT: 0-1 mask, 2-5 root oct, r7 ch-select'
   else
     local pr = PAIR_OF[self.selectedParam]
     s = pr and ('edit ' .. pr[1] .. ' | ' .. pr[2])

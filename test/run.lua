@@ -37,13 +37,19 @@ check('degree -1 in major = previous B (floor-mod)',
   scales.degree_to_semitones(-1, major) == -1)
 check('custom scale hijaz preserved literally', #scales.by_name.hijaz == 7
   and scales.by_name.hijaz[2] == 1)
-check('12 scale names in picker order', #scales.names == 12
-  and scales.names[1] == 'chromatic' and scales.names[12] == 'wuSheng')
-check('7 grid preset names, subset of scales.names', #scales.picker_names == 7
-  and scales.picker_names[1] == 'major' and scales.by_name[scales.picker_names[7]] ~= nil)
+check('expanded scale list, every name resolves to intervals',
+  #scales.names >= 12 and scales.names[1] == 'chromatic'
+  and scales.by_name[scales.names[#scales.names]] ~= nil)
+check('scale list gained the extra modes', scales.by_name.lydian ~= nil
+  and scales.by_name.blues ~= nil and scales.by_name.wholeTone ~= nil)
+check('no grid preset list anymore (presets moved to params menu)',
+  scales.picker_names == nil)
 check('root transposes tonic up by semitones',
   approx(scales.degree_to_freq(0, major, 2),
     require('musicutil').note_num_to_freq(26)))
+check('negative root transposes tonic DOWN (per-channel -1 octave)',
+  approx(scales.degree_to_freq(0, major, -12),
+    require('musicutil').note_num_to_freq(12)))
 check('root defaults to 0 (no transposition)',
   approx(scales.degree_to_freq(0, major, 0), scales.degree_to_freq(0, major)))
 -- JUST INTONATION: the in-between intervals are pure ratios, not 12-TET. The
@@ -185,6 +191,19 @@ eng2:launch(1)
 check('single-shot fired exactly one hit', #fires == 1)
 check('single-shot stopped the channel', eng2:is_running(1) == false)
 check('fire freq = degree_to_freq(0, major) = C1', approx(fires[1].freq, 32.7032))
+
+-- per-channel root transposes the fired freq at fire time (root is per channel now)
+clock._reset()
+local engR = Burst.new()
+local firesR = {}
+engR:on(function(ev) if ev.type == 'fire' then firesR[#firesR + 1] = ev end end)
+engR.channels[1].reps = seqx.new{1}
+engR.channels[1].div  = seqx.new{4}
+engR.channels[1].note = seqx.new{0}
+engR.channels[1].root = 2      -- +2 semitones (per-channel tonic transpose)
+engR:launch(1)
+check('per-channel root transposes fired freq (degree 0, root +2)',
+  #firesR == 1 and approx(firesR[1].freq, scales.degree_to_freq(0, scales.by_name.major, 2)))
 
 -- octave scalar: applied per hit in fire, so external outputs and the ghost
 -- note see the shifted freq
@@ -970,18 +989,47 @@ check('idle launch button settles to a static dim', mg.leds[7 * 16 + 6] == 4)
 check('running launch button is solid full-bright', mg.leds[7 * 16 + 5] == 15)
 geng:stop(1)
 
--- scale picker (row6 QNT col 14)
+-- ROOT/scale page (row6 col 14): mask kb rows 0-1, root kb rows 2-5 (upper 2-3,
+-- lower 4-5), channel selectors on row 7 cols 5-10. root is per-channel now.
+ctl.focusCh = 0
+ctl:close_picker()
 ctl:press(14, 6)
-check('QNT opens scale picker', ctl.picker ~= nil and ctl.picker.kind == 'scale')
-ctl:press(1, 0)  -- scales.picker_names[2] = 'minor'
-check('scale picker selects minor', ctl.selectedScaleName == 'minor')
-check('engine.scale set to minor intervals', vals_eq(geng.scale, scales.by_name.minor))
-ctl:press(0, 5)  -- root keyboard white row, col 0 = semitone 0 (C)
-check('root keyboard sets engine.root to C', geng.root == 0)
-ctl:press(1, 5)  -- col 1 white = semitone 2 (D)
-check('root keyboard sets engine.root to D', geng.root == 2)
-ctl:press(14, 6)  -- close scale picker
-check('scale picker closed via QNT', ctl.picker == nil)
+check('SCALE col opens ROOT page', ctl.picker ~= nil and ctl.picker.kind == 'scale')
+check('root page seeds target = focused channel 0', ctl.rootTargets[0] == true)
+-- global mask keyboard (rows 0-1): white row col 0 = pitch class 0 (in major -> removes)
+local m0 = #geng.scale
+ctl:press(0, 1)
+check('mask keyboard edits the global scale', #geng.scale ~= m0)
+ctl:press(0, 1)
+check('mask keyboard toggles back', #geng.scale == m0)
+-- root UPPER octave (rows 2-3): white row col 0 = pitch class 0 -> offset 0 (base tonic)
+ctl:press(0, 3)
+check('root sets targeted channel 0 to offset 0', geng.channels[1].root == 0)
+check('single target auto-advances to channel 1',
+  ctl.rootTargets[1] == true and ctl.rootTargets[0] == nil)
+-- root LOWER octave (rows 4-5): white col 1 = pc 2 -> offset 2-12 = -10 (down an octave)
+ctl:press(1, 5)
+check('root lower octave sets channel 1 to -10', geng.channels[2].root == -10)
+-- single applies auto-advanced twice, so the target is channel 2 now. Add ch0 (col5)
+-- and ch3 (col8) via the row-7 channel selectors for a multi-target edit.
+check('auto-advance reached channel 2', ctl.rootTargets[2] == true)
+ctl:press(5, 7)
+ctl:press(8, 7)
+check('multi-select adds channels', ctl.rootTargets[2] and ctl.rootTargets[0] and ctl.rootTargets[3])
+-- apply root to all selected: upper white col 2 = pc 4 -> offset 4
+ctl:press(2, 3)
+check('root applies to all selected channels', geng.channels[1].root == 4
+  and geng.channels[3].root == 4 and geng.channels[4].root == 4)
+check('multi target does NOT auto-advance',
+  ctl.rootTargets[0] and ctl.rootTargets[2] and ctl.rootTargets[3])
+-- selectors refuse to empty the target set
+ctl:press(5, 7)   -- ch0 off -> {2,3}
+ctl:press(7, 7)   -- ch2 off -> {3}
+ctl:press(8, 7)   -- try ch3 off -> refused
+check('selector refuses to empty the target set',
+  ctl.rootTargets[3] == true)
+ctl:press(14, 6)  -- close
+check('ROOT page closed via SCALE col', ctl.picker == nil)
 
 -- entering the scale page is exclusive with the other row-6 latch modes, so
 -- only the active page's button stays lit (regression: a prior PERF/PROB/SND
@@ -1220,15 +1268,16 @@ sui.sel_line[3] = 3
 sui:enc(3, 1)
 check('rate E3 lands in RATE_VALUES', in_set(seng.channels[1].rate, GridUI.RATE_VALUES))
 
--- scale page: E2 walks root -> 12 keys; E3 edits each (quantize is per-channel
--- now, on the perf page below — no longer a scale-page stop)
+-- scale page: E2 walks root -> 12 keys; E3 edits the SELECTED channel's root
+-- (per-channel now, -12..+11 signed transpose, no wrap; mask stays global)
 sui:set_page(5)
-seng.root = 0
+local sch = sui.sel_ch + 1
+seng.channels[sch].root = 0
 sui.sel_line[5] = 1            -- root
 sui:enc(3, 2)
-check('scale E3 raises root by semitones', seng.root == 2)
-sui:enc(3, -3)                 -- wraps below 0
-check('scale root wraps mod 12', seng.root == 11)
+check('scale E3 raises the selected channel root by semitones', seng.channels[sch].root == 2)
+sui:enc(3, -5)                 -- goes negative (down-octave transpose), no wrap
+check('scale root goes negative, clamped not wrapped', seng.channels[sch].root == -3)
 seng.scale = {0, 4, 7}
 sui.sel_line[5] = 2 + 2        -- key for pitch class 2 (D)
 sui:enc(3, 1)
@@ -1245,7 +1294,7 @@ check('perf E3 steps quantize up the curated set', seng.channels[1].quantize == 
 check('perf quantize lands in QUANTIZE_VALUES', in_set(seng.channels[1].quantize, GridUI.QUANTIZE_VALUES))
 
 -- restore musical state the fire tests below assume (unshifted c1, major)
-seng.root = 0
+seng.channels[1].root = 0     -- root is per-channel now
 seng.scale = scales.by_name.major
 set_quant(seng, 32)
 

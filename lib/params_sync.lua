@@ -3,10 +3,10 @@
 -- PSETs, MIDI mapping) and keeps them bidirectionally in sync with the grid
 -- and screen surfaces.
 --
--- Layout: a global block (scale / root),
+-- Layout: a global block (scale mask — root is per-channel now),
 -- the OUTPUTS group (lib/outputs.lua), plus one group per
 -- channel ("CHANNEL 1".."CHANNEL 6"). Each group holds the channel scalars
--- (run, rate, quantize, env mode, geode, prob, alt trig, op1/2/3/4 ratio trig, op1/2/3/4 env trig,
+-- (run, rate, quantize, root, env mode, geode, prob, alt trig, op1/2/3/4 ratio trig, op1/2/3/4 env trig,
 -- reset, channel level + per-op levels, clear/copy/paste + action triggers) and, per sequence
 -- parameter x layer (div/reps/note/opEnv1..4/opRatio1..4 x A/B, where div/reps is
 -- A-only and the op envelopes + op ratios carry an A value + B index-offset layer),
@@ -257,8 +257,7 @@ function M:add_globals()
     self:request_render()
   end)
 
-  params:add_option('root', 'root', NOTE_NAMES, (eng.root or 0) + 1)
-  params:set_action('root', function(i) eng.root = i - 1; self:request_render() end)
+  -- (root is per-channel now — chN_root, added in the channel groups below.)
 
   -- the note mask, edited/stored as a sequence-like string of pitch-class names.
   -- Commits through the controller's set_mask (the one set-the-whole-mask path),
@@ -326,6 +325,11 @@ function M:_add_channel_params(n)
       c.quantize = GridUI.QUANTIZE_VALUES[i]
       self:request_render()
     end)
+  end)
+  -- per-channel tonic transpose (ROOT/scale page): signed semitones -12..+11.
+  def(1, function()
+    params:add_number(id('root'), 'root', -12, 11, c.root or 0)
+    params:set_action(id('root'), function(v) c.root = v; self:request_render() end)
   end)
   -- per-channel amp dynamics (PRISM page), 0-based fields so the option index = value+1.
   def(1, function()
@@ -601,6 +605,7 @@ function M:reflect_scalars(n)
   params:set(id('run'), self.engine:is_running(n) and 1 or 0, true)
   params:set(id('rate'), GridUI.nearest_index(GridUI.RATE_VALUES, c.rate), true)
   params:set(id('quantize'), GridUI.nearest_index(GridUI.QUANTIZE_VALUES, c.quantize), true)
+  params:set(id('root'), clamp(c.root or 0, -12, 11), true)
   params:set(id('env_mode'), clamp(c.envMode + 1, 1, #GridUI.ENV_MODE_NAMES), true)
   params:set(id('geode'), clamp(c.geodeMode + 1, 1, #GridUI.GEODE_MODE_NAMES), true)
   params:set(id('prob'), GridUI.nearest_index(GridUI.PROB_VALUES, c.burstProb), true)
@@ -628,7 +633,6 @@ end
 
 function M:reflect_globals()
   local params = self.params
-  params:set('root', clamp((self.engine.root or 0) + 1, 1, 12), true)
   if params:lookup_param('keymask') then
     params:set('keymask', M.mask_to_text(self.engine.scale), true)
   end
