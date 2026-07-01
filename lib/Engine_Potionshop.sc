@@ -25,8 +25,11 @@
 // that fanned all three ratios out from unison via one scalar.
 //
 // Signal flow: PotionFM synths (in fmGroup, head) -> masterBus -> PotionMaster
-// (Limiter, at tail) -> engine output. Norns/Crone also soft-limits the main
-// output; a 3-band compressor like the web master bus is a documented stretch.
+// (Compander compressor -> makeup -> Limiter, at tail) -> engine output. The
+// compressor evens out the loudness swing between algorithms (additive vs single
+// carrier, PM vs over-modulated AM) so the limiter only catches rare peaks.
+// Norns/Crone also soft-limits the main output; a 3-band compressor like the web
+// master bus is the documented stretch beyond this single-band stage.
 
 Engine_Potionshop : CroneEngine {
 	var <fmGroup;
@@ -113,9 +116,9 @@ Engine_Potionshop : CroneEngine {
 			atk2 = 0.001, dec2 = 0.2, atkCurve2 = -4, decCurve2 = -4,  // op2 EG
 			atk3 = 0.001, dec3 = 0.2, atkCurve3 = -4, decCurve3 = -4,  // op3 EG
 			atk4 = 0.001, dec4 = 0.2, atkCurve4 = -4, decCurve4 = -4,  // op4 EG
-			drive = 1, gate = 1,                            // soft-clip, voice gate
+			gate = 1,                                       // voice gate
 			pan = 0;                                        // stereo position (-1 L .. +1 R)
-			var e1, e2, e3, e4, cut, free, maxTime, o1, o2, o3, o4, sig, driveMix;
+			var e1, e2, e3, e4, cut, free, maxTime, o1, o2, o3, o4, sig;
 
 			// PER-OPERATOR envelope generators (DX-style EG): each shapes its own
 			// operator's output (unit 0->1->0). A carrier's eN is its amplitude
@@ -177,17 +180,27 @@ Engine_Potionshop : CroneEngine {
 			sig = (c1 * o1) + (c2 * o2) + (c3 * o3) + (c4 * o4);
 			sig = sig * cut * amp * 0.5;
 
-			// soft-clip drive: drive=1 is clean, higher blends in tanh saturation
-			// and raises pre-gain together. Master Limiter catches the peaks.
-			driveMix = (drive - 1).linlin(0, 7, 0, 1);
-			sig = (sig * (1 - driveMix)) + ((sig * drive).tanh * driveMix);
 			// mono voice -> stereo field at the per-channel pan position.
 			Out.ar(out, Pan2.ar(sig, pan));
 		}).add;
 
-		// --- master limiter ---
+		// --- master compressor + limiter ---
+		// The six voices sum on masterBus with no per-voice loudness governing, so
+		// additive algos (many carriers) and over-modulated AM patches can sit far
+		// louder than a single-carrier stack. A Compander evens that out (gentle 3:1
+		// above -10dBish) BEFORE the brickwall Limiter, so the limiter only catches
+		// rare true peaks instead of hard-clamping every loud patch. makeup restores
+		// the level the compression pulled down. A 3-band split is the documented
+		// stretch beyond this single-band stage.
 		SynthDef("PotionMaster", { arg in = 0, out = 0;
 			var sig = In.ar(in, 2);
+			sig = Compander.ar(sig, sig,
+				thresh: 0.3,
+				slopeBelow: 1,          // no expansion below thresh
+				slopeAbove: 0.33,       // ~3:1 compression above thresh
+				clampTime: 0.01,        // attack
+				relaxTime: 0.1);        // release
+			sig = sig * 1.5;            // makeup gain for the compressed level
 			sig = Limiter.ar(sig, 0.95, 0.01);
 			Out.ar(out, sig);
 		}).add;
@@ -203,11 +216,11 @@ Engine_Potionshop : CroneEngine {
 		]);
 
 		// trig(freq, amp, algo, r2, r3, r4, modIndex,
-		//      feedback, drive, ch, lvl1, lvl2, lvl3, lvl4, r1, pan,
+		//      feedback, ch, lvl1, lvl2, lvl3, lvl4, r1, pan,
 		//      atk1, dec1, atkCurve1, decCurve1,   // op1 EG
 		//      atk2, dec2, atkCurve2, decCurve2,   // op2 EG
 		//      atk3, dec3, atkCurve3, decCurve3,   // op3 EG
-		//      atk4, dec4, atkCurve4, decCurve4)   // op4 EG  -- 32 floats total
+		//      atk4, dec4, atkCurve4, decCurve4)   // op4 EG  -- 31 floats total
 		//
 		// `algo` (1..32) selects the routing/carrier data; the rest are the final
 		// per-hit values Burst:fire already computes. The handler expands `algo`
@@ -217,21 +230,21 @@ Engine_Potionshop : CroneEngine {
 		// are the per-operator output levels; r1 is op1's per-channel ratio. Each
 		// operator carries its OWN envelope (per-op EG) from its sequenced opEnvN
 		// shape, resolved in Burst:fire to {atk, dec, atkCurve, decCurve} and grouped
-		// per op at args 17..32.
-		this.addCommand("trig", "ffffffffffffffffffffffffffffffff", { arg msg;
+		// per op at args 16..31.
+		this.addCommand("trig", "fffffffffffffffffffffffffffffff", { arg msg;
 			var freq = msg[1], amp = msg[2];
 			var algo = msg[3].asInteger.clip(1, 32);
 			var r2 = msg[4], r3 = msg[5], r4 = msg[6];
 			var modIndex = msg[7];
-			var feedback = msg[8], drive = msg[9];
-			var ch = msg[10].asInteger.clip(1, numChannels);
-			var lvl1 = msg[11], lvl2 = msg[12], lvl3 = msg[13], lvl4 = msg[14];
-			var r1 = msg[15];
-			var pan = msg[16];
-			var atk1 = msg[17], dec1 = msg[18], atkCurve1 = msg[19], decCurve1 = msg[20];
-			var atk2 = msg[21], dec2 = msg[22], atkCurve2 = msg[23], decCurve2 = msg[24];
-			var atk3 = msg[25], dec3 = msg[26], atkCurve3 = msg[27], decCurve3 = msg[28];
-			var atk4 = msg[29], dec4 = msg[30], atkCurve4 = msg[31], decCurve4 = msg[32];
+			var feedback = msg[8];
+			var ch = msg[9].asInteger.clip(1, numChannels);
+			var lvl1 = msg[10], lvl2 = msg[11], lvl3 = msg[12], lvl4 = msg[13];
+			var r1 = msg[14];
+			var pan = msg[15];
+			var atk1 = msg[16], dec1 = msg[17], atkCurve1 = msg[18], decCurve1 = msg[19];
+			var atk2 = msg[20], dec2 = msg[21], atkCurve2 = msg[22], decCurve2 = msg[23];
+			var atk3 = msg[24], dec3 = msg[25], atkCurve3 = msg[26], decCurve3 = msg[27];
+			var atk4 = msg[28], dec4 = msg[29], atkCurve4 = msg[30], decCurve4 = msg[31];
 			var spec, edges, carriers, amEdges, cgain, weights, amWeights, pmIndex, amDepth, voice;
 
 			spec = algorithms[algo - 1];
@@ -259,10 +272,13 @@ Engine_Potionshop : CroneEngine {
 				amWeights[(prefix ++ e[0].asString ++ e[1].asString).asSymbol] = 1;
 			};
 
-			// modIndex (sequencer 1..24) -> PM depth in radians, reused (normalized to
-			// 0..1) as the AM/ring depth so one macro drives both generators for now.
-			pmIndex = modIndex.linlin(1, 24, 0.5, 8);
-			amDepth = modIndex.linlin(1, 24, 0, 1);
+			// modIndex (sequencer 1..32) -> PM depth in radians, reused as the AM/ring
+			// depth so one macro drives both generators for now. AM spans the full 1..32
+			// grid and tops out at 2.0 (over-modulation): past 1.0 the (1 + amDepth*src)
+			// term inverts and folds, so the high steps push AM/ring toward metallic,
+			// sideband-rich territory rather than plain 100% tremolo.
+			pmIndex = modIndex.linlin(1, 32, 0.5, 8);
+			amDepth = modIndex.linlin(1, 32, 0, 2);
 
 			// release any voice still ringing on this channel so it can't drone
 			// into the new note (gate=0 -> ~6ms fade + free). `set` on an already
@@ -289,7 +305,7 @@ Engine_Potionshop : CroneEngine {
 				\atk2, atk2, \dec2, dec2, \atkCurve2, atkCurve2, \decCurve2, decCurve2,
 				\atk3, atk3, \dec3, dec3, \atkCurve3, atkCurve3, \decCurve3, decCurve3,
 				\atk4, atk4, \dec4, dec4, \atkCurve4, atkCurve4, \decCurve4, decCurve4,
-				\drive, drive, \pan, pan
+				\pan, pan
 			], fmGroup);
 			voices[ch - 1] = voice;
 			// clear the slot when the voice frees itself (perc done or gate release)

@@ -3,12 +3,10 @@
 -- PSETs, MIDI mapping) and keeps them bidirectionally in sync with the grid
 -- and screen surfaces.
 --
--- Layout: a global block (scale / root), a VOICE group of engine-wide
--- FM timbre macros (FM algorithm / env mode / geode / mod index / amp punch /
--- fm feedback / fm drive),
+-- Layout: a global block (scale / root),
 -- the OUTPUTS group (lib/outputs.lua), plus one group per
 -- channel ("CHANNEL 1".."CHANNEL 6"). Each group holds the channel scalars
--- (run, rate, quantize, prob, alt trig, op1/2/3/4 ratio trig, op1/2/3/4 env trig,
+-- (run, rate, quantize, env mode, geode, prob, alt trig, op1/2/3/4 ratio trig, op1/2/3/4 env trig,
 -- reset, channel level + per-op levels, clear/copy/paste + action triggers) and, per sequence
 -- parameter x layer (div/reps/note/opEnv1..4/opRatio1..4 x A/B, where div/reps is
 -- A-only and the op envelopes + op ratios carry an A value + B index-offset layer),
@@ -277,28 +275,10 @@ function M:add_globals()
   -- quantize is per-channel now (chN_quantize, added in the channel loop below) —
   -- the old global 'quantize' param is gone.
 
-  -- VOICE: engine-wide FM timbre macros. Global (not per-channel) since the
-  -- non-audio output types can't render them; these are the actual values the SC
-  -- voice receives at fire time. Percent where the underlying value is fractional.
-  local function pct() return function(p) return p:get() .. '%' end end
-  -- (each operator's envelope is per-channel sequenced via its SHAPE index
-  -- chN_opEnvN_a/_b, not global macros; amp_punch below scales every op env's
-  -- contour curves uniformly rather than setting a fixed perc curve.)
-  params:add_group('voice', 'VOICE', 3)
-  -- amp decay timing + per-hit amp geode: both were per-channel (grid/screen SND
-  -- page); now engine-wide macros (the SND page was reclaimed). 0-based fields, so
-  -- the option index is value + 1. (FM algorithm is back to per-channel — chN_algorithm
-  -- on the MIX page — so it is no longer a global VOICE param.)
-  params:add_option('env_mode', 'env mode', GridUI.ENV_MODE_NAMES, eng.envMode + 1)
-  params:set_action('env_mode', function(i) eng.envMode = i - 1 end)
-  params:add_option('geode', 'geode', GridUI.GEODE_MODE_NAMES, eng.geodeMode + 1)
-  params:set_action('geode', function(i) eng.geodeMode = i - 1 end)
-  params:add_number('fm_drive', 'FM drive', 100, 800, round(eng.drive * 100), pct())
-  params:set_action('fm_drive', function(v) eng.drive = v / 100 end)
-  -- per-op output levels plus FM mod index / amp punch / FM feedback / algorithm are
-  -- per-channel static scalars (chN_level1..4, chN_mod_index, chN_amp_punch,
-  -- chN_fm_feedback, chN_algorithm) on the MIX page; all four op ratios are sequenced —
-  -- added in the channel groups below.
+  -- No VOICE group anymore: env mode + geode were its last two members and are now
+  -- per-channel PRISM-page scalars (chN_env_mode / chN_geode). Every other voice
+  -- control (env mode, geode, per-op levels, FM mod index / feedback / algorithm, all
+  -- four op ratios) is per-channel too — added in the channel groups below.
 end
 
 function M:add_channels()
@@ -346,6 +326,15 @@ function M:_add_channel_params(n)
       c.quantize = GridUI.QUANTIZE_VALUES[i]
       self:request_render()
     end)
+  end)
+  -- per-channel amp dynamics (PRISM page), 0-based fields so the option index = value+1.
+  def(1, function()
+    params:add_option(id('env_mode'), 'env mode', GridUI.ENV_MODE_NAMES, c.envMode + 1)
+    params:set_action(id('env_mode'), function(i) c.envMode = i - 1; self:request_render() end)
+  end)
+  def(1, function()
+    params:add_option(id('geode'), 'geode', GridUI.GEODE_MODE_NAMES, c.geodeMode + 1)
+    params:set_action(id('geode'), function(i) c.geodeMode = i - 1; self:request_render() end)
   end)
   def(1, function()
     params:add_option(id('prob'), 'probability', PROB_PCT_NAMES,
@@ -426,15 +415,11 @@ function M:_add_channel_params(n)
     end)
   end
   -- per-channel voice scalars (MIX page, after the op levels): FM mod index (1..32),
-  -- amp punch (0..31) and FM feedback. Feedback rides a 0..31 grid mapped to 0..4 rad
-  -- (1/31-of-4 steps), the grid-exact form the MIX picker uses.
+  -- FM feedback rides a 0..31 grid mapped to 0..4 rad (1/31-of-4 steps), the
+  -- grid-exact form the MIX picker uses.
   def(1, function()
     params:add_number(id('mod_index'), 'mod index', 1, 32, round(c.modIndex))
     params:set_action(id('mod_index'), function(v) c.modIndex = v; self:request_render() end)
-  end)
-  def(1, function()
-    params:add_number(id('amp_punch'), 'amp punch', 0, 31, round(c.ampPunch))
-    params:set_action(id('amp_punch'), function(v) c.ampPunch = v; self:request_render() end)
   end)
   def(1, function()
     params:add_number(id('fm_feedback'), 'fm feedback', 0, 31, round(c.fmFeedback / 4 * 31),
@@ -447,7 +432,6 @@ function M:_add_channel_params(n)
     params:add_option(id('algorithm'), 'algorithm', GridUI.ALGO_NAMES, c.algo)
     params:set_action(id('algorithm'), function(i) c.algo = i; self:request_render() end)
   end)
-  -- env mode + geode are no longer per-channel: they're engine-wide VOICE macros.
   def(1, function()
     params:add_option(id('reset'), 'reset', RESET_NAMES,
       GridUI.nearest_index(GridUI.RESET_INTERVALS, c.resetInterval))
@@ -617,6 +601,8 @@ function M:reflect_scalars(n)
   params:set(id('run'), self.engine:is_running(n) and 1 or 0, true)
   params:set(id('rate'), GridUI.nearest_index(GridUI.RATE_VALUES, c.rate), true)
   params:set(id('quantize'), GridUI.nearest_index(GridUI.QUANTIZE_VALUES, c.quantize), true)
+  params:set(id('env_mode'), clamp(c.envMode + 1, 1, #GridUI.ENV_MODE_NAMES), true)
+  params:set(id('geode'), clamp(c.geodeMode + 1, 1, #GridUI.GEODE_MODE_NAMES), true)
   params:set(id('prob'), GridUI.nearest_index(GridUI.PROB_VALUES, c.burstProb), true)
   params:set(id('prob_mode'), c.probHit and 2 or 1, true)
   params:set(id('alt_trig'), c.altTrig + 1, true)
@@ -628,7 +614,6 @@ function M:reflect_scalars(n)
   params:set(id('pan'), round(c.pan * 15 + 16), true)
   for op = 1, 4 do params:set(id('level' .. op), round(c['opLevel' .. op] * 31), true) end
   params:set(id('mod_index'), round(c.modIndex), true)
-  params:set(id('amp_punch'), round(c.ampPunch), true)
   params:set(id('fm_feedback'), round(c.fmFeedback / 4 * 31), true)
   params:set(id('algorithm'), clamp(c.algo, 1, #GridUI.ALGO_NAMES), true)
 end
@@ -643,8 +628,6 @@ end
 
 function M:reflect_globals()
   local params = self.params
-  params:set('env_mode', clamp(self.engine.envMode + 1, 1, #GridUI.ENV_MODE_NAMES), true)
-  params:set('geode', clamp(self.engine.geodeMode + 1, 1, #GridUI.GEODE_MODE_NAMES), true)
   params:set('root', clamp((self.engine.root or 0) + 1, 1, 12), true)
   if params:lookup_param('keymask') then
     params:set('keymask', M.mask_to_text(self.engine.scale), true)

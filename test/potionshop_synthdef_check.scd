@@ -89,8 +89,8 @@ defs = [
 		atk2 = 0.001, dec2 = 0.2, atkCurve2 = -4, decCurve2 = -4,
 		atk3 = 0.001, dec3 = 0.2, atkCurve3 = -4, decCurve3 = -4,
 		atk4 = 0.001, dec4 = 0.2, atkCurve4 = -4, decCurve4 = -4,
-		drive = 1, gate = 1, pan = 0;
-		var e1, e2, e3, e4, cut, free, maxTime, o1, o2, o3, o4, sig, driveMix;
+		gate = 1, pan = 0;
+		var e1, e2, e3, e4, cut, free, maxTime, o1, o2, o3, o4, sig;
 		e1 = EnvGen.kr(Env.new([0, 1, 0], [atk1, max(0.01, dec1)], [atkCurve1, decCurve1]));
 		e2 = EnvGen.kr(Env.new([0, 1, 0], [atk2, max(0.01, dec2)], [atkCurve2, decCurve2]));
 		e3 = EnvGen.kr(Env.new([0, 1, 0], [atk3, max(0.01, dec3)], [atkCurve3, decCurve3]));
@@ -110,8 +110,6 @@ defs = [
 		o1 = o1 * (1 + (amDepth * (g41 * (o4 - 1) + g31 * (o3 - 1) + g21 * (o2 - 1))));
 		sig = (c1 * o1) + (c2 * o2) + (c3 * o3) + (c4 * o4);
 		sig = sig * cut * amp * 0.5;
-		driveMix = (drive - 1).linlin(0, 7, 0, 1);
-		sig = (sig * (1 - driveMix)) + ((sig * drive).tanh * driveMix);
 		Out.ar(out, Pan2.ar(sig, pan));
 	}),
 	SynthDef("PotionMaster", { arg in = 0, out = 0;

@@ -267,13 +267,13 @@ check('alt-trig step arpeggiates the B pitch per hit',
 -- against the held A, so the envelope shape arpeggiates — exactly like the op-ratio
 -- trig. A=1 + B {0,14,31} resolves to shapes 1/15/32 (tick/click/plop, distinct
 -- decMul: 0.03/0.10/0.20 in the length-sorted table), observed on op1's env-decay trig
--- arg (arg 18 = decMul*gap in shape envMode): hold => three equal decays; step =>
+-- arg (arg 17 = decMul*gap in shape envMode): hold => three equal decays; step =>
 -- three distinct decays.
 local function env_step_decays(trig_mode)
   clock._reset()
   local saved = engine
   local decs = {}
-  engine = { trig = function(...) local a = {...}; decs[#decs + 1] = a[18] end }
+  engine = { trig = function(...) local a = {...}; decs[#decs + 1] = a[17] end }
   local e = Burst.new()
   set_quant(e, 0)
   e.channels[1].div  = seqx.new{4}
@@ -298,9 +298,9 @@ check('op-env step arpeggiates the shape per hit',
 
 -- all four op ratios are sequenced (A value + B offset, drawn per burst). The drawn
 -- op2/3/4 values pass straight to trig args 4/5/6 (r2/r3/r4); op1's drawn value rides
--- as r1 at arg 15; the per-channel pan rides at arg 16.
--- engine.trig(freq, amp, algo, r2, r3, r4, modIndex, feedback, drive, ch,
---             lvl1..4, r1, pan, then per-op env {atk,dec,atkCurve,decCurve} x4 at 17..32).
+-- as r1 at arg 14; the per-channel pan rides at arg 15.
+-- engine.trig(freq, amp, algo, r2, r3, r4, modIndex, feedback, ch,
+--             lvl1..4, r1, pan, then per-op env {atk,dec,atkCurve,decCurve} x4 at 16..31).
 local function first_trig()
   clock._reset()
   local saved = engine
@@ -324,9 +324,9 @@ local off = first_trig()
 check('algo passes at trig arg 3 (default channel = 1)', off and off[3] == 1)
 check('sequenced op2/3/4 ratios pass at trig args 4/5/6',
   off and approx(off[4], 2) and approx(off[5], 3) and approx(off[6], 7))
--- op1 ratio (sequenced): its drawn value rides as r1 at trig arg 15.
-check('op1 ratio passes at trig arg 15', off and approx(off[15], 0.5))
-check('pan passes at trig arg 16', off and approx(off[16], -0.5))
+-- op1 ratio (sequenced): its drawn value rides as r1 at trig arg 14.
+check('op1 ratio passes at trig arg 14', off and approx(off[14], 0.5))
+check('pan passes at trig arg 15', off and approx(off[15], -0.5))
 
 -- op ratio B lane is an INDEX OFFSET: it shifts A's position UP the op's ROLE SET
 -- (never an off-grid sum), reaching the higher upper-32 ratios. Under algo 1 op2 is a
@@ -469,13 +469,13 @@ check('op ratio step leaves the A lane held within the burst',
   #a_step == 3 and approx(a_step[1], 2) and approx(a_step[2], 2) and approx(a_step[3], 2))
 
 -- op1 is sequenced the same way (A value + B index offset + per-hit trig), and its
--- drawn value rides as r1 at trig arg 15. A {2} + B {0,1,2} under step trig walks the
--- index UP per hit, exactly like op2 above but observed on arg 15.
+-- drawn value rides as r1 at trig arg 14. A {2} + B {0,1,2} under step trig walks the
+-- index UP per hit, exactly like op2 above but observed on arg 14.
 local function op1_ratio_trig_seq(trig_mode)
   clock._reset()
   local saved = engine
   local r1 = {}
-  engine = { trig = function(...) local a = {...}; r1[#r1 + 1] = a[15] end }
+  engine = { trig = function(...) local a = {...}; r1[#r1 + 1] = a[14] end }
   local e = Burst.new()
   set_quant(e, 0)
   e.channels[1].div  = seqx.new{4}
@@ -489,12 +489,12 @@ local function op1_ratio_trig_seq(trig_mode)
   return r1
 end
 local hold_r1 = op1_ratio_trig_seq(0)
-check('op1 ratio trig hold holds one B offset across the burst (arg 15)',
+check('op1 ratio trig hold holds one B offset across the burst (arg 14)',
   #hold_r1 == 3 and approx(hold_r1[1], 2) and approx(hold_r1[2], 2) and approx(hold_r1[3], 2))
 local step_r1 = op1_ratio_trig_seq(1)
 -- op1 is a carrier in every algo, so its B walks CARRIER_RATIOS.
 local CAR = Burst.CARRIER_RATIOS
-check('op1 ratio trig step walks the index UP per hit on arg 15',
+check('op1 ratio trig step walks the index UP per hit on arg 14',
   #step_r1 == 3 and approx(step_r1[1], 2)
   and step_r1[2] == Burst.op_ratio(2, 1, CAR) and step_r1[3] == Burst.op_ratio(2, 2, CAR)
   and step_r1[2] > step_r1[1] and step_r1[3] > step_r1[2])
@@ -502,13 +502,13 @@ check('op1 ratio trig defaults to hold (0)', Burst.new().channels[1].opRatio1Tri
 
 -- PER-OPERATOR envelope SHAPES: each op's sequenced shape INDEX resolves (in fire)
 -- to {attack, decay, atkCurve, decCurve} scaled to the inter-hit gap, grouped per op
--- at trig args 17..32 (op1 17-20, op2 21-24, op3 25-28, op4 29-32). div 4 @ 120bpm
+-- at trig args 16..31 (op1 16-19, op2 20-23, op3 24-27, op4 28-31). div 4 @ 120bpm
 -- => gap 0.5s. Expectations derive from Burst.SHAPES so this survives table tuning.
 local GAP = 0.5
 local function exp_atk(sh) return math.max(0.001, GAP * sh[1]) end
 local function shp(i) return Burst.SHAPES[i] end
--- op K's env args occupy trig 17..32 in groups of 4 (atk, dec, atkCurve, decCurve):
--- op1->17, op2->21, op3->25, op4->29.
+-- op K's env args occupy trig 16..31 in groups of 4 (atk, dec, atkCurve, decCurve):
+-- op1->16, op2->20, op3->24, op4->28.
 -- pick representative shapes BY their contour, not a hard-coded index, so this
 -- survives reordering the table:
 --   I_INSTANT = the SHORTEST instant-attack shape (atkMul 0, min decMul)
@@ -541,29 +541,29 @@ local function env_trig(op, idx)
   engine = saved
   return cap
 end
--- op1's envelope rides args 17..20.
+-- op1's envelope rides args 16..19.
 local s_inst = env_trig(1, I_INSTANT)
 local s_atk  = env_trig(1, I_LONGATK)
 local s_dec  = env_trig(1, I_LONGDEC)
-check('instant-attack op env -> ~0.001s attack (op1 arg 17)', s_inst and approx(s_inst[17], 0.001))
-check('longer-attack op env -> longer gap-relative attack (op1 arg 17)',
-  s_atk and s_inst and s_atk[17] > s_inst[17] and approx(s_atk[17], exp_atk(shp(I_LONGATK))))
-check('longer-decay op env -> longer decay (op1 arg 18)', s_dec and s_inst and s_dec[18] > s_inst[18])
--- ampPunch default 4 => punch scale 1.0, so the curves pass through unscaled.
-check('op env feeds dec curve (op1 arg 20)', s_inst and approx(s_inst[20], shp(I_INSTANT)[4]))
-check('op env feeds atk curve (op1 arg 19)', s_inst and approx(s_inst[19], shp(I_INSTANT)[3]))
+check('instant-attack op env -> ~0.001s attack (op1 arg 16)', s_inst and approx(s_inst[16], 0.001))
+check('longer-attack op env -> longer gap-relative attack (op1 arg 16)',
+  s_atk and s_inst and s_atk[16] > s_inst[16] and approx(s_atk[16], exp_atk(shp(I_LONGATK))))
+check('longer-decay op env -> longer decay (op1 arg 17)', s_dec and s_inst and s_dec[17] > s_inst[17])
+-- op-env curves pass straight through to trig (no per-channel curve scaling).
+check('op env feeds dec curve (op1 arg 19)', s_inst and approx(s_inst[19], shp(I_INSTANT)[4]))
+check('op env feeds atk curve (op1 arg 18)', s_inst and approx(s_inst[18], shp(I_INSTANT)[3]))
 
--- each operator carries its OWN envelope: driving op3's env feeds args 25..28 and
--- must NOT disturb op1's env (args 17..20).
+-- each operator carries its OWN envelope: driving op3's env feeds args 24..27 and
+-- must NOT disturb op1's env (args 16..19).
 local o3_inst = env_trig(3, I_INSTANT)
 local o3_dec  = env_trig(3, I_LONGDEC)
-check('op3 env feeds its own decay (op3 arg 26)', o3_dec and o3_inst and o3_dec[26] > o3_inst[26])
-check('op3 env feeds atk curve (op3 arg 27)', o3_inst and approx(o3_inst[27], shp(I_INSTANT)[3]))
-check('op3 env does not disturb op1 env (args 17/18 stable)',
-  o3_inst and o3_dec and approx(o3_inst[17], o3_dec[17]) and approx(o3_inst[18], o3_dec[18]))
+check('op3 env feeds its own decay (op3 arg 25)', o3_dec and o3_inst and o3_dec[25] > o3_inst[25])
+check('op3 env feeds atk curve (op3 arg 26)', o3_inst and approx(o3_inst[26], shp(I_INSTANT)[3]))
+check('op3 env does not disturb op1 env (args 16/17 stable)',
+  o3_inst and o3_dec and approx(o3_inst[16], o3_dec[16]) and approx(o3_inst[17], o3_dec[17]))
 
 -- op-env decay tracks the inter-hit gap: 4x faster division -> ~1/4 the decay
--- (read op1's decay at arg 18), so dense/fast channels self-shorten.
+-- (read op1's decay at arg 17), so dense/fast channels self-shorten.
 local function op1_decay_for_div(divv)
   clock._reset()
   local saved = engine
@@ -576,7 +576,7 @@ local function op1_decay_for_div(divv)
   e:launch(1)
   clock._run_until(2)
   engine = saved
-  return cap and cap[18]
+  return cap and cap[17]
 end
 local slow, fast = op1_decay_for_div(2), op1_decay_for_div(8)
 check('op env decay scales with division (4x faster ~= 1/4 the hit)',
@@ -600,7 +600,7 @@ local function algo_trig(algo)
 end
 check('per-channel algo feeds trig arg 3', algo_trig(5) == 5)
 
--- the channel index rides along as trig arg 10 so the SC engine can keep each
+-- the channel index rides along as trig arg 9 so the SC engine can keep each
 -- channel monophonic (a new hit releases the previous voice, no droning overlap).
 local function chan_arg(ch)
   clock._reset()
@@ -614,14 +614,14 @@ local function chan_arg(ch)
   e:launch(ch)
   clock._run_until(2)
   engine = saved
-  return cap and cap[10]
+  return cap and cap[9]
 end
-check('channel index feeds trig arg 10', chan_arg(3) == 3)
+check('channel index feeds trig arg 9', chan_arg(3) == 3)
 
 -- voice scalars/macros read straight at fire time. trig args: 7 = modIndex,
--- 8 = feedback, 9 = drive; op1's per-segment env curves ride args 19 (atk) / 20 (dec),
--- = the op1 shape's curves scaled by ampPunch/4 (default 'tail' decCurve -4 *
--- ampPunch 4/4 = -4). `setup(e)` mutates the engine before launch; returns the trig.
+-- 8 = feedback; op1's per-segment env curves ride args 18 (atk) / 19 (dec), passed
+-- through unscaled (default 'tail' decCurve -4). `setup(e)` mutates the engine before
+-- launch; returns the trig.
 local function macro_trig(setup)
   clock._reset()
   local saved = engine
@@ -638,29 +638,28 @@ local function macro_trig(setup)
   return cap
 end
 local d = macro_trig()
-check('voice macro defaults: modIndex=2, op1 dec curve=-4, feedback=0, drive=1',
-  d and approx(d[7], 2) and approx(d[20], -4) and approx(d[8], 0) and approx(d[9], 1))
--- mod index, amp punch and FM feedback are per-channel static scalars (MIX page);
--- they feed the trig args directly (drive stays an engine-wide macro). ampPunch
--- scales every op env's curves -> op1 dec curve at arg 20.
+check('voice macro defaults: modIndex=2, op1 dec curve=-4, feedback=0',
+  d and approx(d[7], 2) and approx(d[19], -4) and approx(d[8], 0))
+-- mod index and FM feedback are per-channel static scalars (MIX page); they feed the
+-- trig args directly. op-env curves pass through unscaled, so op1's dec curve at arg 19
+-- stays the shape default regardless of the other scalars.
 local gv = macro_trig(function(e)
-  e.channels[1].modIndex, e.channels[1].ampPunch, e.channels[1].fmFeedback = 12, 8, 1.5
-  e.drive = 4
+  e.channels[1].modIndex, e.channels[1].fmFeedback = 12, 1.5
 end)
-check('voice scalars feed trig: modIndex, ampPunch->curve, feedback, drive',
-  gv and approx(gv[7], 12) and approx(gv[20], -8) and approx(gv[8], 1.5) and approx(gv[9], 4))
--- per-operator levels ride trig args 11..14; op1 default 1, op2..4 default 15/31.
-check('op levels default: op1=1, op2..4=15/31 (args 11-14)',
-  d and approx(d[11], 1) and approx(d[12], 15/31) and approx(d[13], 15/31) and approx(d[14], 15/31))
--- now per-channel STATIC scalars: opLevel1..4 feed trig args 11-14 directly.
+check('voice scalars feed trig: modIndex, feedback (curves unscaled)',
+  gv and approx(gv[7], 12) and approx(gv[8], 1.5) and approx(gv[19], -4))
+-- per-operator levels ride trig args 10..13; op1 default 1, op2..4 default 15/31.
+check('op levels default: op1=1, op2..4=15/31 (args 10-13)',
+  d and approx(d[10], 1) and approx(d[11], 15/31) and approx(d[12], 15/31) and approx(d[13], 15/31))
+-- now per-channel STATIC scalars: opLevel1..4 feed trig args 10-13 directly.
 local ol = macro_trig(function(e)
   e.channels[1].opLevel1 = 0.2
   e.channels[1].opLevel2 = 0.4
   e.channels[1].opLevel3 = 0.6
   e.channels[1].opLevel4 = 0.8
 end)
-check('per-channel op levels feed trig args 11-14',
-  ol and approx(ol[11], 0.2) and approx(ol[12], 0.4) and approx(ol[13], 0.6) and approx(ol[14], 0.8))
+check('per-channel op levels feed trig args 10-13',
+  ol and approx(ol[10], 0.2) and approx(ol[11], 0.4) and approx(ol[12], 0.6) and approx(ol[13], 0.8))
 
 -- quantization: an off-grid division (triplet, 4/3 beats) must snap every
 -- event FORWARD to the quarter-note grid (quantize=4 -> step 1 beat). We read
@@ -1065,12 +1064,23 @@ check('MIX op level picker sets opLevel1', approx(geng.channels[1].opLevel1, 1.0
 ctl:press(11, 6)
 check('MIX mode exited', ctl.mixMode == false)
 
--- env mode + geode are engine-wide VOICE macros now (no grid SND page, col 15 dark)
-check('geodeMode is a global engine field, not per-channel',
-  geng.geodeMode ~= nil and geng.channels[1].geodeMode == nil)
-check('envMode is a global engine field, not per-channel',
-  geng.envMode ~= nil and geng.channels[1].envMode == nil)
-check('geode defaults to sustain (1)', Burst.new().geodeMode == 1)
+-- env mode + geode are per-channel now, edited on the PRISM page (renamed QNT).
+check('geodeMode is a per-channel field', geng.channels[1].geodeMode ~= nil)
+check('envMode is a per-channel field', geng.channels[1].envMode ~= nil)
+check('geode is no longer an engine-global field', geng.geodeMode == nil)
+check('geode defaults to sustain (1)', Burst.new().channels[1].geodeMode == 1)
+check('env mode defaults to shape (0)', Burst.new().channels[1].envMode == 0)
+-- PRISM page grid: quantize on cols 0-7, env mode on 9-11, geode on 13-15.
+ctl:press(15, 6)  -- enter PRISM (ROW6_PRISM_COL = 15)
+check('PRISM mode entered', ctl.prismMode == true)
+ctl:press(11, 0)  -- env-mode cell col 11 (3rd) -> envMode 2 (hit) on channel 1
+check('PRISM env-mode press sets envMode', geng.channels[1].envMode == 2)
+ctl:press(13, 0)  -- geode cell col 13 (1st) -> geodeMode 0 (transient) on channel 1
+check('PRISM geode press sets geodeMode', geng.channels[1].geodeMode == 0)
+ctl:press(6, 0)   -- quantize cell col 6 (7th) -> QUANTIZE_VALUES[7] = 24
+check('PRISM quantize press still works', geng.channels[1].quantize == 24)
+ctl:press(15, 6)  -- exit PRISM
+check('PRISM mode exited', ctl.prismMode == false)
 check('no SND grid mode exists', ctl.soundMode == nil)
 
 -- PERF mode (row6 col 12): reset cols 0-3, octave cols 5-9, rate cols 11-15
@@ -1603,7 +1613,6 @@ fake:set('ch1_note_a', '1 2 3 4')
 peng.channels[1].level = 0.7
 peng.channels[1].opLevel2 = 0.3
 peng.channels[1].modIndex = 9
-peng.channels[1].ampPunch = 7
 peng.channels[1].fmFeedback = 3
 peng.channels[1].algo = 5
 peng.channels[1].pan = -1
@@ -1619,7 +1628,7 @@ check('paste reflected into dest text param',
   vals_eq(ParamsSync.from_text('note', 'A', fake:get('ch5_note_a')), {1, 2, 3, 4}))
 local mix_ok = approx(peng.channels[5].level, 0.7)
   and approx(peng.channels[5].opLevel2, 0.3)
-  and peng.channels[5].modIndex == 9 and peng.channels[5].ampPunch == 7
+  and peng.channels[5].modIndex == 9
   and peng.channels[5].fmFeedback == 3 and peng.channels[5].algo == 5
   and approx(peng.channels[5].pan, -1)
 check('copy+paste duplicates MIX-page static scalars across channels', mix_ok)

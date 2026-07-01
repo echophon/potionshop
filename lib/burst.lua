@@ -213,15 +213,18 @@ Burst.op_ratio_set = op_ratio_set
 --   atkCurve/decCurve = SC `Env` curve per segment (0 = linear, negative = fast-start
 --                   exp 'pluck', positive = slow-start 'log'). Independent per segment,
 --                   which the old single Env.perc curve couldn't express.
--- DEFAULTS: carrier = SHAPE_CARRIER_DEFAULT ('plop', the longest/roundest contour
--- still inside the short A picker), modulator = SHAPE_MOD_DEFAULT ('knock', ~0.6x the
--- carrier so the FM brightness env reads as a tighter bright attack). Mirrored by
+-- DEFAULTS: carrier = SHAPE_CARRIER_DEFAULT ('plop', a round mid contour sitting at
+-- the MIDPOINT (#16) of the short A picker so there is equal shorter/longer headroom),
+-- modulator = SHAPE_MOD_DEFAULT ('chip', ~0.65x the carrier so the FM brightness env
+-- reads as a tighter bright attack). Mirrored by
 -- name + count in lib/grid_ui.lua (GridUI.SHAPE_NAMES) -- keep the two in sync. (The
 -- SC engine never sees a shape: fire() resolves the index to times + curves.)
 --
--- SORTED SHORTEST -> LONGEST by TOTAL length (atkMul + decMul). The A lane's
--- grid/screen picker exposes ONLY the first 32 (GridUI.SHAPE_PICKER_COUNT; the picker
--- is two grid rows) = the 32 SHORTEST contours, so the default palette leans short.
+-- SORTED SHORTEST -> LONGEST by TOTAL length (atkMul + decMul), spanning L 0.10 .. 0.85
+-- (a deliberately focused range -- no sub-0.10 micro-clicks, no multi-second drones;
+-- the long 49..64 contours keep their swell/tail SHAPE but are length-capped at 0.85).
+-- The A lane's grid/screen picker exposes ONLY the first 32 (GridUI.SHAPE_PICKER_COUNT;
+-- the picker is two grid rows), the shorter half, so the default palette leans short.
 -- The upper 32 (the longer half) are reachable ONLY by ADDING the B index-offset lane
 -- onto an A pick (op_env clamps a+off into 1..#SHAPES) -- so B EXTENDS a short A pick
 -- toward longer tails. Because the table is length-ordered the LED/screen brightness
@@ -230,77 +233,77 @@ Burst.op_ratio_set = op_ratio_set
 -- engine's own rhythm; the variety is in length + the per-segment curve family
 -- (exp / linear / log).
 local SHAPES = {
-  -- {atkMul, decMul, atkCurve, decCurve, name}   -- sorted by total = atkMul + decMul
-  -- A-PICKER bank (1..32): the 32 shortest contours (total 0.03 .. 0.20):
-  {0.00, 0.03, -8, -8, 'tick'},   -- 1  ultra-short transient
-  {0.00, 0.04, -6, -8, 'dust'},   -- 2
-  {0.00, 0.05, -8, -6, 'tock'},   -- 3
-  {0.00, 0.05, -4, -4, 'clip'},   -- 4
-  {0.00, 0.05, -8, -4, 'prick'},  -- 5
-  {0.00, 0.05, -6, -8, 'chip'},   -- 6
-  {0.00, 0.06, -4, -6, 'grain'},  -- 7
-  {0.00, 0.06, -8,  0, 'dit'},    -- 8  linear out micro 
-  {0.01, 0.06, -8, -6, 'spike'},  -- 9  first attack-bearing shape
-  {0.00, 0.07, -6, -4, 'tic'},    -- 10
-  {0.00, 0.07, -8, -6, 'nip'},    -- 11
-  {0.00, 0.08, -8, -8, 'blip'},   -- 12
-  {0.00, 0.09, -8, -2, 'nick'},   -- 13
-  {0.00, 0.09, -6, -8, 'plip'},   -- 14
-  {0.00, 0.10, -8, -8, 'click'},  -- 15 tiny transient
-  {0.00, 0.10, -2, -8, 'ping'},   -- 16 gentle in, steep out
-  {0.00, 0.10,  0, -8, 'dot'},    -- 17 flat-ish then drop
-  {0.02, 0.08, -6, -8, 'spit'},   -- 18
-  {0.00, 0.11, -4, -8, 'rim'},    -- 19
-  {0.00, 0.12, -8, -8, 'knock'},  -- 20 
-  {0.02, 0.10, -8, -8, 'flick'},  -- 21 tiny attack snap
-  {0.00, 0.13, -2, -6, 'clave'},  -- 22 woody
-  {0.00, 0.14, -4, -6, 'dink'},   -- 23
-  {0.04, 0.10, -8, -8, 'dab'},    -- 24 small attack tap
-  {0.00, 0.15, -6, -4, 'clap'},   -- 25
-  {0.03, 0.12, -6, -6, 'zip'},    -- 26 quick swell-blip
-  {0.00, 0.16, -6, -6, 'jab'},    -- 27
-  {0.02, 0.14, -4, -4, 'poke'},   -- 28
-  {0.00, 0.18, -8, -8, 'snap'},   -- 29 short, steep
-  {0.00, 0.18, -4, -8, 'zap'},    -- 30 fast exp out
-  {0.00, 0.18, -2, -6, 'tink'},   -- 31
-  {0.00, 0.20, -4, -4, 'plop'},   -- 32 (carrier default; longest/roundest in the A picker)
-  -- B-REACH bank (33..64): the longer half (total 0.22 .. 2.40), reached by B offset:
-  {0.00, 0.22, -2, -8, 'ting'},   -- 33 short bell-ish
-  {0.00, 0.24, -6, -6, 'bop'},    -- 34 fuller but still short
-  {0.00, 0.25, -4, -4, 'tap'},    -- 35 short pluck
-  {0.00, 0.30, -2, -2, 'pip'},    -- 36 gentle short
-  {0.00, 0.38, -2, -8, 'pop'},    -- 37 soft-ish in, steep out
-  {0.00, 0.45, -4, -4, 'pluck'},  -- 38
-  {0.00, 0.55, -6, -6, 'drum'},   -- 39 punchy mid
-  {0.10, 0.55, -2, -2, 'soft'},   -- 40 gentle pluck w/ a touch of attack
-  {0.15, 0.50, -1, -2, 'round'},  -- 41
-  {0.20, 0.45,  2, -3, 'puff'},   -- 42 gentle log blip
-  {0.00, 0.70, -4, -4, 'body'},   -- 43 (~old moddec 8/31)
-  {0.40, 0.30, -4, -4, 'ramp'},   -- 44 exp attack, short
-  {0.00, 0.80, -4, -8, 'exp'},    -- 45 steep exponential decay
-  {0.00, 0.85, -4,  4, 'log'},    -- 46 logarithmic decay (slow then fast)
-  {0.05, 0.80,  0,  0, 'lin'},    -- 47 linear attack + decay
-  {0.30, 0.55,  4, -4, 'swell'},  -- 48 soft (log) attack
-  {0.35, 0.55,  4,  4, 'arc'},    -- 49 soft symmetric (log in + out)
-  {0.00, 1.00, -1,  8, 'glass'},  -- 50 hold then a log (slow-start) drop
-  {1.00, 0.05,  0, -8, 'revrs'},  -- 51 pure ramp into the next hit, click off
-  {0.00, 1.10, -4, -4, 'tail'},   -- 52 (~old decay 16/31)
-  {1.00, 0.10,  3, -2, 'rise'},   -- 53 reverse: rises into the next hit
-  {0.60, 0.55, -2, -2, 'pad'},    -- 54 slow symmetric
-  {0.85, 0.40, -3, -3, 'wedge'},  -- 55 attack nearly fills the slot
-  {0.45, 0.90,  6, -4, 'bloom'},  -- 56 slow swell + medium tail
-  {0.00, 1.40, -2, -6, 'bell'},   -- 57 long bell-like ring
-  {0.70, 0.80,  2, -2, 'bow'},    -- 58 bowed: slow in, medium out
-  {0.25, 1.30,  3, -5, 'surge'},  -- 59 log attack + long tail
-  {0.00, 1.70, -4, -3, 'long'},   -- 60 nearly fills the slot
-  {0.15, 1.60,  0, -2, 'fade'},   -- 61 soft in, long near-linear fade
-  {0.00, 2.00,  0, -8, 'hold'},   -- 62 flat sustain then a fast drop
-  {0.50, 1.50,  5, -4, 'huge'},   -- 63 big swell pad
-  {0.00, 2.40, -1, -2, 'drone'},  -- 64 very long tail (cut by next hit; clamped 3s)
+  -- {atkMul, decMul, atkCurve, decCurve, name}   -- sorted by total length; L 0.10 .. 0.85
+  -- A-PICKER bank (1..32): the shorter half (carrier default 'plop' at #16, the midpoint):
+  {0.00, 0.10, -8, -8, 'tick'},  -- 1
+  {0.00, 0.11, -6, -8, 'dust'},  -- 2
+  {0.00, 0.11, -8, -6, 'tock'},  -- 3
+  {0.00, 0.12, -4, -4, 'clip'},  -- 4
+  {0.00, 0.13, -8, -4, 'prick'},  -- 5
+  {0.00, 0.13, -6, -8, 'chip'},  -- 6
+  {0.00, 0.14, -4, -6, 'grain'},  -- 7
+  {0.00, 0.15, -8, 0, 'dit'},  -- 8
+  {0.02, 0.13, -8, -6, 'spike'},  -- 9
+  {0.00, 0.16, -6, -4, 'tic'},  -- 10
+  {0.00, 0.17, -8, -6, 'nip'},  -- 11
+  {0.00, 0.17, -8, -8, 'blip'},  -- 12
+  {0.00, 0.18, -8, -2, 'nick'},  -- 13
+  {0.00, 0.19, -6, -8, 'plip'},  -- 14
+  {0.00, 0.19, -8, -8, 'click'},  -- 15
+  {0.00, 0.20, -4, -4, 'plop'},  -- 16
+  {0.00, 0.21, -2, -8, 'ping'},  -- 17
+  {0.00, 0.23, 0, -8, 'dot'},  -- 18
+  {0.05, 0.19, -6, -8, 'spit'},  -- 19
+  {0.00, 0.25, -4, -8, 'rim'},  -- 20
+  {0.00, 0.27, -8, -8, 'knock'},  -- 21
+  {0.05, 0.23, -8, -8, 'flick'},  -- 22
+  {0.00, 0.29, -2, -6, 'clave'},  -- 23
+  {0.00, 0.31, -4, -6, 'dink'},  -- 24
+  {0.09, 0.23, -8, -8, 'dab'},  -- 25
+  {0.00, 0.34, -6, -4, 'clap'},  -- 26
+  {0.07, 0.28, -6, -6, 'zip'},  -- 27
+  {0.00, 0.36, -6, -6, 'jab'},  -- 28
+  {0.05, 0.33, -4, -4, 'poke'},  -- 29
+  {0.00, 0.39, -8, -8, 'snap'},  -- 30
+  {0.00, 0.40, -4, -8, 'zap'},  -- 31
+  {0.00, 0.42, -2, -6, 'tink'},  -- 32
+  -- B-REACH bank (33..64): the longer half (reached by the B index-offset lane):
+  {0.00, 0.43, -2, -8, 'ting'},  -- 33
+  {0.00, 0.44, -6, -6, 'bop'},  -- 34
+  {0.00, 0.46, -4, -4, 'tap'},  -- 35
+  {0.00, 0.47, -2, -2, 'pip'},  -- 36
+  {0.00, 0.48, -2, -8, 'pop'},  -- 37
+  {0.00, 0.50, -4, -4, 'pluck'},  -- 38
+  {0.00, 0.51, -6, -6, 'drum'},  -- 39
+  {0.08, 0.44, -2, -2, 'soft'},  -- 40
+  {0.12, 0.41, -1, -2, 'round'},  -- 41
+  {0.17, 0.38, 2, -3, 'puff'},  -- 42
+  {0.00, 0.57, -4, -4, 'body'},  -- 43
+  {0.33, 0.25, -4, -4, 'ramp'},  -- 44
+  {0.00, 0.59, -4, -8, 'exp'},  -- 45
+  {0.00, 0.61, -4, 4, 'log'},  -- 46
+  {0.04, 0.58, 0, 0, 'lin'},  -- 47
+  {0.22, 0.41, 4, -4, 'swell'},  -- 48
+  {0.25, 0.40, 4, 4, 'arc'},  -- 49
+  {0.00, 0.66, -1, 8, 'glass'},  -- 50
+  {0.64, 0.03, 0, -8, 'revrs'},  -- 51
+  {0.00, 0.69, -4, -4, 'tail'},  -- 52
+  {0.64, 0.06, 3, -2, 'rise'},  -- 53
+  {0.37, 0.34, -2, -2, 'pad'},  -- 54
+  {0.49, 0.23, -3, -3, 'wedge'},  -- 55
+  {0.25, 0.49, 6, -4, 'bloom'},  -- 56
+  {0.00, 0.76, -2, -6, 'bell'},  -- 57
+  {0.36, 0.41, 2, -2, 'bow'},  -- 58
+  {0.13, 0.66, 3, -5, 'surge'},  -- 59
+  {0.00, 0.80, -4, -3, 'long'},  -- 60
+  {0.07, 0.74, 0, -2, 'fade'},  -- 61
+  {0.00, 0.82, 0, -8, 'hold'},  -- 62
+  {0.21, 0.63, 5, -4, 'huge'},  -- 63
+  {0.00, 0.85, -1, -2, 'drone'},  -- 64
 }
 Burst.SHAPES = SHAPES
-Burst.SHAPE_CARRIER_DEFAULT = 32  -- 'plop'  (longest/roundest in the short A picker)
-Burst.SHAPE_MOD_DEFAULT     = 20  -- 'knock' (~0.6x the carrier: tighter bright attack)
+Burst.SHAPE_CARRIER_DEFAULT = 16  -- 'plop'  (round mid contour at the midpoint of the A picker)
+Burst.SHAPE_MOD_DEFAULT     = 6   -- 'chip'  (~0.65x the carrier: tighter bright attack)
 -- Size of the A-PICKER bank = the first (shortest) half of the length-sorted table
 -- (mirrors GridUI.SHAPE_PICKER_COUNT, the picker's two grid rows). init + randomize
 -- draw env shapes from this range (1..SHAPE_PICKER_COUNT), so a scrambled channel
@@ -433,12 +436,11 @@ local function default_channel()
     -- when it's a carrier.
     opLevel1 = 1, opLevel2 = 15/31, opLevel3 = 15/31, opLevel4 = 15/31,  -- ~0.48, grid-exact on the i/31 OP page
     -- per-channel STATIC voice macros, edited on the MIX page after the op levels (no
-    -- grid page / sequence): FM mod index (1..32, brightness depth), amp punch (0..31,
-    -- carrier env-curve exaggeration, /4 = 1.0 neutral), FM feedback (0..4 rad,
-    -- modulator self-feedback) and FM algo (1..16, DX-style operator routing, MIX col
-    -- 15). Like level/opLevel they're exempt from randomize/mutate and survive
+    -- grid page / sequence): FM mod index (1..32, brightness depth), FM feedback
+    -- (0..4 rad, modulator self-feedback) and FM algo (1..32, DX-style operator routing,
+    -- MIX col 15). Like level/opLevel they're exempt from randomize/mutate and survive
     -- clear/copy/paste. Drawn straight at fire time.
-    modIndex = 2, ampPunch = 4, fmFeedback = 0, algo = 1,
+    modIndex = 2, fmFeedback = 0, algo = 1,
     -- per-channel STATIC stereo pan (MIX page): -1 = hard left, 0 = centre,
     -- +1 = hard right. Like the other MIX scalars it's exempt from randomize/mutate
     -- and survives clear/copy/paste. Drawn straight at fire time (SC Pan2).
@@ -448,6 +450,12 @@ local function default_channel()
     resetInterval = 0,
     rate = 1,
     quantize = 16,  -- per-channel event snap grid (events per whole note), from QUANTIZE_VALUES
+    -- per-channel amp dynamics (PRISM page): envMode = amp-decay timing (0=shape
+    -- 1=burst 2=hit), geodeMode = per-hit amp geode contour (0=transient 1=sustain
+    -- 2=cycle, default sustain; the geode is always on). Both were engine-wide VOICE
+    -- macros; now per channel, edited on the PRISM page alongside quantize.
+    envMode = 0,
+    geodeMode = 1,
     octave = 0,     -- -2..2, whole-octave pitch shift (perf page)
     altTrig = 0,    -- alt(B) note layering: 0=hold (add&hold) 1=step (per-hit)
     -- per-op-ratio sequence trig mode (prob page): 0=hold (the ratio is drawn once
@@ -479,17 +487,12 @@ function Burst.new()
     self.tokens[i] = 0
   end
   self.listeners = {}
-  -- engine-wide voice timbre macros (lib/params_sync.lua 'VOICE' group). Global,
-  -- not per-channel: the non-audio output types can't render them. Read straight
-  -- at fire time; these ARE the values handed to the SC voice.
-  self.envMode = 0      -- amp decay timing (0=shape 1=burst 2=hit): engine-wide
-  self.geodeMode = 1    -- amp per-hit geode (0=transient 1=sustain 2=cycle): engine-wide, default sustain
-  -- (FM algorithm, mod index, amp punch and FM feedback used to be engine-wide globals
-  -- too; they are now per-channel static MIX-page scalars — see default_channel. FM
+  -- (env mode + geode were engine-wide VOICE macros; they are now per-channel PRISM
+  -- scalars — see default_channel. FM algorithm, mod index and FM feedback likewise
+  -- moved to per-channel static MIX-page scalars. FM
   -- body length
   -- is no longer a macro either: the per-channel per-op envelope sequences (opEnv1..4)
   -- own each operator's contour; the old self.fmDecay was retired.)
-  self.drive = 1        -- tanh soft-clip drive: 1 = clean, higher = saturated
   -- per-operator output levels are NOT global anymore: each channel sequences its
   -- own op1..op4 (A/B) sequins (see default_channel), drawn per burst in run_burst.
   self.outputs = nil    -- optional lib/outputs.lua router (set by the host)
@@ -800,11 +803,11 @@ function Burst:fire(ch, beat, freq, level, env1, env2, env3, env4, div, total, h
   -- redraws freq mid-burst, so a burst-start shift would be inaudible across its
   -- hits. Shifting here also feeds the final freq to external outputs.
   freq = freq * (2 ^ c.octave)
-  -- geodeMode is engine-wide (VOICE group), 0-based {transient,sustain,cycle};
+  -- geodeMode is per-channel (PRISM page), 0-based {transient,sustain,cycle};
   -- geode_mod wants 1/2/3, so +1 at the call site. The amp geode is always on (no
   -- 'off'). op1's env decay length (decMul) gates the geode's 0.7 build-up clamp
   -- (op1 is the anchor carrier; a longer decay overlaps more, like the old amp env).
-  local actual_level = Burst.burst_level_for_hit(level, self.geodeMode + 1, sh1[2], hit_idx, total)
+  local actual_level = Burst.burst_level_for_hit(level, c.geodeMode + 1, sh1[2], hit_idx, total)
 
   -- geo_freq stays at the target pitch (this voice has no pitch envelope).
   local geo_freq = freq
@@ -824,10 +827,10 @@ function Burst:fire(ch, beat, freq, level, env1, env2, env3, env4, div, total, h
   local sec_per_beat = 60 / get_tempo()
   local interval_sec = (4 / div) * sec_per_beat
 
-  -- amp decaySec from envMode (engine-wide; 1=burst-length, 2=per-hit).
+  -- amp decaySec from envMode (per-channel; 1=burst-length, 2=per-hit).
   local decay_sec = nil
-  if self.envMode ~= 0 then
-    if self.envMode == 1 then
+  if c.envMode ~= 0 then
+    if c.envMode == 1 then
       decay_sec = total * interval_sec
     else
       decay_sec = interval_sec
@@ -842,13 +845,9 @@ function Burst:fire(ch, beat, freq, level, env1, env2, env3, env4, div, total, h
   --             is the deliberate trade vs the old absolute attack: every shape now
   --             tracks the schedule (gap shrinks with tempo/density).
   --   decay  -> gap-RELATIVE (decMul * gap); dense/fast channels self-shorten so a
-  --             6-voice mix stays legible. burst/hit envMode still override the
+  --             6-voice mix stays legible. burst/hit envMode (per channel) still override the
   --             decay timing to lock it to the grid -- applied to every op env.
-  -- The per-channel `ampPunch` MIX scalar (ampPunch/4 = 1.0 neutral) scales every
-  -- op env's per-segment curves uniformly: a per-channel "flatten <-> exaggerate the
-  -- contour" control across all four operators (it shaped only the carrier before).
   local gap_sec = interval_sec / math.max(0.01, c.rate)
-  local punch = c.ampPunch / 4
   local function attack_time(mul) return math.max(0.001, gap_sec * mul) end
   local function decay_time(mul)
     if decay_sec ~= nil then return math.max(0.01, decay_sec) end
@@ -856,7 +855,7 @@ function Burst:fire(ch, beat, freq, level, env1, env2, env3, env4, div, total, h
   end
   -- {atk, dec, atkCurve, decCurve} per op, in op order, for the trig call.
   local function env_args(sh)
-    return attack_time(sh[1]), decay_time(sh[2]), sh[3] * punch, sh[4] * punch
+    return attack_time(sh[1]), decay_time(sh[2]), sh[3], sh[4]
   end
   local atk1, dec1, atkC1, decC1 = env_args(sh1)
   local atk2, dec2, atkC2, decC2 = env_args(sh2)
@@ -867,25 +866,24 @@ function Burst:fire(ch, beat, freq, level, env1, env2, env3, env4, div, total, h
   -- internal voice; midi/crow get the same final freq/level/length it would
   -- have played. Hook lives here (not on emit) because the per-hit prob skip
   -- emits a 'fire' event for the playhead without sounding anything.
-  -- per-channel static voice macros (MIX page) + the engine-wide drive macro.
+  -- per-channel static voice macros (MIX page).
   local mod_index = c.modIndex
   local feedback  = c.fmFeedback
   local pan       = c.pan or 0
-  local drive     = self.drive
   -- per-channel static operator levels, passed straight to the voice.
   local ol = {c.opLevel1, c.opLevel2, c.opLevel3, c.opLevel4}
   local out = self.outputs
   if engine and engine.trig and ((not out) or out:wants_audio(ch)) then
     -- 4-op FM (lib/Engine_Potionshop.sc): the per-channel algorithm selects the
     -- operator routing; r2/r3/r4 are the per-burst sequenced op2/3/4 ratios, r1 (op1)
-    -- rides at arg 15. Each operator now carries its OWN envelope (per-op EG, DX-style)
+    -- rides at arg 14. Each operator now carries its OWN envelope (per-op EG, DX-style)
     -- from its sequenced SHAPE index, resolved above to {atk, dec, atkCurve, decCurve}
-    -- and grouped per op at args 17..32 (op1 17-20, op2 21-24, op3 25-28, op4 29-32).
+    -- and grouped per op at args 16..31 (op1 16-19, op2 20-23, op3 24-27, op4 28-31).
     -- ol[1..4] are this channel's static operator levels, geode-shaped per hit above.
     -- See the trig command header in Engine_Potionshop.sc for the full arg order.
     engine.trig(geo_freq, actual_level, c.algo,
                 ratio2, ratio3, ratio4, mod_index,
-                feedback, drive, ch,
+                feedback, ch,
                 ol[1], ol[2], ol[3], ol[4], ratio1, pan,
                 atk1, dec1, atkC1, decC1,
                 atk2, dec2, atkC2, decC2,
@@ -945,7 +943,7 @@ function Burst:randomize(ch)
   c.opRatio2 = seqx.new{pick_low(op_ratio_set(c.algo, 2))}
   c.opRatio3 = seqx.new{pick_low(op_ratio_set(c.algo, 3))}
   c.opRatio4 = seqx.new{pick_low(op_ratio_set(c.algo, 4))}
-  -- The engine-wide modes (envMode/geodeMode) and per-op LEVELS are
+  -- The per-channel amp-dynamics modes (envMode/geodeMode) and per-op LEVELS are
   -- left untouched: a randomized op1 = 0 would silently kill the channel (op1 is
   -- usually the carrier), so the operator level balance stays a deliberate,
   -- user-set timbre while only the ratios scramble.

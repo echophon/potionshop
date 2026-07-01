@@ -28,12 +28,12 @@
 -- (literal 0 = no offset, plus the picker grid); `perf` / `prob` edit
 -- the selected channel's mode fields — the same fields the grid's perfMode/
 -- probMode presses set, picking only from GridUI's shared value tables. The
--- screen's perf page also carries the per-channel quantize (the grid keeps that
--- on its own QNT page). `scale` edits the global musical state (root, key mask)
--- the grid's scale picker drives — its E2 cursor walks root and the twelve
--- chromatic keys, and E3 sets/toggles via the controller's set_root / set_mask.
--- The grid's PERF/PROB/SCALE/QNT buttons switch the matching pages (SCALE opens
--- the shared scale picker; the grid QNT page maps to the screen's perf tab); the
+-- screen's perf page also carries the per-channel quantize + env mode + geode (the
+-- grid keeps those on its own PRISM page). `scale` edits the global musical state
+-- (root, key mask) the grid's scale picker drives — its E2 cursor walks root and the
+-- twelve chromatic keys, and E3 sets/toggles via the controller's set_root / set_mask.
+-- The grid's PERF/PROB/SCALE/PRISM buttons switch the matching pages (SCALE opens
+-- the shared scale picker; the grid PRISM page maps to the screen's perf tab); the
 -- screen tab follows, and main/alt drive the grid's paramLayer.
 --
 -- Redraw model: state changes set `dirty`; the host calls tick() at ~15 Hz
@@ -58,11 +58,12 @@ for _, p in ipairs(PARAMS) do if GridUI.has_b(p) then B_PARAMS[#B_PARAMS + 1] = 
 local PAGES  = {'main', 'alt', 'perf', 'prob', 'scale', 'mix'}
 -- main line 1 = run + all params; alt line 1 = run + the B-capable params.
 -- scale = root + 12 chromatic keys = 13 stops. mix = pan + channel level + 4 op
--- levels + mod index/amp punch/fm fb/algo = 10 (all four op ratios are sequenced,
+-- levels + mod index/fm fb/algo = 9 (all four op ratios are sequenced,
 -- edited on the main/alt seq pages). prob = prob/mode/note trig + op1..4 ratio-seq
--- trig + op1..4 env-seq trig = 11. PERF carries 4 lines (reset/oct/rate/quantize);
--- the scale page is root + 12 keys.
-local LINES_PER_PAGE = {1 + #PARAMS, 1 + #B_PARAMS, 4, 11, 13, 10}
+-- trig + op1..4 env-seq trig = 11. PERF carries 6 lines (reset/oct/rate/quantize/env
+-- mode/geode — the grid splits quantize+env+geode onto its PRISM page); the scale
+-- page is root + 12 keys.
+local LINES_PER_PAGE = {1 + #PARAMS, 1 + #B_PARAMS, 6, 11, 13, 9}
 local PAGE_PERF, PAGE_PROB, PAGE_SCALE, PAGE_MIX = 3, 4, 5, 6
 
 local NOTE_NAMES = {'c','c#','d','d#','e','f','f#','g','g#','a','a#','b'}
@@ -263,9 +264,9 @@ function Screen:set_page(p)
   self.page = ((p - 1) % #PAGES) + 1
   local c = self.ctl
   c.kbMode = false; c.actionMode = nil
-  -- the screen has no QNT tab (quantize sits on its PERF page); always clear the
-  -- grid's qntMode here so only one grid page is ever latched.
-  c.qntMode   = false
+  -- the screen has no PRISM tab (quantize + env mode + geode sit on its PERF page);
+  -- always clear the grid's prismMode here so only one grid page is ever latched.
+  c.prismMode = false
   c.perfMode  = (self.page == PAGE_PERF)
   c.probMode  = (self.page == PAGE_PROB)
   c.mixMode   = (self.page == PAGE_MIX)
@@ -293,9 +294,9 @@ function Screen:_sync_page_from_grid()
   local c = self.ctl
   self.page = (c.picker and c.picker.kind == 'scale') and PAGE_SCALE
     or c.perfMode and PAGE_PERF or c.probMode and PAGE_PROB
-    -- grid QNT page has no screen tab of its own; quantize lives on the screen's
-    -- PERF page, so follow the grid there.
-    or c.qntMode and PAGE_PERF
+    -- grid PRISM page has no screen tab of its own; quantize + env mode + geode live
+    -- on the screen's PERF page, so follow the grid there.
+    or c.prismMode and PAGE_PERF
     or c.mixMode and PAGE_MIX
     or ((c.paramLayer == 'B') and 2 or 1)
 end
@@ -428,9 +429,9 @@ local function step_table(cur, tbl, d)
 end
 
 -- MIX page cursor: line 1 = pan, line 2 = channel level, lines 3..6 = op1..op4 level
--- (0..1 grid), then lines 7/8/9/10 = mod index / amp punch / FM feedback / FM
--- algorithm voice scalars, each stepping its own grid. (All four op ratios are
--- sequenced — edited on the seq pages, not here.)
+-- (0..1 grid), then lines 7/8/9 = mod index / FM feedback / FM algorithm voice
+-- scalars, each stepping its own grid. (All four op ratios are sequenced — edited
+-- on the seq pages, not here.)
 function Screen:_edit_mix(d)
   local ch = self.sel_ch
   local c = self.engine.channels[ch + 1]
@@ -440,10 +441,8 @@ function Screen:_edit_mix(d)
   elseif line == 7 then
     self.ctl:set_scalar(ch, 'modIndex', step_table(c.modIndex, GridUI.MOD_INDEX_VALUES, d))
   elseif line == 8 then
-    self.ctl:set_scalar(ch, 'ampPunch', step_table(c.ampPunch, GridUI.AMP_PUNCH_VALUES, d))
-  elseif line == 9 then
     self.ctl:set_scalar(ch, 'fmFeedback', step_table(c.fmFeedback, GridUI.FM_FEEDBACK_VALUES, d))
-  elseif line == 10 then
+  elseif line == 9 then
     self.ctl:set_scalar(ch, 'algo', step_table(c.algo, GridUI.ALGO_VALUES, d))
   else
     local field = (line == 2) and 'level' or ('opLevel' .. (line - 2))  -- line 3->op1 .. 6->op4
@@ -483,8 +482,13 @@ function Screen:_edit_perf(d)
     self.ctl:set_scalar(ch, 'octave', step_table(c.octave, GridUI.OCTAVE_VALUES, d))
   elseif line == 3 then
     self.ctl:set_scalar(ch, 'rate', step_table(c.rate, GridUI.RATE_VALUES, d))
-  else
+  elseif line == 4 then
     self.ctl:set_scalar(ch, 'quantize', step_table(c.quantize, GridUI.QUANTIZE_VALUES, d))
+  elseif line == 5 then
+    -- env mode / geode are 0-based option indices (grid PRISM page mirrors)
+    self.ctl:set_scalar(ch, 'envMode', clamp(c.envMode + d, 0, #GridUI.ENV_MODE_NAMES - 1))
+  else
+    self.ctl:set_scalar(ch, 'geodeMode', clamp(c.geodeMode + d, 0, #GridUI.GEODE_MODE_NAMES - 1))
   end
 end
 
@@ -635,8 +639,8 @@ function Screen:page_lines()
   end
   local lines
   if self.page == PAGE_MIX then
-    -- stereo pan + channel level + four static op levels + the mod index / amp punch
-    -- / FM feedback / FM algorithm voice scalars. All four op ratios are sequenced
+    -- stereo pan + channel level + four static op levels + the mod index /
+    -- FM feedback / FM algorithm voice scalars. All four op ratios are sequenced
     -- (shown/edited on the main/alt seq pages), so they're absent here.
     lines = {
       {'pan',   GridUI.pan_label(c.pan)},
@@ -646,7 +650,6 @@ function Screen:page_lines()
       {'op3 l', string.format('%.2f', c.opLevel3)},
       {'op4 l', string.format('%.2f', c.opLevel4)},
       {'index', string.format('%d', c.modIndex)},
-      {'punch', string.format('%d', c.ampPunch)},
       {'fm fb', string.format('%.2f', c.fmFeedback)},
       {'alg',   GridUI.ALGO_NAMES[c.algo] or '?'},
     }
@@ -672,6 +675,8 @@ function Screen:page_lines()
       {'oct',   (c.octave > 0 and '+' or '') .. c.octave},
       {'rate',  fmt_rate(c.rate)},
       {'qnt',   '1/' .. c.quantize},
+      {'env',   GridUI.ENV_MODE_NAMES[c.envMode + 1] or '?'},
+      {'geo',   GridUI.GEODE_MODE_NAMES[c.geodeMode + 1] or '?'},
     }
   end
   -- single-value lines: the whole value is the focused token
