@@ -334,7 +334,6 @@ local function first_trig()
   e.channels[1].opRatio3 = seqx.new{3}
   e.channels[1].opRatio4 = seqx.new{7}
   e.channels[1].pan = -0.5
-  e.channels[1].chorusMix = 0.75
   e:launch(1)
   clock._run_until(2)
   engine = saved
@@ -347,8 +346,6 @@ check('sequenced op2/3/4 ratios pass at trig args 4/5/6',
 -- op1 ratio (sequenced): its drawn value rides as r1 at trig arg 14.
 check('op1 ratio passes at trig arg 14', off and approx(off[14], 0.5))
 check('pan passes at trig arg 15', off and approx(off[15], -0.5))
--- chorus dry/wet rides at trig arg 32 (per-hit, like pan)
-check('chorus mix passes at trig arg 32', off and approx(off[32], 0.75))
 
 -- op ratio B lane is an INDEX OFFSET: it shifts A's position UP the op's ROLE SET
 -- (never an off-grid sum), reaching the higher upper-32 ratios. Under algo 1 op2 is a
@@ -1087,33 +1084,84 @@ ctl:press(10, 0)
 ctl:press(13, 6)
 check('PROB mode exited', ctl.probMode == false)
 
--- MIX page (row6 col 11): pan (col 6) + channel level (col 7) + per-op level (cols
--- 8-11). All four op ratios moved to their own sequence pages, so cols 0-5 are inert.
+-- MIX page (row6 col 11) in signal-flow order: mod index (col 0) + algo (col 1) + per-op
+-- level (cols 3-6) + FM feedback (col 8) + filter (col 13) + pan (col 14) + channel
+-- level/volume (col 15). Chorus was removed; cols 2/7/9-12 are inert.
 ctl:press(11, 6)
 check('MIX mode entered', ctl.mixMode == true)
--- col0 (the old op1 ratio slot) is now inert — op ratios are sequenced.
-ctl:press(0, 0)
-check('MIX col0 is inert (op1 ratio is sequenced now)', ctl.picker == nil)
-ctl:press(6, 0)   -- col6 -> pan picker
-check('MIX col6 opens the pan scalar picker',
+-- col2 is a dark separator now (chorus removed) — inert.
+ctl:press(2, 0)
+check('MIX col2 is inert (separator)', ctl.picker == nil)
+ctl:press(0, 0)   -- col0 -> mod index picker
+check('MIX col0 opens the mod index scalar picker',
+  ctl.picker and ctl.picker.field == 'modIndex')
+ctl:press(1, 0)   -- col1 -> algorithm picker
+check('MIX col1 opens the algorithm scalar picker',
+  ctl.picker and ctl.picker.field == 'algo')
+ctl:press(14, 0)  -- col14 -> pan picker
+check('MIX col14 opens the pan scalar picker',
   ctl.picker and ctl.picker.field == 'pan')
 ctl:press(0, 6)   -- value grid row 6 col 0 -> PAN_VALUES[1] = -1 (hard left)
 check('MIX pan picker sets c.pan hard left', approx(geng.channels[1].pan, -1))
-ctl:press(6, 0)   -- reopen pan picker
+ctl:press(14, 0)  -- reopen pan picker
 ctl:press(0, 7)   -- value grid row 7 col 0 -> PAN_VALUES[17] = 0 (centre, grid-exact)
 check('MIX pan picker can return to dead centre', approx(geng.channels[1].pan, 0))
-ctl:press(7, 0)   -- col7 -> channel level picker
-check('MIX col7 opens the channel level scalar picker',
+ctl:press(15, 0)  -- col15 -> channel level/volume picker
+check('MIX col15 opens the channel level scalar picker',
   ctl.picker and ctl.picker.field == 'level')
 ctl:press(0, 6)   -- value grid row 6 col 0 -> OP_LEVEL_VALUES[1] = 0
 check('MIX channel level picker sets c.level', approx(geng.channels[1].level, 0))
-ctl:press(8, 0)   -- col8 -> op1 level picker
+ctl:press(3, 0)   -- col3 -> op1 level picker
 check('MIX op level cell opens a scalar picker',
   ctl.picker and ctl.picker.field == 'opLevel1')
 ctl:press(15, 7)  -- value grid row 7 col 15 -> OP_LEVEL_VALUES[32] = 1.0
 check('MIX op level picker sets opLevel1', approx(geng.channels[1].opLevel1, 1.0))
+ctl:press(8, 0)   -- col8 -> FM feedback picker
+check('MIX col8 opens the FM feedback scalar picker',
+  ctl.picker and ctl.picker.field == 'fmFeedback')
+ctl:close_picker()
+-- DJ filter (col 13): one bipolar knob, centre = no filter, left = LP, right = HP.
+check('filterPos defaults to 0 (no filter)', geng.channels[1].filterPos == 0)
+ctl:press(13, 0)  -- col13 -> filter picker
+check('MIX col13 opens the filter scalar picker',
+  ctl.picker and ctl.picker.field == 'filterPos')
+ctl:press(0, 6)   -- value grid row 6 col 0 -> FILTER_VALUES[1] = -1 (LP closed)
+check('MIX filter picker sets filterPos to the LP extreme',
+  approx(geng.channels[1].filterPos, -1))
+ctl:press(13, 0)  -- reopen filter picker
+ctl:press(0, 7)   -- value grid row 7 col 0 -> FILTER_VALUES[17] = 0 (off, grid-exact)
+check('MIX filter picker can return to off (centre)',
+  approx(geng.channels[1].filterPos, 0))
+ctl:press(13, 0)
+ctl:press(15, 7)  -- value grid row 7 col 15 -> FILTER_VALUES[32] = +1 (HP extreme)
+check('MIX filter picker sets filterPos to the HP extreme',
+  approx(geng.channels[1].filterPos, 1))
+geng.channels[1].filterPos = 0  -- restore the default for later checks
 ctl:press(11, 6)
 check('MIX mode exited', ctl.mixMode == false)
+
+-- the channel-strip filter pushes to the SC engine on every set_scalar (unlike
+-- the other MIX scalars, which ride the next trig): Burst:push_filter forwards
+-- to the global norns `engine` when present, and is silent off-hardware.
+do
+  local pushed = {}
+  _G.engine = {
+    filter = function(ch, pos) pushed.filter = {ch, pos} end,
+  }
+  ctl:set_scalar(1, 'filterPos', -0.5)
+  check('set_scalar(filterPos) pushes engine.filter with 1-based ch',
+    pushed.filter and pushed.filter[1] == 2 and approx(pushed.filter[2], -0.5))
+  ctl:set_scalar(1, 'pan', 0.2)
+  pushed.filter = nil
+  ctl:set_scalar(1, 'level', 0.5)
+  check('non-strip scalars do not push the filter', pushed.filter == nil)
+  _G.engine = nil
+  local c2 = geng.channels[2]
+  c2.filterPos, c2.pan, c2.level = 0, 0, 16 / 31
+end
+check('filter labels read off/LP/HP',
+  GridUI.filter_label(0) == 'off' and GridUI.filter_label(-1) == 'LP100'
+  and GridUI.filter_label(1) == 'HP100')
 
 -- env mode + geode are per-channel now, edited on the PRISM page (renamed QNT).
 check('geodeMode is a per-channel field', geng.channels[1].geodeMode ~= nil)
@@ -1165,133 +1213,156 @@ local seng = Burst.new()
 local sctl = GridUI.new(seng, mock_grid())
 local sui = ScreenUI.new(seng, sctl)
 
+-- page indices in the K2/K3 chain: 10 per-param sequence pages, then the 4 mode pages.
+--   1 note · 2 opRatio1 · 3 opRatio2 · 4 opRatio3 · 5 opRatio4 · 6 div/reps ·
+--   7 opEnv1 · 8 opEnv2 · 9 opEnv3 · 10 opEnv4 · 11 perf · 12 prob · 13 scale · 14 mix
+local P_NOTE, P_OPR2, P_DIV = 1, 3, 6
+local P_PERF, P_PROB, P_SCALE, P_MIX = 11, 12, 13, 14
+
 -- smoke: redraw runs clean on every page
 local pages_ok = true
-for p = 1, 6 do
+for p = 1, 14 do
   sui:set_page(p)
   local ok, err = pcall(function() sui:redraw() end)
   if not ok then pages_ok = false; print('      redraw error page ' .. p .. ': ' .. tostring(err)) end
 end
-check('redraw runs clean on all 6 pages', pages_ok)
-sui:set_page(3)
+check('redraw runs clean on all 14 pages', pages_ok)
+sui:set_page(P_PERF)
 check('set_page syncs grid modes (perf -> perfMode)', sctl.perfMode == true)
-sui:set_page(5)
+sui:set_page(P_SCALE)
 check('scale page opens the grid scale picker', sctl.picker and sctl.picker.kind == 'scale')
 
--- main page: E3 edits land exactly on the step picker grid
-sui:set_page(1)
+-- note page: six channel rows of one param; E3 edits land exactly on the picker grid
+sui:set_page(P_NOTE)
 sui.sel_ch = 0
-sui.sel_line[1] = 4  -- note (line 1 = run)
-sui:enc(2, 0)        -- sync the grid's selected param
+sui.sel_lane = 1
+seng.channels[1].note = seqx.new{0}
 sui.sel_step = 0
 sui:enc(3, 1)
-check('main E3 edit lands on note picker grid',
+check('note page E3 edit lands on the note picker grid',
   in_set(seqx.values(seng.channels[1].note)[1], GridUI.STEP_PICKER_VALUES.note))
-check('main E2 sync keeps grid selectedParam agreeing', sctl.selectedParam == 'note')
+check('note page keeps grid selectedParam = note', sctl.selectedParam == 'note')
+check('note page main_param is the lane-1 (A) param', sui:main_param() == 'note' and sui:layer() == 'A')
 
 -- prob page: prob steps the discrete 25/50/75/100% set
-sui:set_page(4)
-sui.sel_line[4] = 1
+sui:set_page(P_PROB)
+sui.sel_line[P_PROB] = 1
 seng.channels[1].burstProb = 1
 sui:enc(3, -1)
 check('prob E3 steps down one discrete value', approx(seng.channels[1].burstProb, 0.75))
-sui.sel_line[4] = 2
+sui.sel_line[P_PROB] = 2
 sui:enc(3, 1)
 check('prob mode line toggles probHit', seng.channels[1].probHit == true)
-sui.sel_line[4] = 3
+sui.sel_line[P_PROB] = 3
 sui:enc(3, 1)
 check('alt-trig line steps altTrig to step', seng.channels[1].altTrig == 1)
-sui.sel_line[4] = 4   -- op1 ratio-seq trig
+sui.sel_line[P_PROB] = 4   -- op1 ratio-seq trig
 sui:enc(3, 1)
 check('prob page op1 trig line steps to step', seng.channels[1].opRatio1Trig == 1)
 sui:enc(3, -1)
 check('prob page op1 trig line steps back to hold', seng.channels[1].opRatio1Trig == 0)
-sui.sel_line[4] = 5   -- op2 ratio-seq trig
+sui.sel_line[P_PROB] = 5   -- op2 ratio-seq trig
 sui:enc(3, 1)
 check('prob page op2 trig line steps to step', seng.channels[1].opRatio2Trig == 1)
 sui:enc(3, -1)
 check('prob page op2 trig line steps back to hold', seng.channels[1].opRatio2Trig == 0)
-sui.sel_line[4] = 8   -- op1 env shape-seq trig
+sui.sel_line[P_PROB] = 8   -- op1 env shape-seq trig
 sui:enc(3, 1)
 check('prob page op1 env trig line steps to step', seng.channels[1].opEnv1Trig == 1)
 sui:enc(3, -1)
 check('prob page op1 env trig line steps back to hold', seng.channels[1].opEnv1Trig == 0)
-sui.sel_line[4] = 11  -- op4 env shape-seq trig
+sui.sel_line[P_PROB] = 11  -- op4 env shape-seq trig
 sui:enc(3, 1)
 check('prob page op4 env trig line steps to step', seng.channels[1].opEnv4Trig == 1)
 sui:enc(3, -1)
 check('prob page op4 env trig line steps back to hold', seng.channels[1].opEnv4Trig == 0)
 
--- mix page: line 1 = pan, line 2 = channel level, lines 3..6 = op1..op4 level. All
--- four op ratios are sequenced now (edited on the main/alt seq pages), absent here.
-sui:set_page(6)
-sui.sel_line[6] = 1   -- pan
+-- mix page in signal-flow order: line 1 = mod index, 2 = algo, lines 3..6 = op1..op4
+-- level, 7 = fm feedback, 8 = filter, 9 = pan, 10 = channel level/volume. All four
+-- op ratios are sequenced (edited on the per-param seq pages), and chorus was
+-- removed, so absent here.
+sui:set_page(P_MIX)
+check('mix page_lines is signal-flow order (index, alg, op1 l ...)',
+  sui:page_lines()[1][1] == 'index' and sui:page_lines()[2][1] == 'alg'
+  and sui:page_lines()[3][1] == 'op1 l')
+check('mix page has 10 lines (filter added)', #sui:page_lines() == 10)
+sui.sel_line[P_MIX] = 9   -- pan
 seng.channels[1].pan = 0
 sui:enc(3, -1)
-check('mix page line 1 steps pan left down the -1..1 grid',
+check('mix page pan line steps pan left down the -1..1 grid',
   in_set(seng.channels[1].pan, GridUI.PAN_VALUES) and seng.channels[1].pan < 0)
-sui.sel_line[6] = 2   -- channel level
+sui.sel_line[P_MIX] = 10  -- channel level (volume)
 seng.channels[1].level = 1.0
 sui:enc(3, -1)
-check('mix page line 2 steps channel level down the 0..1 grid',
+check('mix page level line steps channel level down the 0..1 grid',
   in_set(seng.channels[1].level, GridUI.OP_LEVEL_VALUES) and seng.channels[1].level < 1.0)
-sui.sel_line[6] = 3   -- op1 level
+sui.sel_line[P_MIX] = 8   -- DJ filter position
+seng.channels[1].filterPos = 0
+sui:enc(3, -1)
+check('mix page filter line steps toward the low-pass down the -1..1 grid',
+  in_set(seng.channels[1].filterPos, GridUI.FILTER_VALUES) and seng.channels[1].filterPos < 0)
+sui.sel_line[P_MIX] = 3   -- op1 level
 seng.channels[1].opLevel1 = 1.0
 sui:enc(3, -1)
-check('mix page line 3 steps opLevel1 down the 0..1 grid',
+check('mix page op1 line steps opLevel1 down the 0..1 grid',
   in_set(seng.channels[1].opLevel1, GridUI.OP_LEVEL_VALUES) and seng.channels[1].opLevel1 < 1.0)
+sui.sel_line[P_MIX] = 1   -- mod index
+seng.channels[1].modIndex = 4
+sui:enc(3, 1)
+check('mix page index line steps modIndex up its grid',
+  in_set(seng.channels[1].modIndex, GridUI.MOD_INDEX_VALUES) and seng.channels[1].modIndex ~= 4)
 
--- op1/2/3/4 ratios are now sequenced — editable on the main seq page like any lane.
-sui:set_page(1)
+-- op ratios are sequenced, each on its own per-param page (opRatio2 = page 3).
+sui:set_page(P_OPR2)
 sui.sel_ch = 0
--- params: div(1) reps(2) note(3) opEnv1..4(4..7) opRatio1(8) opRatio2(9) -> line 10
-sui.sel_line[1] = 1 + 9
-sui:enc(2, 0)             -- sync grid selected param to the focused line
-check('main page line reaches the sequenced opRatio2 lane', sui:main_param() == 'opRatio2')
+sui.sel_lane = 1
+check('opRatio2 page main_param is opRatio2', sui:main_param() == 'opRatio2')
+check('opRatio2 page keeps grid selectedParam = opRatio2', sctl.selectedParam == 'opRatio2')
 seng.channels[1].opRatio2 = seqx.new{1}
 sui.sel_step = 0
 sui:enc(3, 1)
-check('main E3 steps opRatio2 up the curated ratio grid (A = role set)',
+check('opRatio2 E3 steps up the curated ratio grid (A = role set)',
   in_set(seqx.values(seng.channels[1].opRatio2)[1],
          GridUI.op_ratio_set(seng.channels[1].algo, 2))
   and seqx.values(seng.channels[1].opRatio2)[1] ~= 1)
 
--- perf page: values come from the shared interval/octave/rate tables
-sui:set_page(3)
-sui.sel_line[3] = 1
+-- perf page: line 1 = run, then reset/oct/rate/quantize come from the shared tables
+sui:set_page(P_PERF)
+check('perf page_lines line 1 is run, line 2 reset',
+  sui:page_lines()[1][1] == 'run' and sui:page_lines()[2][1] == 'reset')
+sui.sel_line[P_PERF] = 2   -- reset
 sui:enc(3, 3)
 check('perf E3 lands in RESET_INTERVALS', in_set(seng.channels[1].resetInterval, GridUI.RESET_INTERVALS))
-check('perf page_lines labels map to reset/oct/rate', sui:page_lines()[1][1] == 'reset')
-sui.sel_line[3] = 2
+sui.sel_line[P_PERF] = 3   -- oct
 sui:enc(3, 1)
 check('oct E3 lands in OCTAVE_VALUES', in_set(seng.channels[1].octave, GridUI.OCTAVE_VALUES))
 check('oct E3 stepped up one octave', seng.channels[1].octave == 1)
 sui:enc(3, -1)  -- restore octave 0: the fire tests below expect an unshifted c1
-sui.sel_line[3] = 3
+sui.sel_line[P_PERF] = 4   -- rate
 sui:enc(3, 1)
 check('rate E3 lands in RATE_VALUES', in_set(seng.channels[1].rate, GridUI.RATE_VALUES))
 
 -- scale page: E2 walks root -> 12 keys; E3 edits the SELECTED channel's root
 -- (per-channel now, -12..+11 signed transpose, no wrap; mask stays global)
-sui:set_page(5)
+sui:set_page(P_SCALE)
 local sch = sui.sel_ch + 1
 seng.channels[sch].root = 0
-sui.sel_line[5] = 1            -- root
+sui.sel_line[P_SCALE] = 1            -- root
 sui:enc(3, 2)
 check('scale E3 raises the selected channel root by semitones', seng.channels[sch].root == 2)
 sui:enc(3, -5)                 -- goes negative (down-octave transpose), no wrap
 check('scale root goes negative, clamped not wrapped', seng.channels[sch].root == -3)
 seng.scale = {0, 4, 7}
-sui.sel_line[5] = 2 + 2        -- key for pitch class 2 (D)
+sui.sel_line[P_SCALE] = 2 + 2        -- key for pitch class 2 (D)
 sui:enc(3, 1)
 check('scale E3 right adds a key to the mask', in_set(2, seng.scale) and #seng.scale == 4)
 sui:enc(3, -1)
 check('scale E3 left removes the key', not in_set(2, seng.scale) and #seng.scale == 3)
 
--- perf page: per-channel quantize on line 4, stepping the curated set
-sui:set_page(3)
+-- perf page: per-channel quantize on line 5 (after run/reset/oct/rate), curated set
+sui:set_page(P_PERF)
 seng.channels[1].quantize = 8
-sui.sel_line[3] = 4
+sui.sel_line[P_PERF] = 5
 sui:enc(3, 1)
 check('perf E3 steps quantize up the curated set', seng.channels[1].quantize == 12)
 check('perf quantize lands in QUANTIZE_VALUES', in_set(seng.channels[1].quantize, GridUI.QUANTIZE_VALUES))
@@ -1321,17 +1392,17 @@ end
 check('channel column draws note letter after fire', letter_drawn)
 
 -- grid mode buttons drive the screen tab (grid -> screen sync)
-sui:set_page(1)
+sui:set_page(P_NOTE)  -- selectedParam = 'note'
 sctl:press(11, 6)  -- MIX on the grid
 sui:redraw()
-check('grid MIX press switches screen to mix page', sui.page == 6)
+check('grid MIX press switches screen to mix page', sui.page == P_MIX)
 sctl:press(11, 6)  -- toggle MIX off
 sctl:press(13, 6)  -- PROB on the grid
 sui:redraw()
-check('grid PROB press switches screen to prob page', sui.page == 4)
+check('grid PROB press switches screen to prob page', sui.page == P_PROB)
 sctl:press(13, 6)  -- toggle PROB off
 sui:redraw()
-check('grid mode off returns screen to main page', sui.page == 1)
+check('grid mode off returns screen to the selectedParam seq page', sui.page == P_NOTE)
 
 -- channel focus follows the grid (grid -> screen sync)
 sui.sel_ch = 0
@@ -1362,30 +1433,46 @@ end
 check('grid action mode swaps footer for status', status_drawn)
 sctl:press(14, 7)  -- leave action mode
 
--- run line: E3 right launches, left stops
-sui:set_page(1)
+-- run line now lives on the perf page (line 1): E3 right launches, left stops
+sui:set_page(P_PERF)
 seng.channels[1].reps = seqx.new{2, 2}  -- looping again (fire test made it single-shot)
-sui.sel_line[1] = 1  -- run
+sui.sel_line[P_PERF] = 1  -- run
 sui:enc(3, 1)
-check('run line E3 right launches the channel', seng:is_running(1) == true)
+check('perf run line E3 right launches the channel', seng:is_running(1) == true)
 sui:enc(3, -1)
-check('run line E3 left stops the channel', seng:is_running(1) == false)
+check('perf run line E3 left stops the channel', seng:is_running(1) == false)
 
--- E2 walks every position: run -> div steps -> div `_` -> next line
-sui.sel_line[1] = 1  -- run (div default seq {4, 8} -> 2 steps + add slot)
-sui.sel_step = 0
+-- E2 walks steps across channels, flowing off one channel onto the next (div page)
+sui:set_page(P_DIV)
+for i = 1, 6 do seng.channels[i].div = seqx.new{4, 8} end  -- 2 steps + add slot = 3 positions
+sui.sel_ch = 0; sui.sel_lane = 1; sui.sel_step = 0
 sui:enc(2, 1)
-check('E2 flows from run to div step 1', sui.sel_line[1] == 2 and sui.sel_step == 0)
-sui:enc(2, 1); sui:enc(2, 1)
+check('E2 advances within a channel', sui.sel_ch == 0 and sui.sel_step == 1)
+sui:enc(2, 1)
 check('E2 reaches the `_` add slot after the last step',
-  sui.sel_line[1] == 2 and sui.sel_step == 2 and sui:_on_add_slot())
+  sui.sel_ch == 0 and sui.sel_step == 2 and sui:_on_add_slot())
 sui:enc(2, 1)
-check('E2 flows past `_` onto the next line', sui.sel_line[1] == 3 and sui.sel_step == 0)
+check('E2 flows past `_` onto the next channel', sui.sel_ch == 1 and sui.sel_step == 0)
 sui:enc(2, -1)
-check('E2 flows backward onto the previous line`s add slot',
-  sui.sel_line[1] == 2 and sui:_on_add_slot())
+check('E2 flows backward onto the previous channel`s add slot',
+  sui.sel_ch == 0 and sui:_on_add_slot())
 
--- `_` add slot: increment appends a step at the lowest picker value
+-- "scroll down switches to B": E2 past the last channel of lane 1 reveals lane 2
+sui:set_page(P_NOTE)
+for i = 1, 6 do seng.channels[i].note = seqx.new{0}; seng.channels[i].noteB = seqx.new{0} end
+sui.sel_ch = 5; sui.sel_lane = 1; sui.sel_step = 1  -- ch6 add slot (1 step + add)
+check('cursor on last channel add slot of lane A', sui.sel_lane == 1 and sui:_on_add_slot())
+sui:enc(2, 1)
+check('E2 past lane A last channel switches to lane B (scroll -> B)',
+  sui.sel_lane == 2 and sui.sel_ch == 0 and sui.sel_step == 0 and sui:layer() == 'B')
+sui:enc(2, -1)
+check('E2 back from lane B returns to lane A last channel',
+  sui.sel_lane == 1 and sui.sel_ch == 5)
+
+-- `_` add slot: increment appends a step at the lowest picker value (div page, ch0)
+sui:set_page(P_DIV)
+seng.channels[1].div = seqx.new{4, 8}
+sui.sel_ch = 0; sui.sel_lane = 1; sui.sel_step = 2  -- ch0 add slot (div len 2)
 sui:enc(3, 1)
 check('E3 on `_` appends a step (div len 3)', seqx.len(seng.channels[1].div) == 3)
 check('appended step = lowest picker value',
@@ -1399,55 +1486,62 @@ check('cursor back on the `_` add slot', sui:_on_add_slot())
 
 -- the last remaining step clamps instead of vanishing
 seng.channels[1].note = seqx.new{0}
-sui.sel_line[1] = 4  -- note
-sui:enc(2, 0)
-sui.sel_step = 0
+sui:set_page(P_NOTE)
+sui.sel_ch = 0; sui.sel_lane = 1; sui.sel_step = 0
 sui:enc(3, -1)
 check('last remaining step clamps, never removed', seqx.len(seng.channels[1].note) == 1)
 
--- K2/K3 page back/forward, clamped at the ends; grid modes + paramLayer follow
-sui:set_page(1)
+-- K2/K3 page back/forward, clamped at the ends; grid selectedParam + modes follow
+sui:set_page(P_NOTE)
 sui:key(3, 1)
-check('K3 pages forward to alt (grid layer follows)',
-  sui.page == 2 and sctl.paramLayer == 'B')
+check('K3 pages forward note -> opRatio1 (grid selectedParam follows)',
+  sui.page == 2 and sctl.selectedParam == 'opRatio1')
+sui:set_page(10)  -- opEnv4, the last sequence page
 sui:key(3, 1)
-check('K3 pages to perf (grid perfMode follows)',
-  sui.page == 3 and sctl.perfMode == true)
+check('K3 opEnv4 -> perf (grid perfMode follows)',
+  sui.page == P_PERF and sctl.perfMode == true)
 sui:key(2, 1)
-check('K2 pages back to alt (perfMode off)',
-  sui.page == 2 and sctl.perfMode == false)
+check('K2 perf -> opEnv4 (perfMode off, selectedParam follows)',
+  sui.page == 10 and sctl.perfMode == false and sctl.selectedParam == 'opEnv4')
+sui:set_page(P_NOTE)
 sui:key(2, 1)
-check('K2 back to main restores layer A', sui.page == 1 and sctl.paramLayer == 'A')
-sui:key(2, 1)
-check('K2 clamps at main (no wrap)', sui.page == 1 and sctl.perfMode == false)
+check('K2 clamps at the first page (no wrap)', sui.page == P_NOTE)
+sui:set_page(P_MIX)
+sui:key(3, 1)
+check('K3 clamps at the last page (no wrap)', sui.page == P_MIX)
 
--- alt page: editing the B (offset) layer — only B-capable params appear here
--- (div/reps/shapes have no B layer, so they're absent from alt)
-sui:set_page(2)
+-- lane 2 = the B (offset) layer, reached directly by sel_lane = 2 (or E2 scroll). It
+-- snaps to the offset set (literal 0 = no offset, prepended to the picker grid).
+sui:set_page(P_NOTE)
 sui.sel_ch = 0
+sui.sel_lane = 2
 seng.channels[1].noteB = seqx.new{0}
-sui.sel_line[2] = 2  -- note (B_PARAMS = {note, opRatio1..4})
-sui:enc(2, 0)        -- sync the grid's selected param + layer
+sui:enc(2, 0)        -- sync the grid's paramLayer to the lane
+check('lane 2 on a B-capable page is the B layer',
+  sui:layer() == 'B' and sctl.paramLayer == 'B' and sui:main_param() == 'note')
 sui.sel_step = 0
 sui:enc(3, 1)
-check('alt E3 steps note B up from 0 onto the grid',
+check('lane-B E3 steps note B up from 0 onto the grid',
   approx(seqx.values(seng.channels[1].noteB)[1], GridUI.STEP_PICKER_VALUES.note[2]))
 sui:enc(3, -1)
-check('alt E3 decrement returns to 0 (no offset)',
+check('lane-B E3 decrement returns to 0 (no offset)',
   seqx.values(seng.channels[1].noteB)[1] == 0)
 sui.sel_step = 1  -- `_` add slot
 sui:enc(3, 1)
-check('alt `_` appends 0', seqx.len(seng.channels[1].noteB) == 2
+check('lane-B `_` appends 0', seqx.len(seng.channels[1].noteB) == 2
   and seqx.values(seng.channels[1].noteB)[2] == 0)
-check('div/reps/harm are absent from the alt (B) page', sui:_main_positions(1) == 1
-  and (function() sui.sel_line[2] = 2; return sui:main_param() == 'note' end)())
-sui:set_page(1)
+
+-- div/reps lane 2 is `reps` (a paired A-layer lane), not a B offset
+sui:set_page(P_DIV)
+sui.sel_lane = 2
+check('div page lane 2 is the reps A lane', sui:main_param() == 'reps' and sui:layer() == 'A')
+sui.sel_lane = 1
 
 -- focused value token gets an underscore (rect 1px tall, token width)
+sui:set_page(P_DIV)
 seng.channels[1].div = seqx.new{16, 8}
-sui.sel_line[1] = 2  -- div
+sui.sel_ch = 0; sui.sel_lane = 1; sui.sel_step = 0
 sui:enc(2, 0)
-sui.sel_step = 0
 screen._reset()
 sui:redraw()
 local underlined = false
@@ -1623,6 +1717,19 @@ peng.channels[1].pan = 0
 psync:reflect_scalars(1)
 check('engine pan reflects back to param index 16 (centre)', fake:get('ch1_pan') == 16)
 
+-- filter: the strip scalar on the same bipolar 0..31 grid as pan (index 16 =
+-- centre = no filter). Its param action pushes straight to the SC engine
+-- (guarded on the global, absent off-hardware) as well as mutating the channel.
+fake:set('ch1_filter', 1)
+check('filter 1 -> LP extreme (-1)', approx(peng.channels[1].filterPos, -1))
+fake:set('ch1_filter', 16)
+check('filter 16 -> off (0)', approx(peng.channels[1].filterPos, 0))
+fake:set('ch1_filter', 31)
+check('filter 31 -> HP extreme (+1)', approx(peng.channels[1].filterPos, 1))
+peng.channels[1].filterPos = 0
+psync:reflect_scalars(1)
+check('engine filter state reflects back silently', fake:get('ch1_filter') == 16)
+
 -- engine/UI -> params: silent reflection only (zero action fires)
 local f0 = fake.fires
 pctl:press(0, 7)  -- row 7 col 0 = div/reps page
@@ -1668,6 +1775,7 @@ peng.channels[1].modIndex = 9
 peng.channels[1].fmFeedback = 3
 peng.channels[1].algo = 5
 peng.channels[1].pan = -1
+peng.channels[1].filterPos = -0.5
 fake:set('ch1_copy', 1)
 fake:set('ch5_paste', 1)
 local cp_ok = true
@@ -1684,6 +1792,10 @@ local mix_ok = approx(peng.channels[5].level, 0.7)
   and peng.channels[5].fmFeedback == 3 and peng.channels[5].algo == 5
   and approx(peng.channels[5].pan, -1)
 check('copy+paste duplicates MIX-page static scalars across channels', mix_ok)
+check('copy+paste carries the filter strip scalar too',
+  approx(peng.channels[5].filterPos, -0.5))
+check('paste reflected filter into dest scalar param',
+  fake:get('ch5_filter') == 9)  -- -0.5 -> grid index round(-0.5*15+16) = 9
 check('paste reflected into dest scalar param', fake:get('ch5_algorithm') == 5)
 check('paste reflected pan into dest scalar param', fake:get('ch5_pan') == 1)  -- pan -1 -> grid index 1
 

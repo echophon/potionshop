@@ -24,22 +24,32 @@
 // pinned. This replaced the old single `harm` macro
 // that fanned all three ratios out from unison via one scalar.
 //
-// Each voice carries a per-voice stereo CHORUS insert (post-pan), crossfaded by a
-// per-channel `chorusMix` (0 = dry default). Like `pan` it's a per-hit trig arg, not a
-// persistent send, so it rides the monophonic hit lifecycle (no tail between hits).
+// Signal flow: PotionFM synths (in fmGroup, head) -> per-channel bus ->
+// PotionChannel strip (persistent, one per channel: DJ-style filter) ->
+// masterBus -> PotionMaster (Compander compressor -> makeup -> Limiter, at
+// tail) -> engine output. The compressor evens out the loudness swing between
+// algorithms (additive vs single carrier, PM vs over-modulated AM) so the
+// limiter only catches rare peaks. Norns/Crone also soft-limits the main
+// output; a 3-band compressor like the web master bus is the documented stretch
+// beyond this single-band stage.
 //
-// Signal flow: PotionFM synths (in fmGroup, head) -> masterBus -> PotionMaster
-// (Compander compressor -> makeup -> Limiter, at tail) -> engine output. The
-// compressor evens out the loudness swing between algorithms (additive vs single
-// carrier, PM vs over-modulated AM) so the limiter only catches rare peaks.
-// Norns/Crone also soft-limits the main output; a 3-band compressor like the web
-// master bus is the documented stretch beyond this single-band stage.
+// --- Why the filter lives on a persistent strip, not the voice ---
+// The voices are fire-and-forget (a new hit frees the old node), so a per-voice
+// filter would cut its own tail when the node frees, and its position couldn't
+// be nudged mid-note. One always-running strip per channel keeps the filter
+// stateful and continuously sweepable across hits. (This slot also hosted a
+// per-channel envelope follower with sidechain subscription for a while; it
+// never sounded right and was removed -- the strip is the seam to re-add
+// follower/LFO-style filter modulation later.)
 
 Engine_Potionshop : CroneEngine {
 	var <fmGroup;
+	var <chGroup;       // channel strips, between the voices and the master
 	var <masterBus;
 	var <master;
 	var <voices;        // one live voice node per channel (monophonic-per-channel)
+	var <strips;        // persistent PotionChannel synth per channel
+	var <channelBuses;  // per-channel stereo voice bus (voices -> strip)
 	classvar numChannels = 6;
 
 	// The 16 FM algorithms as DATA (1..8 are the canonical Yamaha 4-op DX set;
@@ -121,9 +131,8 @@ Engine_Potionshop : CroneEngine {
 			atk3 = 0.001, dec3 = 0.2, atkCurve3 = -4, decCurve3 = -4,  // op3 EG
 			atk4 = 0.001, dec4 = 0.2, atkCurve4 = -4, decCurve4 = -4,  // op4 EG
 			gate = 1,                                       // voice gate
-			pan = 0,                                        // stereo position (-1 L .. +1 R)
-				chorusMix = 0;                                  // per-voice dry/wet chorus (0 = dry, 1 = wet)
-			var e1, e2, e3, e4, cut, free, maxTime, o1, o2, o3, o4, sig, wet;
+			pan = 0;                                        // stereo position (-1 L .. +1 R)
+			var e1, e2, e3, e4, cut, free, maxTime, o1, o2, o3, o4, sig;
 
 			// PER-OPERATOR envelope generators (DX-style EG): each shapes its own
 			// operator's output (unit 0->1->0). A carrier's eN is its amplitude
@@ -131,10 +140,10 @@ Engine_Potionshop : CroneEngine {
 			// contour it imparts, because eN rides into oN, which feeds the lower
 			// ops' phase (PM) and amplitude (AM/ring) terms below. Axes + per-segment
 			// curves come from each per-channel sequenced opEnvN shape.
-			e1 = EnvGen.kr(Env.new([0, 1, 0], [atk1, max(0.01, dec1)], [atkCurve1, decCurve1]));
-			e2 = EnvGen.kr(Env.new([0, 1, 0], [atk2, max(0.01, dec2)], [atkCurve2, decCurve2]));
-			e3 = EnvGen.kr(Env.new([0, 1, 0], [atk3, max(0.01, dec3)], [atkCurve3, decCurve3]));
-			e4 = EnvGen.kr(Env.new([0, 1, 0], [atk4, max(0.01, dec4)], [atkCurve4, decCurve4]));
+			e1 = EnvGen.ar(Env.new([0, 1, 0], [atk1, max(0.01, dec1)], [atkCurve1, decCurve1]));
+			e2 = EnvGen.ar(Env.new([0, 1, 0], [atk2, max(0.01, dec2)], [atkCurve2, decCurve2]));
+			e3 = EnvGen.ar(Env.new([0, 1, 0], [atk3, max(0.01, dec3)], [atkCurve3, decCurve3]));
+			e4 = EnvGen.ar(Env.new([0, 1, 0], [atk4, max(0.01, dec4)], [atkCurve4, decCurve4]));
 
 			// voice gate: each channel is monophonic, so a new hit releases the
 			// previous voice on that channel over ~6ms (click-free) instead of
@@ -188,20 +197,33 @@ Engine_Potionshop : CroneEngine {
 			// mono voice -> stereo field at the per-channel pan position.
 			sig = Pan2.ar(sig, pan);
 
-			// per-voice stereo CHORUS: three modulated delay taps (6-19ms), the L and R
-			// legs driven by slightly detuned LFOs so the wet legs decorrelate into a wide
-			// shimmer. `chorusMix` crossfades dry -> wet (0 = dry, the default, so a stored
-			// patch is unchanged until dialed up). This is a per-VOICE insert, not a
-			// persistent send: it shares the same monophonic hit lifecycle as `pan`, so no
-			// chorus tail carries between hits -- fine for a retriggering burst voice, and
-			// it keeps the wiring identical to the other per-hit MIX scalars.
-			wet = Mix.fill(3, { |i|
-				var lfoL = SinOsc.kr([0.11, 0.17, 0.23].at(i), (i / 3) * 2pi).range(0.006, 0.019);
-				var lfoR = SinOsc.kr([0.13, 0.19, 0.29].at(i), ((i / 3) + 0.25) * 2pi).range(0.006, 0.019);
-				DelayC.ar(sig, 0.05, [lfoL, lfoR]);
-			}) * (1 / 3);
-			sig = XFade2.ar(sig, wet, (chorusMix * 2) - 1);
+			Out.ar(out, sig);
+		}).add;
 
+		// --- per-channel strip: DJ-style filter ---
+		// filterPos is ONE bipolar axis (the DJ filter knob): -1 = low-pass fully
+		// closed, 0 = no filter (both sections wide open), +1 = high-pass fully
+		// up. Implemented as LPF -> HPF in SERIES rather than a mode switch, so
+		// sweeping through the centre is continuous (no crossfade click).
+		//   pos <= 0: LP cutoff 20 kHz (open) -> 60 Hz (closed), exponential
+		//   pos >= 0: HP cutoff 20 Hz (open) -> 12 kHz (thin), exponential
+		// NON-RESONANT on purpose: LPF/HPF are Butterworth (maximally flat, no
+		// peak). The first draft used RLPF/RHPF at rq 0.7, whose resonant bump --
+		// sitting near Nyquist when "open" -- read as distortion on hot FM
+		// material. The cutoffs are hard-clipped to the filters' stable range as
+		// a belt-and-braces bound on the pos clip. (An envelope-follower
+		// modulation input lived here briefly -- per-strip Amplitude.kr published
+		// on a control bus, sidechain-subscribable via a `follow` command -- but
+		// it never sounded right and was removed; the buses/args/command went
+		// with it.)
+		SynthDef("PotionChannel", { arg in = 0, out = 0, filterPos = 0;
+			var sig, pos, lpCut, hpCut;
+			sig = In.ar(in, 2);
+			pos = Lag.kr(filterPos, 0.05).clip(-1, 1);
+			lpCut = pos.min(0).neg.linexp(0, 1, 20000, 60).clip(60, 20000);
+			hpCut = pos.max(0).linexp(0, 1, 20, 12000).clip(20, 12000);
+			sig = LPF.ar(sig, lpCut);
+			sig = HPF.ar(sig, hpCut);
 			Out.ar(out, sig);
 		}).add;
 
@@ -228,10 +250,19 @@ Engine_Potionshop : CroneEngine {
 
 		context.server.sync;
 
-		// voices write to a private bus; the limiter sums it to the output.
+		// voices write to their channel bus; the strip filters it onto masterBus;
+		// the limiter sums that to the output. Execution order is load-bearing:
+		// fmGroup (voices) -> chGroup (strips) -> master (tail).
 		fmGroup = Group.new(context.xg);            // head of the engine group
+		chGroup = Group.after(fmGroup);             // strips run after the voices
 		voices = Array.newClear(numChannels);       // current voice per channel
 		masterBus = Bus.audio(context.server, 2);
+		channelBuses = Array.fill(numChannels, { Bus.audio(context.server, 2) });
+		strips = Array.fill(numChannels, { arg i;
+			Synth.new("PotionChannel", [
+				\in, channelBuses[i].index, \out, masterBus.index
+			], chGroup);
+		});
 		master = Synth.tail(context.xg, "PotionMaster", [
 			\in, masterBus.index, \out, context.out_b.index
 		]);
@@ -241,8 +272,7 @@ Engine_Potionshop : CroneEngine {
 		//      atk1, dec1, atkCurve1, decCurve1,   // op1 EG
 		//      atk2, dec2, atkCurve2, decCurve2,   // op2 EG
 		//      atk3, dec3, atkCurve3, decCurve3,   // op3 EG
-		//      atk4, dec4, atkCurve4, decCurve4,   // op4 EG
-		//      chorusMix)                          // per-voice dry/wet chorus -- 32 floats total
+		//      atk4, dec4, atkCurve4, decCurve4)   // op4 EG -- 31 floats total
 		//
 		// `algo` (1..32) selects the routing/carrier data; the rest are the final
 		// per-hit values Burst:fire already computes. The handler expands `algo`
@@ -253,7 +283,7 @@ Engine_Potionshop : CroneEngine {
 		// operator carries its OWN envelope (per-op EG) from its sequenced opEnvN
 		// shape, resolved in Burst:fire to {atk, dec, atkCurve, decCurve} and grouped
 		// per op at args 16..31.
-		this.addCommand("trig", "ffffffffffffffffffffffffffffffff", { arg msg;
+		this.addCommand("trig", "fffffffffffffffffffffffffffffff", { arg msg;
 			var freq = msg[1], amp = msg[2];
 			var algo = msg[3].asInteger.clip(1, 32);
 			var r2 = msg[4], r3 = msg[5], r4 = msg[6];
@@ -267,7 +297,6 @@ Engine_Potionshop : CroneEngine {
 			var atk2 = msg[20], dec2 = msg[21], atkCurve2 = msg[22], decCurve2 = msg[23];
 			var atk3 = msg[24], dec3 = msg[25], atkCurve3 = msg[26], decCurve3 = msg[27];
 			var atk4 = msg[28], dec4 = msg[29], atkCurve4 = msg[30], decCurve4 = msg[31];
-				var chorusMix = msg[32];
 			var spec, edges, carriers, amEdges, cgain, weights, amWeights, pmIndex, amDepth, voice;
 
 			spec = algorithms[algo - 1];
@@ -309,7 +338,7 @@ Engine_Potionshop : CroneEngine {
 			voices[ch - 1] !? { |v| v.set(\gate, 0) };
 
 			voice = Synth("PotionFM", [
-				\out, masterBus.index, \freq, freq, \amp, amp,
+				\out, channelBuses[ch - 1].index, \freq, freq, \amp, amp,
 				\r1, r1, \r2, r2, \r3, r3, \r4, r4,
 				\m21, weights[\m21], \m31, weights[\m31], \m41, weights[\m41],
 				\m32, weights[\m32], \m42, weights[\m42], \m43, weights[\m43],
@@ -328,7 +357,7 @@ Engine_Potionshop : CroneEngine {
 				\atk2, atk2, \dec2, dec2, \atkCurve2, atkCurve2, \decCurve2, decCurve2,
 				\atk3, atk3, \dec3, dec3, \atkCurve3, atkCurve3, \decCurve3, decCurve3,
 				\atk4, atk4, \dec4, dec4, \atkCurve4, atkCurve4, \decCurve4, decCurve4,
-				\pan, pan, \chorusMix, chorusMix
+				\pan, pan
 			], fmGroup);
 			voices[ch - 1] = voice;
 			// clear the slot when the voice frees itself (perc done or gate release)
@@ -336,7 +365,16 @@ Engine_Potionshop : CroneEngine {
 			voice.onFree { if(voices[ch - 1] == voice) { voices[ch - 1] = nil } };
 		});
 
-		// stop all currently-ringing voices (e.g. on script stop).
+		// filter(ch, pos): set a channel strip's DJ filter position (-1 LP .. 0
+		// off .. +1 HP). Persistent-synth state, so it's PUSHED on edit from Lua
+		// (Burst:push_filter) rather than riding each trig like the voice scalars.
+		this.addCommand("filter", "if", { arg msg;
+			var ch = msg[1].asInteger.clip(1, numChannels);
+			strips[ch - 1].set(\filterPos, msg[2].clip(-1, 1));
+		});
+
+		// stop all currently-ringing voices (e.g. on script stop). The strips
+		// stay up (they are the channels' signal path, silent without voices).
 		this.addCommand("panic", "", { arg msg;
 			fmGroup.freeAll;
 			voices.fill(nil);
@@ -345,7 +383,10 @@ Engine_Potionshop : CroneEngine {
 
 	free {
 		master.free;
+		strips.do(_.free);
+		chGroup.free;
 		fmGroup.free;
 		masterBus.free;
+		channelBuses.do(_.free);
 	}
 }

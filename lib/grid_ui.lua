@@ -41,11 +41,12 @@
 --   CLR clears BOTH layers (A + the B/alt layer where present) of the tapped
 --   channel; COPY/PASTE act on the MAIN (A-layer) sequins only, leaving the B (alt)
 --   layer intact so it can keep variating the copied sequins.
---   MIX:   rows 0-5 = chorus dry/WET (col 5) + PAN (col 6) + channel LEVEL (col 7) + per-op LEVEL (cols 8-11)
---          + voice scalars mod index (12) / FM feedback (13) / FM
---          ALGORITHM (15, per-channel; col 14 dark). Tap a cell to open its value picker on rows
---          6-7. (All four op ratios are sequenced — edited on their row-7 pages, not
---          here, so cols 0-4 of the MIX channel rows are dark.)
+--   MIX:   rows 0-5 = signal-flow order: mod INDEX (col 0) + FM ALGORITHM (col 1, per-channel),
+--          then op1-4 LEVEL (cols 3-6) + FM FEEDBACK (col 8), then the output stage:
+--          FILTER (col 13, one bipolar DJ knob: LP left / off centre / HP right) +
+--          PAN (col 14) + channel LEVEL/volume (col 15). Cols 2/7/9-12 are dark
+--          separators. Tap a cell to open its value picker on rows 6-7. (All four op
+--          ratios are sequenced — edited on their row-7 pages, not here.)
 --   PROB:  rows 0-5 = note alt-trig hold/step (cols 0-1)
 --          · op1/2/3/4 ratio-seq trig toggles (cols 3-6, single button each:
 --            off=hold, on=step)
@@ -145,18 +146,19 @@ local function launch_channel_at(x, y)
   end
   return nil
 end
--- MIX page channel-row layout: stereo PAN on col 6, channel LEVEL on col 7, op1..4
--- LEVEL on cols 8..11 (one contiguous strip), then the per-channel voice scalars —
--- FM mod index (col 12), FM feedback (col 13), algorithm (col 15). Col 14 is dark,
--- separating the scalar strip from the algorithm picker.
--- All four op ratios are sequenced (row-7 pages), not here, so cols 0..4 are dark.
-local CHORUS_COL = 5       -- per-channel chorus dry/wet, just left of pan
-local PAN_COL = 6          -- per-channel stereo pan, just left of the level strip
-local MIX_LEVEL_COL = 7
-local OP_LEVEL_COL0 = 8
-local MOD_INDEX_COL = 12
-local FM_FEEDBACK_COL = 13
-local ALGO_COL = 15
+-- MIX page channel-row layout follows the voice's signal flow left -> right: the FM
+-- SOURCE scalars first (mod index col 0, algorithm col 1), then the OPERATOR mix (op1..4
+-- LEVEL on cols 3..6, FM feedback on col 8), then the OUTPUT stage on the far right
+-- (FILTER col 13, stereo PAN col 14, channel LEVEL/volume col 15). Cols 2 and 7 are
+-- dark separators; cols 9..12 are dark. All four op ratios are sequenced (row-7
+-- pages), not here.
+local MOD_INDEX_COL = 0     -- FM mod index (PM/AM depth)
+local ALGO_COL = 1          -- FM algorithm (operator routing, per-channel)
+local OP_LEVEL_COL0 = 3     -- op1..op4 output levels on cols 3..6
+local FM_FEEDBACK_COL = 8   -- op4 self-feedback
+local FILTER_COL = 13       -- DJ filter position (LP | off | HP, output stage)
+local PAN_COL = 14          -- stereo pan (output stage)
+local MIX_LEVEL_COL = 15    -- channel level / volume (final output)
 -- The step picker's 32-value grid renders on the control rows (6-7) while a pick
 -- is in progress, leaving all six channel rows visible so the step being edited
 -- is never hidden behind the picker. (The scale picker still owns rows 0-5.)
@@ -393,6 +395,10 @@ local ALGO_VALUES = range(32, function(i) return i + 1 end)  -- 1..32 FM algorit
 -- default; i = 0 clamps to -1 (a duplicate of i = 1, since 32 cells can't be
 -- symmetric about a centre cell otherwise). Param/grid index = i (0-based).
 local PAN_VALUES = range(32, function(i) return math.max(-1, math.min(1, (i - 16) / 15)) end)
+-- DJ filter position, same bipolar 32-cell mapping as pan: cell 16 (index i = 16)
+-- is exactly 0 = no filter (the grid-exact default); left of centre closes the
+-- low-pass toward -1, right of centre raises the high-pass toward +1.
+local FILTER_VALUES = range(32, function(i) return math.max(-1, math.min(1, (i - 16) / 15)) end)
 -- Curated per-channel quantize grids (events per whole note). Mirrors
 -- Burst.QUANTIZE_VALUES — keep in sync. Edited on the per-channel PRISM page.
 local QUANTIZE_VALUES = {3, 4, 6, 8, 12, 16, 24, 32}
@@ -411,6 +417,13 @@ local function pan_label(p)
   p = p or 0
   if math.abs(p) < 1e-6 then return 'C' end
   return (p < 0 and 'L' or 'R') .. round(math.abs(p) * 100)
+end
+-- Human-readable filter position: 'off' at centre, 'LP<n>'/'HP<n>' as a 0..100
+-- distance into the low-/high-pass half of the knob.
+local function filter_label(p)
+  p = p or 0
+  if math.abs(p) < 1e-6 then return 'off' end
+  return (p < 0 and 'LP' or 'HP') .. round(math.abs(p) * 100)
 end
 local function eq(a, b) return math.abs(a - b) < 1e-6 end
 
@@ -525,6 +538,8 @@ GridUI.FM_FEEDBACK_VALUES = FM_FEEDBACK_VALUES
 GridUI.ALGO_VALUES = ALGO_VALUES
 GridUI.PAN_VALUES = PAN_VALUES
 GridUI.pan_label = pan_label
+GridUI.FILTER_VALUES = FILTER_VALUES  -- bipolar DJ filter-position grid
+GridUI.filter_label = filter_label
 
 -- opts.on_status(string): pushed status text (for screen). opts.on_redraw():
 -- called after any state change so the screen can refresh too. opts.on_edit(ev):
@@ -607,10 +622,18 @@ function GridUI:_focus(ch)
   self.on_redraw()
 end
 
+-- Channel-strip fields that live on a PERSISTENT SC synth (PotionChannel):
+-- unlike the other scalars they can't ride the next trig, so a mutation must be
+-- pushed to the engine immediately (Burst:push_filter).
+local STRIP_FIELDS = { filterPos = true }
+
 -- single edit path for channel scalar fields: grid and screen both write
 -- through here so on_edit sees every mutation. ch is 0-based.
 function GridUI:set_scalar(ch, field, value)
   self:chan(ch)[field] = value
+  if STRIP_FIELDS[field] and self.engine.push_filter then
+    self.engine:push_filter(ch + 1)
+  end
   self.on_edit{ type = 'scalar', ch = ch }
 end
 
@@ -697,15 +720,15 @@ function GridUI:handle_normal_press(x, y)
       return
     end
     if self.mixMode then
-      -- chorus dry/wet on col 5, pan on col 6, channel level on col 7, op1..op4 levels
-      -- on cols 8..11 (one contiguous strip), then the voice scalars (mod index 12, FM
-      -- feedback 13, algorithm 15; col 14 is dark). All four op ratios are sequenced now
-      -- (their own row-7 pages), so cols 0..4 are dark.
-      if x == CHORUS_COL then                   -- chorus dry/wet
-        self:open_scalar_picker(y, 'chorusMix', OP_LEVEL_VALUES, 'wet')
+      -- signal-flow layout: mod index (col 0) + algorithm (col 1), op1..op4 levels
+      -- (cols 3..6) + FM feedback (col 8), then filter (col 13) + pan (col 14) +
+      -- channel level (col 15). Cols 2/7/9..12 are dark. All four op ratios are
+      -- sequenced (their row-7 pages).
+      if x == FILTER_COL then                    -- DJ filter (LP | off | HP)
+        self:open_scalar_picker(y, 'filterPos', FILTER_VALUES, 'filter')
       elseif x == PAN_COL then                   -- stereo pan
         self:open_scalar_picker(y, 'pan', PAN_VALUES, 'pan')
-      elseif x == MIX_LEVEL_COL then            -- channel level
+      elseif x == MIX_LEVEL_COL then            -- channel level (volume)
         self:open_scalar_picker(y, 'level', OP_LEVEL_VALUES, 'level')
       elseif x == MOD_INDEX_COL then            -- FM mod index
         self:open_scalar_picker(y, 'modIndex', MOD_INDEX_VALUES, 'index')
@@ -1000,7 +1023,8 @@ end
 -- a copied channel carries its whole voicing. CLR leaves the scalars alone (they are
 -- not in PARAMS). quantize stays out — it's a per-channel performance grid, not voicing.
 local MIX_SCALARS = {
-  'chorusMix', 'pan', 'level', 'opLevel1', 'opLevel2', 'opLevel3', 'opLevel4',
+  'pan', 'filterPos',
+  'level', 'opLevel1', 'opLevel2', 'opLevel3', 'opLevel4',
   'modIndex', 'fmFeedback', 'algo', 'envMode', 'geodeMode',
 }
 
@@ -1266,27 +1290,28 @@ function GridUI:render_channel_row(ch)
   end
 end
 
--- MIX page: chorus dry/wet (col 5) + pan (col 6) + channel level (col 7) + per-op
--- level (cols 8..11) + the voice scalars mod index/FM feedback (cols 12..13) +
--- per-channel FM algorithm (col 15), each cell's brightness encoding its value
--- (normalised to its own range); picker opens on tap. All four op ratios are
--- sequenced (their own row-7 pages), so cols 0..4 stay dark here.
+-- MIX page (signal-flow order): mod index (col 0) + FM algorithm (col 1), op1..4 level
+-- (cols 3..6) + FM feedback (col 8), then pan (col 14) + channel level/volume (col 15).
+-- Each cell's brightness encodes its value (normalised to its own range); picker opens
+-- on tap. All four op ratios are sequenced (their own row-7 pages).
 function GridUI:render_mix_row(ch)
   local c = self:chan(ch)
   local function bright(frac) return math.max(2, round(2 + clamp(frac, 0, 1) * 11)) end
   for x = 0, GRID_W - 1 do self.g:set_led(x, ch, 0); self.g:set_strobe(x, ch, 'off') end
-  self.g:set_led(CHORUS_COL, ch, bright(c.chorusMix or 0))       -- 0..1 dry/wet
-  self.g:set_led(PAN_COL, ch, bright(((c.pan or 0) + 1) / 2))  -- -1..1 -> 0..1 brightness
-  self.g:set_led(MIX_LEVEL_COL, ch, bright(c.level or 0))
+  self.g:set_led(MOD_INDEX_COL, ch, bright(((c.modIndex or 1) - 1) / 31))
+  self.g:set_led(ALGO_COL, ch, bright(((c.algo or 1) - 1) / 31))
   for op = 1, 4 do
     self.g:set_led(OP_LEVEL_COL0 + (op - 1), ch, bright(c['opLevel' .. op] or 1))
   end
-  self.g:set_led(MOD_INDEX_COL, ch, bright(((c.modIndex or 1) - 1) / 31))
   self.g:set_led(FM_FEEDBACK_COL, ch, bright((c.fmFeedback or 0) / 4))
-  self.g:set_led(ALGO_COL, ch, bright(((c.algo or 1) - 1) / 31))
+  -- filter brightness = distance from centre (off = dim, either extreme = bright),
+  -- so the cell reads "how much filtering", not which direction.
+  self.g:set_led(FILTER_COL, ch, bright(math.abs(c.filterPos or 0)))
+  self.g:set_led(PAN_COL, ch, bright(((c.pan or 0) + 1) / 2))  -- -1..1 -> 0..1 brightness
+  self.g:set_led(MIX_LEVEL_COL, ch, bright(c.level or 0))
   if self.picker and self.picker.kind == 'scalar' and self.picker.ch == ch then
     local f = self.picker.field
-    if f == 'chorusMix' then self.g:set_led(CHORUS_COL, ch, 15)
+    if f == 'filterPos' then self.g:set_led(FILTER_COL, ch, 15)
     elseif f == 'pan' then self.g:set_led(PAN_COL, ch, 15)
     elseif f == 'level' then self.g:set_led(MIX_LEVEL_COL, ch, 15)
     elseif f == 'modIndex' then self.g:set_led(MOD_INDEX_COL, ch, 15)
@@ -1637,7 +1662,7 @@ function GridUI:_status()
   elseif self.prismMode then
     s = 'PRISM — 0-7 quant, 9-11 env, 13-15 geode'
   elseif self.mixMode then
-    s = 'MIX — 5 wet 6 pan 7 lvl, 8-11 op, 12 idx 13 fb 15 alg'
+    s = 'MIX — 0 idx 1 alg, 3-6 op 8 fb, 13 flt 14 pan 15 vol'
   elseif self.actionMode then
     s = string.upper(self.actionMode) .. ' — tap a channel'
   elseif self.picker and self.picker.kind == 'scalar' then
@@ -1647,6 +1672,8 @@ function GridUI:_status()
       s = 'edit ch' .. (self.picker.ch + 1) .. ' algo=' .. (ALGO_NAMES[val] or '?')
     elseif f == 'pan' then
       s = 'edit ch' .. (self.picker.ch + 1) .. ' pan=' .. pan_label(val)
+    elseif f == 'filterPos' then
+      s = 'edit ch' .. (self.picker.ch + 1) .. ' filter=' .. filter_label(val)
     else
       local lbl = f:match('^opLevel') and ('op' .. f:sub(-1) .. ' level')
         or ({modIndex = 'mod index', fmFeedback = 'fm fb'})[f]

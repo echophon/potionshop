@@ -89,8 +89,8 @@ defs = [
 		atk2 = 0.001, dec2 = 0.2, atkCurve2 = -4, decCurve2 = -4,
 		atk3 = 0.001, dec3 = 0.2, atkCurve3 = -4, decCurve3 = -4,
 		atk4 = 0.001, dec4 = 0.2, atkCurve4 = -4, decCurve4 = -4,
-		gate = 1, pan = 0, chorusMix = 0;
-		var e1, e2, e3, e4, cut, free, maxTime, o1, o2, o3, o4, sig, wet;
+		gate = 1, pan = 0;
+		var e1, e2, e3, e4, cut, free, maxTime, o1, o2, o3, o4, sig;
 		e1 = EnvGen.kr(Env.new([0, 1, 0], [atk1, max(0.01, dec1)], [atkCurve1, decCurve1]));
 		e2 = EnvGen.kr(Env.new([0, 1, 0], [atk2, max(0.01, dec2)], [atkCurve2, decCurve2]));
 		e3 = EnvGen.kr(Env.new([0, 1, 0], [atk3, max(0.01, dec3)], [atkCurve3, decCurve3]));
@@ -111,12 +111,18 @@ defs = [
 		sig = (c1 * o1) + (c2 * o2) + (c3 * o3) + (c4 * o4);
 		sig = sig * cut * amp * 0.5;
 		sig = Pan2.ar(sig, pan);
-		wet = Mix.fill(3, { |i|
-			var lfoL = SinOsc.kr([0.11, 0.17, 0.23].at(i), (i / 3) * 2pi).range(0.006, 0.019);
-			var lfoR = SinOsc.kr([0.13, 0.19, 0.29].at(i), ((i / 3) + 0.25) * 2pi).range(0.006, 0.019);
-			DelayC.ar(sig, 0.05, [lfoL, lfoR]);
-		}) * (1 / 3);
-		sig = XFade2.ar(sig, wet, (chorusMix * 2) - 1);
+		Out.ar(out, sig);
+	}),
+	// per-channel strip: DJ filter (non-resonant Butterworth LPF -> HPF in series,
+	// one bipolar position) (mirror of PotionChannel).
+	SynthDef("PotionChannel", { arg in = 0, out = 0, filterPos = 0;
+		var sig, pos, lpCut, hpCut;
+		sig = In.ar(in, 2);
+		pos = Lag.kr(filterPos, 0.05).clip(-1, 1);
+		lpCut = pos.min(0).neg.linexp(0, 1, 20000, 60).clip(60, 20000);
+		hpCut = pos.max(0).linexp(0, 1, 20, 12000).clip(20, 12000);
+		sig = LPF.ar(sig, lpCut);
+		sig = HPF.ar(sig, hpCut);
 		Out.ar(out, sig);
 	}),
 	SynthDef("PotionMaster", { arg in = 0, out = 0;

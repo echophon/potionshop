@@ -445,10 +445,16 @@ local function default_channel()
     -- +1 = hard right. Like the other MIX scalars it's exempt from randomize/mutate
     -- and survives clear/copy/paste. Drawn straight at fire time (SC Pan2).
     pan = 0,
-    -- per-channel STATIC chorus dry/wet (MIX page): 0 = dry (default, no chorus),
-    -- 1 = fully wet. Like pan it's exempt from randomize/mutate, survives
-    -- clear/copy/paste, and rides the voice as a per-hit trig arg (SC per-voice chorus).
-    chorusMix = 0,
+    -- per-channel DJ-style multimode filter (MIX page, col 13): one bipolar knob,
+    -- -1 = low-pass closed, 0 = no filter (both sections open), +1 = high-pass
+    -- fully up. Unlike the other MIX scalars it lives on a PERSISTENT SC strip
+    -- synth (PotionChannel), so edits are PUSHED via Burst:push_filter instead of
+    -- riding each trig. Travels with copy/paste and is exempt from
+    -- randomize/mutate, like the rest of the MIX scalars. (A follower
+    -- subscription — followSrc/followDepth sidechaining another channel's
+    -- envelope onto this knob — lived here briefly; it never sounded right and
+    -- was removed.)
+    filterPos = 0,
     burstProb = 1,
     probHit = false,
     resetInterval = 0,
@@ -529,6 +535,23 @@ function Burst:running_channels()
   local out = {}
   for i = 1, NUM_CHANNELS do out[i] = self.running[i] end
   return out
+end
+
+-- ---- channel-strip push (filter) ----------------------------------------
+
+-- Push a channel's filter position to the SC engine's persistent PotionChannel
+-- strip. It's the one scalar that can't ride trig (the strip outlives every
+-- voice), so every edit path lands here: GridUI:set_scalar forwards the filter
+-- field, and the param action calls it directly — which also replays boot/PSET
+-- state onto the synths at params:bang. Guarded on the global norns `engine`
+-- exactly like fire(), so the off-hardware tests (no engine global) pass
+-- through silently. ch is 1-based.
+function Burst:push_filter(ch)
+  local c = self.channels[ch]
+  if not c then return end
+  if engine and engine.filter then
+    engine.filter(ch, c.filterPos or 0)
+  end
 end
 
 -- ---- sequins reset -----------------------------------------------------
@@ -878,7 +901,6 @@ function Burst:fire(ch, beat, freq, level, env1, env2, env3, env4, div, total, h
   local mod_index = c.modIndex
   local feedback  = c.fmFeedback
   local pan       = c.pan or 0
-  local chorus    = c.chorusMix or 0
   -- per-channel static operator levels, passed straight to the voice.
   local ol = {c.opLevel1, c.opLevel2, c.opLevel3, c.opLevel4}
   local out = self.outputs
@@ -888,7 +910,6 @@ function Burst:fire(ch, beat, freq, level, env1, env2, env3, env4, div, total, h
     -- rides at arg 14. Each operator now carries its OWN envelope (per-op EG, DX-style)
     -- from its sequenced SHAPE index, resolved above to {atk, dec, atkCurve, decCurve}
     -- and grouped per op at args 16..31 (op1 16-19, op2 20-23, op3 24-27, op4 28-31).
-    -- The per-channel chorus dry/wet rides at arg 32 (per-hit, like pan at arg 15).
     -- ol[1..4] are this channel's static operator levels, geode-shaped per hit above.
     -- See the trig command header in Engine_Potionshop.sc for the full arg order.
     engine.trig(geo_freq, actual_level, c.algo,
@@ -898,8 +919,7 @@ function Burst:fire(ch, beat, freq, level, env1, env2, env3, env4, div, total, h
                 atk1, dec1, atkC1, decC1,
                 atk2, dec2, atkC2, decC2,
                 atk3, dec3, atkC3, decC3,
-                atk4, dec4, atkC4, decC4,
-                chorus)
+                atk4, dec4, atkC4, decC4)
   end
   if out then
     -- external voices can't render FM timbre; hand them the channel's brightness

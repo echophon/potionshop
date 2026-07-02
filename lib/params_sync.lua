@@ -407,13 +407,16 @@ function M:_add_channel_params(n)
       self:request_render()
     end)
   end)
-  -- chorus dry/wet — static per-channel scalar on the 0..1 (1/31) grid (0 = dry
-  -- default), the same discrete set the MIX picker uses. Rides the voice per hit.
+  -- DJ filter position — the channel-strip scalar. Same bipolar 0..31 grid as
+  -- pan (index 16 = centre = no filter). It lives on a persistent SC synth, so
+  -- the action PUSHES to the engine (Burst:push_filter) — which also replays
+  -- boot/PSET state at params:bang.
   def(1, function()
-    params:add_number(id('chorus'), 'chorus', 0, 31, round(c.chorusMix * 31),
-      function(p) return string.format('%.2f', p:get() / 31) end)
-    params:set_action(id('chorus'), function(v)
-      c.chorusMix = v / 31
+    params:add_number(id('filter'), 'filter', 0, 31, round(c.filterPos * 15 + 16),
+      function(p) return GridUI.filter_label(clamp((p:get() - 16) / 15, -1, 1)) end)
+    params:set_action(id('filter'), function(v)
+      c.filterPos = clamp((v - 16) / 15, -1, 1)
+      eng:push_filter(n)
       self:request_render()
     end)
   end)
@@ -627,7 +630,7 @@ function M:reflect_scalars(n)
   params:set(id('octave'), c.octave, true)
   params:set(id('level'), round(c.level * 31), true)
   params:set(id('pan'), round(c.pan * 15 + 16), true)
-  params:set(id('chorus'), round(c.chorusMix * 31), true)
+  params:set(id('filter'), round((c.filterPos or 0) * 15 + 16), true)
   for op = 1, 4 do params:set(id('level' .. op), round(c['opLevel' .. op] * 31), true) end
   params:set(id('mod_index'), round(c.modIndex), true)
   params:set(id('fm_feedback'), round(c.fmFeedback / 4 * 31), true)
