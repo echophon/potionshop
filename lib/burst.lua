@@ -472,16 +472,18 @@ local function default_channel()
     root = 0,
     octave = 0,     -- -2..2, whole-octave pitch shift (perf page)
     altTrig = 0,    -- alt(B) note layering: 0=hold (add&hold) 1=step (per-hit)
-    -- per-op-ratio sequence trig mode (prob page): 0=hold (the ratio is drawn once
-    -- per burst, held for every hit) 1=step (advance the opRatioN B index lane per
-    -- hit, so the ratio arpeggiates within a burst). Mirrors altTrig for the note B.
-    opRatio1Trig = 0, opRatio2Trig = 0, opRatio3Trig = 0, opRatio4Trig = 0,
-    -- per-op-envelope sequence trig mode (prob page): 0=hold (the env shape is drawn
-    -- once per burst) 1=step (advance that op env's B index-offset lane per hit,
-    -- re-resolved against the held A, so the envelope shape arpeggiates within a
-    -- burst). Identical mechanism to the op-ratio trig (walks B), now that op
-    -- envelopes have a B layer.
-    opEnv1Trig = 0, opEnv2Trig = 0, opEnv3Trig = 0, opEnv4Trig = 0,
+    -- op-ratio sequence trig mode (prob page): ONE switch for all four ops.
+    -- 0=hold (each ratio is drawn once per burst, held for every hit) 1=step
+    -- (advance every opRatioN B index lane per hit, so the ratios arpeggiate
+    -- within a burst). Mirrors altTrig for the note B. (Was four per-op fields
+    -- opRatio1..4Trig; collapsed — they were always flipped together.)
+    opSeqTrig = 0,
+    -- op-envelope sequence trig mode (prob page): ONE switch for all four op
+    -- envs. 0=hold (each env shape is drawn once per burst) 1=step (advance
+    -- every opEnvN B index-offset lane per hit, re-resolved against the held A,
+    -- so the envelope shapes arpeggiate within a burst). Identical mechanism to
+    -- opSeqTrig (walks B). (Was four per-op fields opEnv1..4Trig; collapsed.)
+    opEnvTrig = 0,
   }
 end
 
@@ -776,27 +778,28 @@ function Burst:run_burst(ch, token, target_in)
         freq = scales.degree_to_freq(degreeA + degreeB, self.scale, c.root)
       end
 
-      -- OP-RATIO STEP MODE: per sequence, when opRatioNTrig == 1 the B (offset) lane
-      -- advances per hit and re-resolves against the held A, so the index walks
+      -- OP-RATIO STEP MODE: when opSeqTrig == 1 every op's B (offset) lane
+      -- advances per hit and re-resolves against its held A, so the indices walk
       -- through neighbouring ratios within the burst (A stays the per-burst base —
       -- exactly like the note alt-trig above). Same placement/rationale: above the
       -- probHit skip and i > 0, so a skipped hit still consumes a B value.
-      if i > 0 then
-        if c.opRatio1Trig == 1 then ratio1 = op_ratio(ratio1A, c.opRatio1B(), rset1) end
-        if c.opRatio2Trig == 1 then ratio2 = op_ratio(ratio2A, c.opRatio2B(), rset2) end
-        if c.opRatio3Trig == 1 then ratio3 = op_ratio(ratio3A, c.opRatio3B(), rset3) end
-        if c.opRatio4Trig == 1 then ratio4 = op_ratio(ratio4A, c.opRatio4B(), rset4) end
+      if i > 0 and c.opSeqTrig == 1 then
+        ratio1 = op_ratio(ratio1A, c.opRatio1B(), rset1)
+        ratio2 = op_ratio(ratio2A, c.opRatio2B(), rset2)
+        ratio3 = op_ratio(ratio3A, c.opRatio3B(), rset3)
+        ratio4 = op_ratio(ratio4A, c.opRatio4B(), rset4)
       end
 
-      -- OP-ENV STEP MODE: per op, when opEnvNTrig == 1 the B (offset) lane advances
-      -- per hit and re-resolves against the held A, so the envelope shape walks
-      -- through neighbouring contours within the burst (A stays the per-burst base).
-      -- Identical to the op-ratio step above; same i > 0 / skip-still-advances rule.
-      if i > 0 then
-        if c.opEnv1Trig == 1 then env1 = op_env(env1A, c.opEnv1B()) end
-        if c.opEnv2Trig == 1 then env2 = op_env(env2A, c.opEnv2B()) end
-        if c.opEnv3Trig == 1 then env3 = op_env(env3A, c.opEnv3B()) end
-        if c.opEnv4Trig == 1 then env4 = op_env(env4A, c.opEnv4B()) end
+      -- OP-ENV STEP MODE: when opEnvTrig == 1 every op env's B (offset) lane
+      -- advances per hit and re-resolves against its held A, so the envelope
+      -- shapes walk through neighbouring contours within the burst (A stays the
+      -- per-burst base). Identical to the op-ratio step above; same i > 0 /
+      -- skip-still-advances rule.
+      if i > 0 and c.opEnvTrig == 1 then
+        env1 = op_env(env1A, c.opEnv1B())
+        env2 = op_env(env2A, c.opEnv2B())
+        env3 = op_env(env3A, c.opEnv3B())
+        env4 = op_env(env4A, c.opEnv4B())
       end
 
       if c.probHit and math.random() > c.burstProb then
@@ -843,16 +846,9 @@ function Burst:fire(ch, beat, freq, level, env1, env2, env3, env4, div, total, h
   -- geo_freq stays at the target pitch (this voice has no pitch envelope).
   local geo_freq = freq
 
-  -- FM ratios: all four are the sequenced (A+B) values drawn for this burst (op1 is
-  -- the fundamental). The brightness proxy handed to external outputs is the largest
-  -- ratio among this algo's active modulators (or op1's ratio for additive) — a
-  -- stand-in for the old harm.
-  local ratios = {ratio1, ratio2, ratio3, ratio4}
-  local bright_ratio = 0
-  for _, op in ipairs(ALGO_MODULATORS[c.algo] or {}) do
-    if ratios[op] > bright_ratio then bright_ratio = ratios[op] end
-  end
-  if bright_ratio == 0 then bright_ratio = ratios[1] end  -- additive: no modulators
+  -- FM ratios: all four are the sequenced (A+B) values drawn for this burst (op1 is the
+  -- fundamental). They are handed to external outputs per op (MIDI CC / ER-301 CV
+  -- ceilings); there is no longer an aggregate brightness proxy.
 
   -- per-hit timing, drives the amp-envelope decay maths below.
   local sec_per_beat = 60 / get_tempo()
@@ -922,12 +918,19 @@ function Burst:fire(ch, beat, freq, level, env1, env2, env3, env4, div, total, h
                 atk4, dec4, atkC4, decC4)
   end
   if out then
-    -- external voices can't render FM timbre; hand them the channel's brightness
-    -- proxy (largest active modulator ratio, used by the ER-301 brightness CV) plus
-    -- the raw op1/op2 ratios, which the MIDI path sends as modwheel/breath CCs. The
-    -- note length follows op1's (carrier) envelope.
-    out:note(ch, { freq = geo_freq, level = actual_level, harm = bright_ratio,
-                   op1 = ratio1, op2 = ratio2, dur = atk1 + dec1 })
+    -- external voices can't render FM timbre; hand them the four op ratios AND each
+    -- op's resolved envelope segment {atk, dec, atkCurve, decCurve}. The MIDI + ER-301
+    -- paths STREAM each op's ratio-ceilinged envelope contour as CC / CV (see
+    -- outputs.stream_op_ccs / stream_op_cvs), so both the op ratio and op env sequences
+    -- reach the outside world as live control envelopes. The note length (for MIDI /
+    -- crow) follows op1's (carrier) envelope.
+    out:note(ch, { freq = geo_freq, level = actual_level,
+                   ratios = {ratio1, ratio2, ratio3, ratio4},
+                   env_segs = { {atk1, dec1, atkC1, decC1},
+                                {atk2, dec2, atkC2, decC2},
+                                {atk3, dec3, atkC3, decC3},
+                                {atk4, dec4, atkC4, decC4} },
+                   dur = atk1 + dec1 })
   end
 
   self:emit{ type = 'fire', ch = ch, beat = beat,

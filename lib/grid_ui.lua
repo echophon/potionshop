@@ -41,17 +41,16 @@
 --   CLR clears BOTH layers (A + the B/alt layer where present) of the tapped
 --   channel; COPY/PASTE act on the MAIN (A-layer) sequins only, leaving the B (alt)
 --   layer intact so it can keep variating the copied sequins.
---   MIX:   rows 0-5 = signal-flow order: mod INDEX (col 0) + FM ALGORITHM (col 1, per-channel),
+--   MIX:   rows 0-5 = signal-flow order: FM ALGORITHM (col 0, per-channel) + mod INDEX (col 1),
 --          then op1-4 LEVEL (cols 3-6) + FM FEEDBACK (col 8), then the output stage:
 --          FILTER (col 13, one bipolar DJ knob: LP left / off centre / HP right) +
 --          PAN (col 14) + channel LEVEL/volume (col 15). Cols 2/7/9-12 are dark
 --          separators. Tap a cell to open its value picker on rows 6-7. (All four op
 --          ratios are sequenced — edited on their row-7 pages, not here.)
---   PROB:  rows 0-5 = note alt-trig hold/step (cols 0-1)
---          · op1/2/3/4 ratio-seq trig toggles (cols 3-6, single button each:
---            off=hold, on=step)
---          · op1/2/3/4 env shape-seq trig toggles (cols 7-10, single button each)
---          · prob 25/50/75/100% (cols 11-14, right-justified)
+--   PROB:  rows 0-5 = probability (col 0, tap -> 32-value picker on rows 6-7)
+--          · three hold<->step trig toggles (single button each, off=hold on=step):
+--            note alt(B) layer (col 3) · op-ratio seqs (col 4, ONE switch for all
+--            four B lanes) · op-env seqs (col 5, same)
 --          · col 15 burst/hit toggle
 --   PERF:  rows 0-5 = reset off/1/2/4 bars (cols 0..3) · octave -2..+2 (cols 5..9)
 --          · rate (cols 11..15)
@@ -147,13 +146,13 @@ local function launch_channel_at(x, y)
   return nil
 end
 -- MIX page channel-row layout follows the voice's signal flow left -> right: the FM
--- SOURCE scalars first (mod index col 0, algorithm col 1), then the OPERATOR mix (op1..4
+-- SOURCE scalars first (algorithm col 0, mod index col 1), then the OPERATOR mix (op1..4
 -- LEVEL on cols 3..6, FM feedback on col 8), then the OUTPUT stage on the far right
 -- (FILTER col 13, stereo PAN col 14, channel LEVEL/volume col 15). Cols 2 and 7 are
 -- dark separators; cols 9..12 are dark. All four op ratios are sequenced (row-7
 -- pages), not here.
-local MOD_INDEX_COL = 0     -- FM mod index (PM/AM depth)
-local ALGO_COL = 1          -- FM algorithm (operator routing, per-channel)
+local MOD_INDEX_COL = 1     -- FM mod index (PM/AM depth)
+local ALGO_COL = 0          -- FM algorithm (operator routing, per-channel)
 local OP_LEVEL_COL0 = 3     -- op1..op4 output levels on cols 3..6
 local FM_FEEDBACK_COL = 8   -- op4 self-feedback
 local FILTER_COL = 13       -- DJ filter position (LP | off | HP, output stage)
@@ -191,23 +190,21 @@ local OCTAVE_VALUES = {-2, -1, 0, 1, 2}
 local OCTAVE_COLS   = {5, 6, 7, 8, 9}
 local RATE_VALUES = {0.25, 0.5, 1, 2, 4}
 local RATE_COLS   = {11, 12, 13, 14, 15}
--- PROB page: note alt-trig mode packed left (cols 0-1), the four op-ratio sequence
--- trig toggles next to it (cols 3-6), the two envelope-shape trig toggles after them
--- (cols 8-9), prob options right-justified (cols 11-14), hit toggle at the far right
--- (col 15). burstProb is a discrete 4-value set.
-local ALT_TRIG_COLS  = {0, 1}                -- note alt(B) layer: hold / step
--- op1/2/3/4 ratio-sequence trig: ONE button each (off=hold, on=step), to save grid
--- space (vs the note pair). Cols 3/4/5/6 -> opRatio1/2/3/4 trig.
-local OP_TRIG_COLS   = {3, 4, 5, 6}
-local OP_TRIG_FIELDS = {'opRatio1Trig', 'opRatio2Trig', 'opRatio3Trig', 'opRatio4Trig'}
--- per-op envelope sequence trig: ONE button each (off=hold, on=step), same as the
--- op-ratio toggles. Cols 7/8/9/10 -> opEnv1/2/3/4 trig (step walks that op env's B
--- index-offset lane, like the op ratios).
-local OP_ENV_TRIG_COLS   = {7, 8, 9, 10}
-local OP_ENV_TRIG_FIELDS = {'opEnv1Trig', 'opEnv2Trig', 'opEnv3Trig', 'opEnv4Trig'}
-local PROB_VALUES   = {0.25, 0.5, 0.75, 1.0}
-local PROB_COLS     = {11, 12, 13, 14}
-local PROB_HIT_COL  = 15
+-- PROB page: probability collapsed to ONE cell (col 0) that opens a 32-value
+-- scalar picker on rows 6-7 (the same picker machinery as the MIX scalars),
+-- then three single-button hold<->step trig toggles (off=hold, on=step): the
+-- note alt(B) layer (col 3), the op-ratio sequences (col 4, ONE switch driving
+-- all four B lanes together) and the op-env sequences (col 5, same), with the
+-- burst/hit toggle at the far right (col 15).
+local PROB_COL        = 0
+local PROB_HIT_COL    = 1
+local NOTE_TRIG_COL   = 3   -- altTrig (note alt(B) layer)
+local OP_SEQ_TRIG_COL = 4   -- opSeqTrig (all four op-ratio B lanes)
+local OP_ENV_TRIG_COL = 5   -- opEnvTrig (all four op-env B lanes)
+-- 32 even probability steps (1/32 .. 1), so 100% (the default) and the old
+-- 25/50/75% presets all stay grid-exact.
+local PROB_VALUES = {}
+for i = 1, 32 do PROB_VALUES[i] = i / 32 end
 
 local ENV_MODE_NAMES       = {'shape', 'burst', 'hit'}
 local GEODE_MODE_NAMES     = {'transient', 'sustain', 'cycle'}  -- amp geode, always on
@@ -697,30 +694,26 @@ function GridUI:handle_normal_press(x, y)
       return
     end
     if self.probMode then
-      local trig_idx = index_of(ALT_TRIG_COLS, x)
-      local op_trig_idx = index_of(OP_TRIG_COLS, x)
-      local env_trig_idx = index_of(OP_ENV_TRIG_COLS, x)
-      local prob_idx = index_of(PROB_COLS, x)
+      if x == PROB_COL then
+        -- probability edits through the 32-value scalar picker (rows 6-7)
+        self:open_scalar_picker(y, 'burstProb', PROB_VALUES, 'prob')
+        return
+      end
+      -- single-button hold (0) <-> step (1) toggles
       if x == PROB_HIT_COL then
         self:set_scalar(y, 'probHit', not self:chan(y).probHit)
-      elseif trig_idx ~= -1 then
-        self:set_scalar(y, 'altTrig', trig_idx)
-      elseif op_trig_idx ~= -1 then
-        -- single-button toggle: hold (0) <-> step (1)
-        local field = OP_TRIG_FIELDS[op_trig_idx + 1]
-        self:set_scalar(y, field, (self:chan(y)[field] == 1) and 0 or 1)
-      elseif env_trig_idx ~= -1 then
-        -- per-op env shape trig, same single-button toggle
-        local field = OP_ENV_TRIG_FIELDS[env_trig_idx + 1]
-        self:set_scalar(y, field, (self:chan(y)[field] == 1) and 0 or 1)
-      elseif prob_idx ~= -1 then
-        self:set_scalar(y, 'burstProb', PROB_VALUES[prob_idx + 1])
+      elseif x == NOTE_TRIG_COL then
+        self:set_scalar(y, 'altTrig', (self:chan(y).altTrig == 1) and 0 or 1)
+      elseif x == OP_SEQ_TRIG_COL then
+        self:set_scalar(y, 'opSeqTrig', (self:chan(y).opSeqTrig == 1) and 0 or 1)
+      elseif x == OP_ENV_TRIG_COL then
+        self:set_scalar(y, 'opEnvTrig', (self:chan(y).opEnvTrig == 1) and 0 or 1)
       end
       self:render_channel_row(y); self.g:refresh()
       return
     end
     if self.mixMode then
-      -- signal-flow layout: mod index (col 0) + algorithm (col 1), op1..op4 levels
+      -- signal-flow layout: algorithm (col 0) + mod index (col 1), op1..op4 levels
       -- (cols 3..6) + FM feedback (col 8), then filter (col 13) + pan (col 14) +
       -- channel level (col 15). Cols 2/7/9..12 are dark. All four op ratios are
       -- sequenced (their row-7 pages).
@@ -1290,7 +1283,7 @@ function GridUI:render_channel_row(ch)
   end
 end
 
--- MIX page (signal-flow order): mod index (col 0) + FM algorithm (col 1), op1..4 level
+-- MIX page (signal-flow order): FM algorithm (col 0) + mod index (col 1), op1..4 level
 -- (cols 3..6) + FM feedback (col 8), then pan (col 14) + channel level/volume (col 15).
 -- Each cell's brightness encodes its value (normalised to its own range); picker opens
 -- on tap. All four op ratios are sequenced (their own row-7 pages).
@@ -1323,27 +1316,22 @@ end
 
 function GridUI:render_prob_row(ch)
   local c = self:chan(ch)
+  local function bright(frac) return math.max(2, round(2 + clamp(frac, 0, 1) * 11)) end
   for x = 0, GRID_W - 1 do self.g:set_led(x, ch, 0); self.g:set_strobe(x, ch, 'off') end
-  -- note alt-trig mode (cols 0-1): hold / step
-  for i = 1, #ALT_TRIG_MODE_NAMES do
-    self.g:set_led(ALT_TRIG_COLS[i], ch, c.altTrig == (i - 1) and 15 or 4)
+  -- probability (col 0): brightness encodes the value, tap opens the 32-value picker
+  self.g:set_led(PROB_COL, ch, bright(c.burstProb or 1))
+  if self.picker and self.picker.kind == 'scalar' and self.picker.ch == ch
+     and self.picker.field == 'burstProb' then
+    self.g:set_led(PROB_COL, ch, 15)
   end
-  -- op1/2/3/4 ratio-seq trig toggles (cols 3-6): on (step) bright+strobe, off (hold) dim
-  for i = 1, #OP_TRIG_COLS do
-    local on = c[OP_TRIG_FIELDS[i]] == 1
-    self.g:set_led(OP_TRIG_COLS[i], ch, on and 14 or 4)
-    self.g:set_strobe(OP_TRIG_COLS[i], ch, on and 'slow' or 'off')
-  end
-  -- op1/2/3/4 env shape-seq trig toggles (cols 7-10): same on/off treatment
-  for i = 1, #OP_ENV_TRIG_COLS do
-    local on = c[OP_ENV_TRIG_FIELDS[i]] == 1
-    self.g:set_led(OP_ENV_TRIG_COLS[i], ch, on and 14 or 4)
-    self.g:set_strobe(OP_ENV_TRIG_COLS[i], ch, on and 'slow' or 'off')
-  end
-  -- prob options (right-justified): nearest discrete value highlighted
-  local sel = nearest_index(PROB_VALUES, c.burstProb)
-  for i = 1, #PROB_VALUES do
-    self.g:set_led(PROB_COLS[i], ch, i == sel and 15 or 4)
+  -- hold<->step trig toggles (note alt(B) / all op-ratio B lanes / all op-env B
+  -- lanes): on (step) bright+strobe, off (hold) dim
+  local toggles = {{NOTE_TRIG_COL, c.altTrig}, {OP_SEQ_TRIG_COL, c.opSeqTrig},
+                   {OP_ENV_TRIG_COL, c.opEnvTrig}}
+  for _, t in ipairs(toggles) do
+    local on = t[2] == 1
+    self.g:set_led(t[1], ch, on and 14 or 4)
+    self.g:set_strobe(t[1], ch, on and 'slow' or 'off')
   end
   -- burst/hit toggle (far right)
   self.g:set_led(PROB_HIT_COL, ch, c.probHit and 14 or 4)
@@ -1640,7 +1628,10 @@ function GridUI:current_page()
   if self.kbMode then return 'KB' end
   if self.picker and self.picker.kind == 'scale' then return 'ROOT' end
   if self.picker and self.picker.kind == 'step' then return 'PICK' end
-  if self.picker and self.picker.kind == 'scalar' then return 'MIX' end
+  if self.picker and self.picker.kind == 'scalar' then
+    -- the prob picker opens from the PROB page; every other scalar is a MIX cell
+    return self.picker.field == 'burstProb' and 'PROB' or 'MIX'
+  end
   if self.perfMode then return 'PERF' end
   if self.probMode then return 'PROB' end
   if self.prismMode then return 'PRISM' end
@@ -1658,11 +1649,11 @@ function GridUI:_status()
   elseif self.perfMode then
     s = 'PERF — cols0-3 reset, cols5-9 oct, cols11-15 rate'
   elseif self.probMode then
-    s = 'PROB — 0-1 note 3-6 opR 7-10 opE trig, 11-14 prob, 15 hit'
+    s = 'PROB — 0 prob, 3 note 4 opR 5 opE trig, 15 hit'
   elseif self.prismMode then
     s = 'PRISM — 0-7 quant, 9-11 env, 13-15 geode'
   elseif self.mixMode then
-    s = 'MIX — 0 idx 1 alg, 3-6 op 8 fb, 13 flt 14 pan 15 vol'
+    s = 'MIX — 0 alg 1 idx, 3-6 op 8 fb, 13 flt 14 pan 15 vol'
   elseif self.actionMode then
     s = string.upper(self.actionMode) .. ' — tap a channel'
   elseif self.picker and self.picker.kind == 'scalar' then
@@ -1674,6 +1665,8 @@ function GridUI:_status()
       s = 'edit ch' .. (self.picker.ch + 1) .. ' pan=' .. pan_label(val)
     elseif f == 'filterPos' then
       s = 'edit ch' .. (self.picker.ch + 1) .. ' filter=' .. filter_label(val)
+    elseif f == 'burstProb' then
+      s = 'edit ch' .. (self.picker.ch + 1) .. ' prob=' .. round((val or 1) * 100) .. '%'
     else
       local lbl = f:match('^opLevel') and ('op' .. f:sub(-1) .. ' level')
         or ({modIndex = 'mod index', fmFeedback = 'fm fb'})[f]

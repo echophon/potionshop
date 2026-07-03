@@ -71,14 +71,15 @@ local PAGE_PERF, PAGE_PROB, PAGE_SCALE, PAGE_MIX =
   NUM_SEQ + 1, NUM_SEQ + 2, NUM_SEQ + 3, NUM_SEQ + 4
 -- Mode-page line counts (sequence pages use the per-channel cursor, not sel_line):
 -- PERF = run + reset/oct/rate/quantize/env mode/geode = 7 (the grid splits
--- quantize+env+geode onto its PRISM page). prob = prob/mode/note trig + op1..4 ratio-seq
--- trig + op1..4 env-seq trig = 11. scale = root + 12 chromatic keys = 13. mix = mod
--- index + algo + 4 op levels + fm fb + filter + pan + channel level = 10 (all four
+-- quantize+env+geode onto its PRISM page). prob = prob/mode + note/op-seq/op-env
+-- trig = 5 (the op trigs are ONE switch each for all four B lanes).
+-- scale = root + 12 chromatic keys = 13. mix = algo + mod
+-- index + 4 op levels + fm fb + filter + pan + channel level = 10 (all four
 -- op ratios are sequenced, edited on the seq pages).
 local LINES_PER_PAGE = {}
 for i = 1, NUM_SEQ do LINES_PER_PAGE[i] = 6 end  -- unused for seq pages; kept for clamps
 LINES_PER_PAGE[PAGE_PERF]  = 7
-LINES_PER_PAGE[PAGE_PROB]  = 11
+LINES_PER_PAGE[PAGE_PROB]  = 5
 LINES_PER_PAGE[PAGE_SCALE] = 13
 LINES_PER_PAGE[PAGE_MIX]   = 10
 
@@ -472,9 +473,9 @@ function Screen:_edit_mix(d)
   local ch = self.sel_ch
   local c = self.engine.channels[ch + 1]
   local line = self.sel_line[PAGE_MIX]
-  if line == 1 then
+  if line == 2 then
     self.ctl:set_scalar(ch, 'modIndex', step_table(c.modIndex, GridUI.MOD_INDEX_VALUES, d))
-  elseif line == 2 then
+  elseif line == 1 then
     self.ctl:set_scalar(ch, 'algo', step_table(c.algo, GridUI.ALGO_VALUES, d))
   elseif line == 7 then
     self.ctl:set_scalar(ch, 'fmFeedback', step_table(c.fmFeedback, GridUI.FM_FEEDBACK_VALUES, d))
@@ -495,20 +496,18 @@ function Screen:_edit_prob(d)
   local c = self.engine.channels[ch + 1]
   local line = self.sel_line[PAGE_PROB]
   if line == 1 then
-    -- step the discrete 25/50/75/100% set shared with the grid prob page
+    -- step the 32-value probability grid shared with the grid prob picker
     self.ctl:set_scalar(ch, 'burstProb', step_table(c.burstProb, GridUI.PROB_VALUES, d))
   elseif line == 2 then
     self.ctl:set_scalar(ch, 'probHit', not c.probHit)
   elseif line == 3 then
     self.ctl:set_scalar(ch, 'altTrig', clamp(c.altTrig + d, 0, #GridUI.ALT_TRIG_MODE_NAMES - 1))
-  elseif line >= 4 and line <= 7 then
-    -- lines 4..7 = op1/2/3/4 ratio-sequence trig (hold/step), same toggle feel
-    local field = 'opRatio' .. (line - 3) .. 'Trig'  -- line 4->op1 .. 7->op4
-    self.ctl:set_scalar(ch, field, clamp(c[field] + d, 0, 1))
+  elseif line == 4 then
+    -- ONE hold/step switch for all four op-ratio B lanes
+    self.ctl:set_scalar(ch, 'opSeqTrig', clamp(c.opSeqTrig + d, 0, 1))
   else
-    -- lines 8..11 = op1/2/3/4 env shape-sequence trig (hold/step)
-    local field = 'opEnv' .. (line - 7) .. 'Trig'  -- line 8->op1 .. 11->op4
-    self.ctl:set_scalar(ch, field, clamp(c[field] + d, 0, 1))
+    -- line 5: ONE hold/step switch for all four op-env B lanes
+    self.ctl:set_scalar(ch, 'opEnvTrig', clamp(c.opEnvTrig + d, 0, 1))
   end
 end
 
@@ -688,13 +687,13 @@ function Screen:page_lines()
   end
   local lines
   if self.page == PAGE_MIX then
-    -- signal-flow order: mod index + FM algorithm, the four static op levels, FM
+    -- signal-flow order: FM algorithm + mod index, the four static op levels, FM
     -- feedback, then the output stage: DJ filter, pan + channel level/volume. All
     -- four op ratios are sequenced (shown/edited on the per-param seq pages),
     -- absent here.
     lines = {
-      {'index', string.format('%d', c.modIndex)},
       {'alg',   GridUI.ALGO_NAMES[c.algo] or '?'},
+      {'index', string.format('%d', c.modIndex)},
       {'op1 l', string.format('%.2f', c.opLevel1)},
       {'op2 l', string.format('%.2f', c.opLevel2)},
       {'op3 l', string.format('%.2f', c.opLevel3)},
@@ -709,15 +708,9 @@ function Screen:page_lines()
     lines = {
       {'prob', round(c.burstProb * 100) .. '%'},
       {'mode', c.probHit and 'hit' or 'burst'},
-      {'note', trig(c.altTrig)},          -- note B trig
-      {'op1 r', trig(c.opRatio1Trig)},    -- op1/2/3/4 ratio-seq trig
-      {'op2 r', trig(c.opRatio2Trig)},
-      {'op3 r', trig(c.opRatio3Trig)},
-      {'op4 r', trig(c.opRatio4Trig)},
-      {'op1 e', trig(c.opEnv1Trig)},      -- op1/2/3/4 env-seq trig
-      {'op2 e', trig(c.opEnv2Trig)},
-      {'op3 e', trig(c.opEnv3Trig)},
-      {'op4 e', trig(c.opEnv4Trig)},
+      {'note', trig(c.altTrig)},        -- note B trig
+      {'op seq', trig(c.opSeqTrig)},    -- all four op-ratio B lanes
+      {'op env', trig(c.opEnvTrig)},    -- all four op-env B lanes
     }
   else  -- PAGE_PERF
     local iv = c.resetInterval
@@ -736,8 +729,8 @@ function Screen:page_lines()
   return lines
 end
 
--- max line rows that fit above the step squares (y 52/58); longer pages (prob = 11
--- lines, scale = 13) scroll a window around focus. Sequence pages are always 6 rows.
+-- max line rows that fit above the step squares (y 52/58); longer pages (scale =
+-- 13 lines) scroll a window around focus. Sequence pages are always 6 rows.
 local MAX_VISIBLE_LINES = 7
 
 function Screen:draw_lines()

@@ -300,13 +300,13 @@ local function env_step_decays(trig_mode)
   e.channels[1].note = seqx.new{0}
   e.channels[1].opEnv1  = seqx.new{1}            -- A: held shape index per burst
   e.channels[1].opEnv1B = seqx.new{0, 14, 31}    -- B: index offsets -> shapes 1/15/32
-  e.channels[1].opEnv1Trig = trig_mode
+  e.channels[1].opEnvTrig = trig_mode
   e:launch(1)
   clock._run_until(4)
   engine = saved
   return decs
 end
-check('op-env trig defaults to hold', Burst.new().channels[1].opEnv1Trig == 0)
+check('op-env trig defaults to hold', Burst.new().channels[1].opEnvTrig == 0)
 local sh_hold = env_step_decays(0)
 check('op-env hold holds one shape across the burst',
   #sh_hold == 3 and approx(sh_hold[1], sh_hold[2]) and approx(sh_hold[2], sh_hold[3]))
@@ -448,7 +448,7 @@ local function op_ratio_trig_seq(trig_mode)
   e.channels[1].reps = seqx.new{3}        -- length-1 finite -> single 3-hit burst
   e.channels[1].opRatio2  = seqx.new{2}   -- A: held per burst
   e.channels[1].opRatio2B = seqx.new{0, 1, 2}  -- B: index offsets
-  e.channels[1].opRatio2Trig = trig_mode
+  e.channels[1].opSeqTrig = trig_mode
   e:launch(1)
   clock._run_until(4)
   engine = saved
@@ -463,7 +463,7 @@ check('op ratio trig step walks the index UP per hit (A held)',
   #step_r == 3 and approx(step_r[1], 2)
   and step_r[2] == Burst.op_ratio(2, 1, MOD) and step_r[3] == Burst.op_ratio(2, 2, MOD)
   and step_r[2] > step_r[1] and step_r[3] > step_r[2])
-check('op ratio trig defaults to hold (0)', Burst.new().channels[1].opRatio2Trig == 0)
+check('op ratio trig defaults to hold (0)', Burst.new().channels[1].opSeqTrig == 0)
 
 -- the A lane stays held regardless of trig mode: a multi-step A under step trig must
 -- NOT advance within the burst (B {0} -> all three hits use A's first value, 2).
@@ -477,7 +477,7 @@ local function op_ratio_A_held(trig_mode)
   e.channels[1].div  = seqx.new{4}
   e.channels[1].reps = seqx.new{3}
   e.channels[1].opRatio2  = seqx.new{2, 3, 4}  -- A: must stay held within a burst
-  e.channels[1].opRatio2Trig = trig_mode
+  e.channels[1].opSeqTrig = trig_mode
   e:launch(1)
   clock._run_until(4)
   engine = saved
@@ -501,7 +501,7 @@ local function op1_ratio_trig_seq(trig_mode)
   e.channels[1].reps = seqx.new{3}        -- length-1 finite -> single 3-hit burst
   e.channels[1].opRatio1  = seqx.new{2}   -- A: held per burst
   e.channels[1].opRatio1B = seqx.new{0, 1, 2}  -- B: index offsets
-  e.channels[1].opRatio1Trig = trig_mode
+  e.channels[1].opSeqTrig = trig_mode
   e:launch(1)
   clock._run_until(4)
   engine = saved
@@ -517,7 +517,8 @@ check('op1 ratio trig step walks the index UP per hit on arg 14',
   #step_r1 == 3 and approx(step_r1[1], 2)
   and step_r1[2] == Burst.op_ratio(2, 1, CAR) and step_r1[3] == Burst.op_ratio(2, 2, CAR)
   and step_r1[2] > step_r1[1] and step_r1[3] > step_r1[2])
-check('op1 ratio trig defaults to hold (0)', Burst.new().channels[1].opRatio1Trig == 0)
+check('op1 ratio trig shares the single opSeqTrig switch (defaults hold)',
+  Burst.new().channels[1].opSeqTrig == 0)
 
 -- PER-OPERATOR envelope SHAPES: each op's sequenced shape INDEX resolves (in fire)
 -- to {attack, decay, atkCurve, decCurve} scaled to the inter-hit gap, grouped per op
@@ -1054,37 +1055,34 @@ check('set_mask refuses to empty the scale', vals_eq(geng.scale, {0, 4, 7}))
 -- prob mode (row6 col 13)
 ctl:press(13, 6)
 check('PROB mode entered', ctl.probMode == true)
-ctl:press(12, 0)  -- PROB_COLS[2] -> PROB_VALUES[2] = 0.5 on channel 0
-check('prob option sets burstProb 0.5', approx(geng.channels[1].burstProb, 0.5))
-ctl:press(1, 0)   -- ALT_TRIG_COLS[2] -> altTrig = 1 (step) on channel 0
-check('alt-trig key sets altTrig to step', geng.channels[1].altTrig == 1)
-ctl:press(0, 0)   -- ALT_TRIG_COLS[1] -> altTrig = 0 (hold)
-check('alt-trig key sets altTrig to hold', geng.channels[1].altTrig == 0)
--- op1/2/3/4 ratio-seq trig toggles (cols 3-6): single button, hold (0) <-> step (1)
-check('op1 ratio trig defaults to hold', geng.channels[1].opRatio1Trig == 0)
-ctl:press(3, 0)   -- col3 -> toggle op1 trig
-check('op1 trig button toggles to step', geng.channels[1].opRatio1Trig == 1)
-ctl:press(3, 0)   -- toggle back
-check('op1 trig button toggles back to hold', geng.channels[1].opRatio1Trig == 0)
-ctl:press(4, 0)   -- col4 -> op2 trig toggle
-check('op2 trig button (col4) sets step', geng.channels[1].opRatio2Trig == 1)
+ctl:press(0, 0)   -- prob cell (col 0) -> opens the 32-value scalar picker
+check('prob cell opens the scalar picker', ctl.picker ~= nil
+  and ctl.picker.kind == 'scalar' and ctl.picker.field == 'burstProb')
+ctl:press(15, 6)  -- picker row 6 col 15 -> PROB_VALUES[16] = 16/32 = 0.5
+check('prob picker sets burstProb 0.5', approx(geng.channels[1].burstProb, 0.5))
+check('prob picker closes after the pick', ctl.picker == nil)
+check('PROB mode still latched after the pick', ctl.probMode == true)
+-- note alt(B) trig toggle (col 3): single button, hold (0) <-> step (1)
+ctl:press(3, 0)
+check('note trig button toggles to step', geng.channels[1].altTrig == 1)
+ctl:press(3, 0)
+check('note trig button toggles back to hold', geng.channels[1].altTrig == 0)
+-- op-ratio seq trig (col 4): ONE switch for all four B lanes
+check('op seq trig defaults to hold', geng.channels[1].opSeqTrig == 0)
 ctl:press(4, 0)
-ctl:press(6, 0)   -- col6 -> op4 trig toggle
-check('op4 trig button (col6) sets step', geng.channels[1].opRatio4Trig == 1)
-ctl:press(6, 0)
--- op1/2/3/4 env shape-seq trig toggles (cols 7-10): single button, hold (0) <-> step (1)
-check('op1 env trig defaults to hold', geng.channels[1].opEnv1Trig == 0)
-ctl:press(7, 0)   -- col7 -> op1 env trig toggle
-check('op1 env trig button (col7) sets step', geng.channels[1].opEnv1Trig == 1)
-ctl:press(7, 0)
-check('op1 env trig button toggles back to hold', geng.channels[1].opEnv1Trig == 0)
-ctl:press(10, 0)  -- col10 -> op4 env trig toggle
-check('op4 env trig button (col10) sets step', geng.channels[1].opEnv4Trig == 1)
-ctl:press(10, 0)
+check('op seq trig button toggles to step', geng.channels[1].opSeqTrig == 1)
+ctl:press(4, 0)
+check('op seq trig button toggles back to hold', geng.channels[1].opSeqTrig == 0)
+-- op-env seq trig (col 5): ONE switch for all four op-env B lanes
+check('op env trig defaults to hold', geng.channels[1].opEnvTrig == 0)
+ctl:press(5, 0)
+check('op env trig button toggles to step', geng.channels[1].opEnvTrig == 1)
+ctl:press(5, 0)
+check('op env trig button toggles back to hold', geng.channels[1].opEnvTrig == 0)
 ctl:press(13, 6)
 check('PROB mode exited', ctl.probMode == false)
 
--- MIX page (row6 col 11) in signal-flow order: mod index (col 0) + algo (col 1) + per-op
+-- MIX page (row6 col 11) in signal-flow order: algo (col 0) + mod index (col 1) + per-op
 -- level (cols 3-6) + FM feedback (col 8) + filter (col 13) + pan (col 14) + channel
 -- level/volume (col 15). Chorus was removed; cols 2/7/9-12 are inert.
 ctl:press(11, 6)
@@ -1092,12 +1090,12 @@ check('MIX mode entered', ctl.mixMode == true)
 -- col2 is a dark separator now (chorus removed) — inert.
 ctl:press(2, 0)
 check('MIX col2 is inert (separator)', ctl.picker == nil)
-ctl:press(0, 0)   -- col0 -> mod index picker
-check('MIX col0 opens the mod index scalar picker',
-  ctl.picker and ctl.picker.field == 'modIndex')
-ctl:press(1, 0)   -- col1 -> algorithm picker
-check('MIX col1 opens the algorithm scalar picker',
+ctl:press(0, 0)   -- col0 -> algorithm picker
+check('MIX col0 opens the algorithm scalar picker',
   ctl.picker and ctl.picker.field == 'algo')
+ctl:press(1, 0)   -- col1 -> mod index picker
+check('MIX col1 opens the mod index scalar picker',
+  ctl.picker and ctl.picker.field == 'modIndex')
 ctl:press(14, 0)  -- col14 -> pan picker
 check('MIX col14 opens the pan scalar picker',
   ctl.picker and ctl.picker.field == 'pan')
@@ -1244,46 +1242,37 @@ check('note page E3 edit lands on the note picker grid',
 check('note page keeps grid selectedParam = note', sctl.selectedParam == 'note')
 check('note page main_param is the lane-1 (A) param', sui:main_param() == 'note' and sui:layer() == 'A')
 
--- prob page: prob steps the discrete 25/50/75/100% set
+-- prob page: prob steps the 32-value grid shared with the grid picker
 sui:set_page(P_PROB)
 sui.sel_line[P_PROB] = 1
 seng.channels[1].burstProb = 1
 sui:enc(3, -1)
-check('prob E3 steps down one discrete value', approx(seng.channels[1].burstProb, 0.75))
+check('prob E3 steps down one grid value (31/32)',
+  approx(seng.channels[1].burstProb, 31 / 32))
 sui.sel_line[P_PROB] = 2
 sui:enc(3, 1)
 check('prob mode line toggles probHit', seng.channels[1].probHit == true)
 sui.sel_line[P_PROB] = 3
 sui:enc(3, 1)
 check('alt-trig line steps altTrig to step', seng.channels[1].altTrig == 1)
-sui.sel_line[P_PROB] = 4   -- op1 ratio-seq trig
+sui.sel_line[P_PROB] = 4   -- op-ratio seq trig (ONE switch, all four B lanes)
 sui:enc(3, 1)
-check('prob page op1 trig line steps to step', seng.channels[1].opRatio1Trig == 1)
+check('prob page op seq trig line steps to step', seng.channels[1].opSeqTrig == 1)
 sui:enc(3, -1)
-check('prob page op1 trig line steps back to hold', seng.channels[1].opRatio1Trig == 0)
-sui.sel_line[P_PROB] = 5   -- op2 ratio-seq trig
+check('prob page op seq trig line steps back to hold', seng.channels[1].opSeqTrig == 0)
+sui.sel_line[P_PROB] = 5   -- op-env seq trig (ONE switch, all four op envs)
 sui:enc(3, 1)
-check('prob page op2 trig line steps to step', seng.channels[1].opRatio2Trig == 1)
+check('prob page op env trig line steps to step', seng.channels[1].opEnvTrig == 1)
 sui:enc(3, -1)
-check('prob page op2 trig line steps back to hold', seng.channels[1].opRatio2Trig == 0)
-sui.sel_line[P_PROB] = 8   -- op1 env shape-seq trig
-sui:enc(3, 1)
-check('prob page op1 env trig line steps to step', seng.channels[1].opEnv1Trig == 1)
-sui:enc(3, -1)
-check('prob page op1 env trig line steps back to hold', seng.channels[1].opEnv1Trig == 0)
-sui.sel_line[P_PROB] = 11  -- op4 env shape-seq trig
-sui:enc(3, 1)
-check('prob page op4 env trig line steps to step', seng.channels[1].opEnv4Trig == 1)
-sui:enc(3, -1)
-check('prob page op4 env trig line steps back to hold', seng.channels[1].opEnv4Trig == 0)
+check('prob page op env trig line steps back to hold', seng.channels[1].opEnvTrig == 0)
 
--- mix page in signal-flow order: line 1 = mod index, 2 = algo, lines 3..6 = op1..op4
+-- mix page in signal-flow order: line 1 = algo, 2 = mod index, lines 3..6 = op1..op4
 -- level, 7 = fm feedback, 8 = filter, 9 = pan, 10 = channel level/volume. All four
 -- op ratios are sequenced (edited on the per-param seq pages), and chorus was
 -- removed, so absent here.
 sui:set_page(P_MIX)
-check('mix page_lines is signal-flow order (index, alg, op1 l ...)',
-  sui:page_lines()[1][1] == 'index' and sui:page_lines()[2][1] == 'alg'
+check('mix page_lines is signal-flow order (alg, index, op1 l ...)',
+  sui:page_lines()[1][1] == 'alg' and sui:page_lines()[2][1] == 'index'
   and sui:page_lines()[3][1] == 'op1 l')
 check('mix page has 10 lines (filter added)', #sui:page_lines() == 10)
 sui.sel_line[P_MIX] = 9   -- pan
@@ -1306,7 +1295,7 @@ seng.channels[1].opLevel1 = 1.0
 sui:enc(3, -1)
 check('mix page op1 line steps opLevel1 down the 0..1 grid',
   in_set(seng.channels[1].opLevel1, GridUI.OP_LEVEL_VALUES) and seng.channels[1].opLevel1 < 1.0)
-sui.sel_line[P_MIX] = 1   -- mod index
+sui.sel_line[P_MIX] = 2   -- mod index (line 1 is algo now)
 seng.channels[1].modIndex = 4
 sui:enc(3, 1)
 check('mix page index line steps modIndex up its grid',
@@ -1657,10 +1646,6 @@ fake:set('ch1_opRatio1_a', '1.5 2 3')
 check('op1 ratio text installs a curated-ratio sequence',
   vals_eq(seqx.values(peng.channels[1].opRatio1), {1.5, 2, 3}))
 check('op1 ratio has a B (index-offset) block', fake:lookup_param('ch1_opRatio1_b') ~= nil)
-fake:set('ch1_op1_trig', 2)  -- option 2 = step
-check('op1 ratio trig param sets step', peng.channels[1].opRatio1Trig == 1)
-fake:set('ch1_op1_trig', 1)  -- option 1 = hold
-check('op1 ratio trig param sets hold', peng.channels[1].opRatio1Trig == 0)
 fake:set('ch1_level3', 0)
 check('op level 0 -> 0.0', approx(peng.channels[1].opLevel3, 0))
 fake:set('ch1_level3', 31)
@@ -1677,21 +1662,20 @@ check('op2 ratio B index-offset parses (0 = no shift)',
   vals_eq(seqx.values(peng.channels[1].opRatio2B), {0, 4}))
 check('op2 ratio has a B param (index-offset layer)', fake:lookup_param('ch1_opRatio2_b') ~= nil)
 
--- op-ratio trig mode params (hold/step option, like alt trig)
-fake:set('ch1_op2_trig', 2)  -- option 2 = step
-check('op2 ratio trig param sets step', peng.channels[1].opRatio2Trig == 1)
-fake:set('ch1_op2_trig', 1)  -- option 1 = hold
-check('op2 ratio trig param sets hold', peng.channels[1].opRatio2Trig == 0)
+-- op-ratio seq trig mode param (hold/step option, like alt trig): ONE switch
+-- for all four op-ratio B lanes (the per-op params are gone)
+fake:set('ch1_op_trig', 2)  -- option 2 = step
+check('op seq trig param sets step', peng.channels[1].opSeqTrig == 1)
+fake:set('ch1_op_trig', 1)  -- option 1 = hold
+check('op seq trig param sets hold', peng.channels[1].opSeqTrig == 0)
+check('per-op ratio trig params are gone', fake:lookup_param('ch1_op1_trig') == nil)
 
--- per-op env shape trig mode params (hold/step option, like the op-ratio trigs)
-fake:set('ch1_opEnv1_trig', 2)  -- option 2 = step
-check('op1 env trig param sets step', peng.channels[1].opEnv1Trig == 1)
-fake:set('ch1_opEnv1_trig', 1)  -- option 1 = hold
-check('op1 env trig param sets hold', peng.channels[1].opEnv1Trig == 0)
-fake:set('ch1_opEnv4_trig', 2)
-check('op4 env trig param sets step', peng.channels[1].opEnv4Trig == 1)
-fake:set('ch1_opEnv4_trig', 1)
-check('op4 env trig param sets hold', peng.channels[1].opEnv4Trig == 0)
+-- op-env seq trig mode param: same single hold/step switch for all four op envs
+fake:set('ch1_openv_trig', 2)  -- option 2 = step
+check('op env trig param sets step', peng.channels[1].opEnvTrig == 1)
+fake:set('ch1_openv_trig', 1)  -- option 1 = hold
+check('op env trig param sets hold', peng.channels[1].opEnvTrig == 0)
+check('per-op env trig params are gone', fake:lookup_param('ch1_opEnv1_trig') == nil)
 
 -- reps rest tokens: rN <-> reps (1-N), so r1=0, r2=-1, r4=-3
 fake:set('ch1_reps_a', '2 r1 r4')
@@ -1738,8 +1722,9 @@ pctl:press(0, 0)  -- open step picker ch0 col0
 pctl:press(5, 6)  -- pick note value 5 (value grid on rows 6-7)
 check('grid step edit reflects into text param', fake:get('ch1_note_a') == '5 8 5')
 pctl:press(13, 6)  -- PROB mode
-pctl:press(12, 0)  -- PROB_COLS[2] -> burstProb 0.5 -> prob option index 2
-check('grid prob option reflects into param', fake:get('ch1_prob') == 2)
+pctl:press(0, 0)   -- prob cell -> 32-value scalar picker
+pctl:press(15, 6)  -- pick value 16/32 = 0.5 -> prob option index 16
+check('grid prob edit reflects into param', fake:get('ch1_prob') == 16)
 pctl:press(13, 6)  -- exit PROB
 check('grid edits fired zero param actions', fake.fires == f0)
 
@@ -1860,7 +1845,7 @@ check('flush clears the pending render', psync.render_pending == false)
 -- pset-load hook: action_read re-reflects everything
 peng.channels[5].burstProb = 0.5
 fake.action_read()
-check('action_read reflects engine state into params', fake:get('ch5_prob') == 2)
+check('action_read reflects engine state into params', fake:get('ch5_prob') == 16)
 
 -- ---- outputs: per-channel midi / crow / i2c routing ----------------------
 local Outputs = require 'outputs'
@@ -1907,10 +1892,24 @@ check('note_to_volts C5 = +1V', approx(Outputs.note_to_volts(72), 1))
 check('velocity scales level linearly', Outputs.velocity(0.5) == 64)
 check('velocity floors at 1', Outputs.velocity(0.001) == 1)
 check('velocity caps at 127', Outputs.velocity(1.5) == 127)
-check('harm_to_volts: min ratio = 0V', approx(Outputs.harm_to_volts(0.125), 0))
-check('harm_to_volts: max ratio = 5V', approx(Outputs.harm_to_volts(14), 5))
-check('ratio_to_cc: min ratio = 0', Outputs.ratio_to_cc(0.125) == 0)
-check('ratio_to_cc: max ratio = 127', Outputs.ratio_to_cc(14) == 127)
+-- ratio_ceiling: FM ratio -> the streamed CC's ceiling (0..127 over the curated span)
+check('ratio_ceiling: max ratio = 127', approx(Outputs.ratio_ceiling(14), 127))
+check('ratio_ceiling: min ratio = 0', approx(Outputs.ratio_ceiling(0.125), 0))
+-- cv_ceiling: FM ratio -> the ER-301 CV stream's ceiling (0..OP_CV_MAX volts)
+check('cv_ceiling: max ratio = OP_CV_MAX volts', approx(Outputs.cv_ceiling(14), Outputs.OP_CV_MAX))
+check('cv_ceiling: min ratio = 0V', approx(Outputs.cv_ceiling(0.125), 0))
+-- curve_seg: SC Env interpolation (a->b at pos, curvature)
+check('curve_seg: linear midpoint', approx(Outputs.curve_seg(0, 1, 0.5, 0), 0.5))
+check('curve_seg: clamps to a at pos<=0', Outputs.curve_seg(0, 1, 0, -4) == 0)
+check('curve_seg: clamps to b at pos>=1', Outputs.curve_seg(0, 1, 1, -4) == 1)
+check('curve_seg: negative curve is fast-start (>linear at midpoint)',
+  Outputs.curve_seg(0, 1, 0.5, -4) > 0.5)
+-- env_at: 0 before, rises through attack, peaks at end of attack, falls, 0 after
+check('env_at: 0 at t=0', Outputs.env_at(0, 0.1, 0.2, 0, 0) == 0)
+check('env_at: linear attack midpoint = 0.5', approx(Outputs.env_at(0.05, 0.1, 0.2, 0, 0), 0.5))
+check('env_at: peak (=1) at end of attack', approx(Outputs.env_at(0.1, 0.1, 0.2, 0, 0), 1))
+check('env_at: linear decay midpoint = 0.5', approx(Outputs.env_at(0.2, 0.1, 0.2, 0, 0), 0.5))
+check('env_at: 0 after decay ends', Outputs.env_at(0.31, 0.1, 0.2, 0, 0) == 0)
 check('bend_value: in-tune note is centered', Outputs.bend_value(60, 2) == 8192)
 check('bend_value: +0.25 st over ±2 range = +1/8 scale', Outputs.bend_value(60.25, 2) == 8192 + 1024)
 check('bend_value: -0.25 st over ±2 range = -1/8 scale', Outputs.bend_value(59.75, 2) == 8192 - 1024)
@@ -1927,37 +1926,94 @@ check('default destination is audio', outs:wants_audio(1) == true)
 outs:note(1, {freq = 440, level = 0.5, dur = 0.5})
 check('audio destination sends nothing external', #midi_log == 0 and #crow_log == 0)
 
--- midi: note on with velocity/channel, note off after dur via clock
+-- helper: pull the value stream for one CC number out of the midi log, in order.
+local function cc_values(log, ccnum)
+  local out = {}
+  for _, m in ipairs(log) do
+    if m[1] == 'cc' and m[2] == ccnum then out[#out + 1] = m[3] end
+  end
+  return out
+end
+local function max_of(t) local m = 0 for _, v in ipairs(t) do m = math.max(m, v) end return m end
+
+-- midi: note on with velocity/channel, note off after dur, then a per-op CC envelope
+-- stream tracing each op's contour. env_stream_rate 100 Hz = 0.01s steps; a {0.01,0.02} linear
+-- envelope traces 0 -> 127 (attack end) -> 64 (decay mid) -> 0.
 ofake:set('ch1_output', Outputs.DEST.MIDI)
 ofake:set('ch1_midi_chan', 5)
+ofake:set('env_stream_rate', 100)
 check('midi destination disables internal audio', outs:wants_audio(1) == false)
-outs:note(1, {freq = 261.6256, level = 0.5, op1 = 14, op2 = 0.125, dur = 0.5})
+outs:note(1, {freq = 261.6256, level = 0.5,
+  ratios = {14, 0.125, 14, 14},
+  env_segs = {{0.01, 0.02, 0, 0}, {0.01, 0.02, 0, 0}, {0.01, 0.02, 0, 0}, {0.01, 0.02, 0, 0}},
+  dur = 0.03})
 check('midi pitch bend precedes the note, centered for an in-tune note',
   midi_log[1][1] == 'pb' and midi_log[1][2] == 8192 and midi_log[1][3] == 5)
 check('midi note_on: middle C, vel 64, chan 5',
   midi_log[2][1] == 'on' and midi_log[2][2] == 60
   and midi_log[2][3] == 64 and midi_log[2][4] == 5)
-check('midi modwheel (cc1) = op1 ratio, per hit, on the channel',
-  midi_log[3][1] == 'cc' and midi_log[3][2] == 1
-  and midi_log[3][3] == 127 and midi_log[3][4] == 5)
-check('midi breath (cc2) = op2 ratio, per hit, on the channel',
-  #midi_log == 4 and midi_log[4][1] == 'cc' and midi_log[4][2] == 2
-  and midi_log[4][3] == 0 and midi_log[4][4] == 5)
-clock._run_until(4)  -- 0.5 s at 120 bpm = 1 beat
-check('midi note_off scheduled after dur',
-  #midi_log == 5 and midi_log[5][1] == 'off' and midi_log[5][2] == 60)
+check('op1 CC stream opens at 0 on the channel (cc20, attack starts from 0)',
+  midi_log[3][1] == 'cc' and midi_log[3][2] == 20
+  and midi_log[3][3] == 0 and midi_log[3][4] == 5)
+clock._run_until(4)  -- advance well past the 0.03s stream + the note dur
+local op1 = cc_values(midi_log, 20)
+check('op1 CC stream peaks at the ratio ceiling (127) then returns to 0',
+  max_of(op1) == 127 and op1[#op1] == 0)
+check('op1 CC stream traces attack->peak->decay->0', (function()
+  -- 0.01/0.02 linear @ 100Hz: values at t=0,0.01,0.02,0.03 = 0,127,64,0
+  return #op1 == 4 and op1[1] == 0 and op1[2] == 127 and op1[3] == 64 and op1[4] == 0
+end)())
+check('op2 CC (min ratio -> ceiling 0) streams only silence',
+  max_of(cc_values(midi_log, 21)) == 0)
+check('midi note_off still scheduled after dur',
+  (function() for _, m in ipairs(midi_log) do if m[1] == 'off' and m[2] == 60 then return true end end end)())
 
--- retrigger same pitch: old note cut first, stale timer's off dropped. Each hit
--- emits its pitch bend + two op CCs (cc1=op1, cc2=op2), so the sequence is
--- pb,on,cc1,cc2 / pb,off,on,cc1,cc2.
+-- op CC number 0 = that operator's CC is disabled (no stream for it)
+ofake:set('ch1_op2_cc', 0)
 midi_log = {}
-outs:note(1, {freq = 261.6256, level = 0.5, dur = 0.5})
-outs:note(1, {freq = 261.6256, level = 0.9, dur = 0.5})
-check('retrigger cuts the held note first',
-  midi_log[2][1] == 'on' and midi_log[6][1] == 'off' and midi_log[7][1] == 'on')
+outs:note(1, {freq = 261.6256, level = 0.5,
+  ratios = {14, 14, 14, 14},
+  env_segs = {{0.01, 0.02, 0, 0}, {0.01, 0.02, 0, 0}, {0.01, 0.02, 0, 0}, {0.01, 0.02, 0, 0}},
+  dur = 0.03})
 clock._run_until(8)
-check('exactly one note_off after retrigger settles', #midi_log == 10
-  and midi_log[10][1] == 'off')
+check('op2 cc=0 suppresses op2 stream (no cc21 traffic)', #cc_values(midi_log, 21) == 0)
+check('op1/op3/op4 still stream', #cc_values(midi_log, 20) > 0
+  and #cc_values(midi_log, 22) > 0 and #cc_values(midi_log, 23) > 0)
+ofake:set('ch1_op2_cc', 21)  -- restore default
+
+-- retrigger: a new hit bumps the CC-stream generation so the prior stream is cancelled
+-- (its next step bails). The note itself is cut + retriggered as before.
+midi_log = {}
+local g0 = outs.stream_gen[1]
+outs:note(1, {freq = 261.6256, level = 0.5, dur = 0.5,
+  ratios = {1, 1, 1, 1}, env_segs = {{0.1, 0.2, 0, 0}, {0.1, 0.2, 0, 0}, {0.1, 0.2, 0, 0}, {0.1, 0.2, 0, 0}}})
+outs:note(1, {freq = 261.6256, level = 0.9, dur = 0.5,
+  ratios = {1, 1, 1, 1}, env_segs = {{0.1, 0.2, 0, 0}, {0.1, 0.2, 0, 0}, {0.1, 0.2, 0, 0}, {0.1, 0.2, 0, 0}}})
+check('retrigger bumps the CC-stream generation twice', outs.stream_gen[1] == g0 + 2)
+check('retrigger cuts the held note (an off precedes the second on)', (function()
+  local ons, off_between = 0, false
+  for _, m in ipairs(midi_log) do
+    if m[1] == 'on' then ons = ons + 1 end
+    if m[1] == 'off' and ons == 1 then off_between = true end
+  end
+  return ons == 2 and off_between
+end)())
+clock._run_until(16)
+check('retrigger settles with two offs (the cut + one surviving timer)',
+  (function() local n = 0 for _, m in ipairs(midi_log) do if m[1] == 'off' then n = n + 1 end end return n == 2 end)())
+
+-- notes_off cancels a running CC stream and zeros any non-zero CC it left
+ofake:set('env_stream_rate', 20)  -- 0.05s steps: stream stays open across the cancel
+midi_log = {}
+outs:note(1, {freq = 261.6256, level = 0.5, dur = 1.0,
+  ratios = {14, 14, 14, 14}, env_segs = {{0.2, 0.8, 0, 0}, {0.2, 0.8, 0, 0}, {0.2, 0.8, 0, 0}, {0.2, 0.8, 0, 0}}})
+clock._run_until(16.5)  -- part-way up the attack: CCs are non-zero and climbing
+outs:notes_off(1)
+local after_cancel = #midi_log
+clock._run_until(40)
+check('notes_off halts the CC stream (no further messages)', #midi_log == after_cancel)
+check('notes_off zeroed the streamed CCs', outs.cc_last[1][1] == 0)
+ofake:set('env_stream_rate', 100)  -- restore for later fire() tests
 
 -- zero-level hits are silent everywhere (matches the internal voice)
 midi_log = {}
@@ -2001,14 +2057,37 @@ ofake:set('ch4_output', Outputs.DEST.AUDIO)
 check('last jf channel leaving sends jf.mode(0)', crow_log[3][1] == 'jf_mode'
   and crow_log[3][2] == 0)
 
--- er301: cv + tr_pulse on the channel-numbered port
+-- er301: pitch v/oct + trigger on port = channel, then four per-op CV envelope streams
+-- on ports ch*10+op (ch5 -> 51..54), each tracing its op's contour up to a cv_ceiling.
+local function er301_cv(log, port)
+  local out = {}
+  for _, m in ipairs(log) do
+    if m[1] == '301cv' and m[2] == port then out[#out + 1] = m[3] end
+  end
+  return out
+end
 ofake:set('ch5_output', Outputs.DEST.ER301)
+ofake:set('env_stream_rate', 100)
 crow_log = {}
-outs:note(5, {freq = 523.2511, level = 0.5, harm = 14, dur = 0.5})
-check('er301 cv + tr on port = channel', crow_log[1][1] == '301cv' and crow_log[1][2] == 5
+outs:note(5, {freq = 523.2511, level = 0.5,
+  ratios = {14, 0.125, 14, 14},
+  env_segs = {{0.01, 0.02, 0, 0}, {0.01, 0.02, 0, 0}, {0.01, 0.02, 0, 0}, {0.01, 0.02, 0, 0}},
+  dur = 0.03})
+check('er301 pitch cv + tr on port = channel', crow_log[1][1] == '301cv' and crow_log[1][2] == 5
   and approx(crow_log[1][3], 1) and crow_log[2][1] == '301tr' and crow_log[2][2] == 5)
-check('er301 harm CV on port channel+6 (7..12)', crow_log[3][1] == '301cv'
-  and crow_log[3][2] == 11 and approx(crow_log[3][3], 5))
+clock._run_until(104)  -- flush the 0.03s CV streams
+local cv51 = er301_cv(crow_log, 51)
+check('er301 op1 CV stream on port 51 peaks at cv_ceiling (5V) then returns to 0',
+  max_of(cv51) == Outputs.OP_CV_MAX and cv51[#cv51] == 0)
+check('er301 op1 CV stream traces attack->peak->decay->0', (function()
+  -- 0.01/0.02 linear @ 100Hz, ratio 14 -> ceiling 5V: 0, 5, 2.5, 0
+  return #cv51 == 4 and cv51[1] == 0 and approx(cv51[2], 5)
+    and approx(cv51[3], 2.5) and cv51[4] == 0
+end)())
+check('er301 op2 CV (min ratio -> ceiling 0) streams only 0V', max_of(er301_cv(crow_log, 52)) == 0)
+check('er301 op3/op4 CV streams present on ports 53/54',
+  #er301_cv(crow_log, 53) > 0 and #er301_cv(crow_log, 54) > 0)
+check('er301 sends no legacy brightness CV on port 11', #er301_cv(crow_log, 11) == 0)
 
 -- burst integration: fire() respects wants_audio and forwards final values
 engine = { trigs = 0 }
@@ -2017,12 +2096,14 @@ local oeng = Burst.new()
 oeng.outputs = outs
 midi_log = {}
 -- fire(ch, beat, freq, level, env1, env2, env3, env4, div, total, hit_idx)
-oeng:fire(1, 0, 440, 0.5, 4, 3, 8, 8, 4, 1, 0)  -- ch1 is midi: external only (pitch bend + note_on + op1/op2 CCs)
-check('fire on midi channel skips engine.trig', engine.trigs == 0 and #midi_log == 4)
+oeng:fire(1, 0, 440, 0.5, 4, 3, 8, 8, 4, 1, 0)  -- ch1 midi: external only (pb + note + CC stream)
+check('fire on midi channel skips engine.trig',
+  engine.trigs == 0 and midi_log[1][1] == 'pb' and midi_log[2][1] == 'on')
 ofake:set('ch1_output', Outputs.DEST.AUDIO_MIDI)
 midi_log = {}
 oeng:fire(1, 0, 440, 0.5, 4, 3, 8, 8, 4, 1, 0)
-check('audio+midi fires both', engine.trigs == 1 and #midi_log == 4)
+check('audio+midi fires both external + engine',
+  engine.trigs == 1 and midi_log[1][1] == 'pb' and midi_log[2][1] == 'on')
 oeng:fire(2, 0, 440, 0.5, 4, 3, 8, 8, 4, 1, 0)  -- ch2 is on crow 3+4
 check('fire on crow channel skips engine.trig', engine.trigs == 1)
 engine = nil

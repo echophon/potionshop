@@ -8,18 +8,25 @@
 -- crow 1+2 / crow 3+4 (CV pitch on
 -- the odd output, AR envelope on the even one), crow ii Just Friends
 -- (play_voice, JF voice = channel number), and crow ii ER-301 (sc.cv/sc.tr
--- port = channel number). JF is driven per hit — geode-'inspired' (the
--- script's local geode shaping), not JF's own geode engine.
+-- pitch + trigger on port = channel number, PLUS four per-operator CV envelope
+-- streams on ports ch*10+op — ch1 -> 11..14, ch2 -> 21..24, ...). JF is driven per
+-- hit — geode-'inspired' (the script's local geode shaping), not JF's own geode engine.
 --
 -- Burst:fire calls `note()` with the FINAL per-hit values (geode-bent freq,
 -- accented level, geode-shaped harmonicity, computed envelope length), so
 -- external voices track the internal voice's dynamics exactly: MIDI velocity
 -- follows the hit level, MIDI note length and the crow envelope follow the FM
--- amp decay. The MIDI path also sends two per-operator expression CCs each hit:
--- op1's FM ratio on the modwheel (CC1) and op2's on the breath controller (CC2),
--- so a receiving synth tracks the operator voicing. The aggregate brightness proxy
--- (largest active modulator ratio) is no longer on MIDI; ER-301 still puts it on a
--- second CV port (channel + num_channels, i.e. CV 7..12) as a plain step per hit.
+-- amp decay. The MIDI path also STREAMS four per-operator CC envelopes each hit — one
+-- per operator, on a SELECTABLE CC number (per-channel `chN_opK_cc` param, 0 = off).
+-- Each stream traces that op's envelope CONTOUR over the note (env_at, the same
+-- attack/decay shape the FM op plays) up to a ceiling set by its FM ratio, so the CC
+-- carries the COMBINATION of the op's ratio sequence (how high) and its env sequence
+-- (the shape in time). The ER-301 destination streams the SAME four contours as CV
+-- (stream_op_cvs) on ports ch*10+op, ceilinged in volts (cv_ceiling). Both share one
+-- coroutine engine (stream_env) updating at `env_stream_rate` Hz, sending only when a
+-- value changes; a new hit / stop cancels the stream via a per-channel generation.
+-- (This replaced the old fixed op1-modwheel / op2-breath CC pair + the ER-301 single
+-- brightness CV on ports 7..12; there is no aggregate brightness proxy anymore.)
 --
 -- MIDI *note* output goes to the single device chosen by the OUTPUTS-group
 -- `midi_device` param (a name dropdown over midi.vports). MIDI *clock* out (24
@@ -75,19 +82,44 @@ function M.note_to_volts(note) return (note - 60) / 12 end
 -- never reach here (note() drops them, matching the silent internal voice).
 function M.velocity(level) return clamp(round(level * 127), 1, 127) end
 
--- brightness proxy -> normalized 0..1 over the curated FM-ratio span
--- (RATIO_VALUES = 0.125 .. 14). The value arriving here is the channel's largest
--- active modulator ratio (Burst:fire), a per-channel stand-in for the old harm.
+-- FM op ratio -> normalized 0..1 over the curated FM-ratio span (RATIO_VALUES =
+-- 0.125 .. 14). Used to set each op stream's ceiling (ratio_ceiling / cv_ceiling).
 local HARM_MIN, HARM_MAX = 0.125, 14
-function M.harm_norm(harm) return clamp((harm - HARM_MIN) / (HARM_MAX - HARM_MIN), 0, 1) end
+function M.harm_norm(ratio) return clamp((ratio - HARM_MIN) / (HARM_MAX - HARM_MIN), 0, 1) end
 
--- ER-301 modulation CV: brightness over 0..5 V, a plain step per hit.
-function M.harm_to_volts(harm) return M.harm_norm(harm) * 5 end
+-- FM op ratio -> the CEILING of that op's streamed CC (0..127): its position over the
+-- curated ratio span. The per-hit CC stream traces the op's envelope contour up to
+-- this ceiling, so the CC carries BOTH the op ratio (how high) and the op env (the
+-- shape over time). Kept separate from the contour so it's pinnable by tests.
+function M.ratio_ceiling(ratio) return M.harm_norm(ratio) * 127 end
 
--- FM op ratio -> 0..127 CC, normalized over the curated ratio span. Used for the
--- per-operator modwheel/breath CCs (op1 on CC1, op2 on CC2); the brightness proxy
--- is a ratio too, so this is the same map it used on the modwheel before.
-function M.ratio_to_cc(ratio) return round(M.harm_norm(ratio) * 127) end
+-- Peak volts of a per-operator ER-301 CV stream at max ratio (the CV analog of the
+-- MIDI 127 ceiling). Matches the 0..5 V convention of the other er301/jf CV here.
+M.OP_CV_MAX = 5
+-- CV ceiling of an op's ER-301 envelope stream: its ratio position (0..1) x OP_CV_MAX.
+function M.cv_ceiling(ratio) return M.harm_norm(ratio) * M.OP_CV_MAX end
+
+-- SC-style `Env` segment interpolation from level a to b at fractional position pos
+-- (0..1) with curvature `curve` (0 = linear, <0 = fast-start 'exp', >0 = slow-start
+-- 'log'). Mirrors SuperCollider's Env curve math so the streamed MIDI CC follows the
+-- same contour the FM operator's envelope plays.
+function M.curve_seg(a, b, pos, curve)
+  if pos <= 0 then return a end
+  if pos >= 1 then return b end
+  if math.abs(curve) < 0.0001 then return a + (b - a) * pos end
+  return a + (b - a) * (1 - math.exp(pos * curve)) / (1 - math.exp(curve))
+end
+
+-- Operator envelope value (0..1) at time `t` seconds: rise 0->1 over `atk` (curve
+-- `atkC`), then fall 1->0 over `dec` (curve `decC`), 0 before and after. This is the
+-- contour streamed as CC per hit, scaled by the op's ratio ceiling.
+function M.env_at(t, atk, dec, atkC, decC)
+  if t <= 0 then return 0 end
+  if t < atk then return M.curve_seg(0, 1, t / atk, atkC) end
+  local dt = t - atk
+  if dt < dec then return M.curve_seg(1, 0, dt / dec, decC) end
+  return 0
+end
 
 -- ---- construction ---------------------------------------------------------
 
@@ -101,6 +133,17 @@ function M.new(opts)
   self.num_channels = opts.num_channels or 6
   self.dest = {}       -- per channel destination index (nil = audio)
   self.midi_chan = {}  -- per channel MIDI channel (1-16)
+  self.op_cc = {}      -- per channel: {op1..op4 CC number}, 0 = that op's CC off
+  self.stream_gen = {} -- per channel: env-stream generation (bumped per hit / stop to cancel)
+  self.cc_last = {}    -- per channel: {op -> last MIDI CC value sent}, dedup across the stream
+  self.cv_last = {}    -- per channel: {op -> last ER-301 CV value sent (0.01 V units)}, dedup
+  self.stream_rate = 60  -- env stream update rate (Hz), shared by the CC + CV streams
+  for n = 1, self.num_channels do
+    self.op_cc[n] = {20, 21, 22, 23}
+    self.stream_gen[n] = 0
+    self.cc_last[n] = {}
+    self.cv_last[n] = {}
+  end
   self.midi_device = 1 -- script-wide MIDI output device (vport index 1-16)
   self.midi_conn = nil -- the single connected MIDI device (shared by all chans)
   self.bend_range = 2  -- MIDI pitch-bend range in semitones (matches the synth)
@@ -133,7 +176,8 @@ end
 
 function M:add_params()
   local params = self.params
-  params:add_group('outputs', 'OUTPUTS', 4 + self.num_channels * 3)
+  -- per channel: separator + destination + midi channel + four op CC numbers = 7
+  params:add_group('outputs', 'OUTPUTS', 5 + self.num_channels * 7)
 
   -- one script-wide MIDI output device; every channel routed to midi uses it
   params:add_option('midi_device', 'midi device', self:device_names(), self.midi_device)
@@ -147,6 +191,14 @@ function M:add_params()
   params:add_number('midi_bend_range', 'midi bend range', 1, 12, self.bend_range,
     function(p) return '+/- ' .. p.value .. ' st' end)
   params:set_action('midi_bend_range', function(v) self.bend_range = v end)
+
+  -- update rate (Hz) of the per-operator envelope streams (MIDI CC + ER-301 CV alike).
+  -- Higher = smoother contours but more MIDI/i2c traffic (4 ops x this x active
+  -- channels); the streams dedup unchanged values so flat tails stay cheap. Lower it
+  -- on DIN MIDI / a busy i2c bus if it floods.
+  params:add_number('env_stream_rate', 'env stream rate', 10, 250, self.stream_rate,
+    function(p) return p.value .. ' hz' end)
+  params:set_action('env_stream_rate', function(v) self.stream_rate = v end)
 
   -- send 24 ppqn MIDI clock + start/stop to the output device, bracketed by the
   -- script's transport (potionshop.lua drives clock_start/stop off run-state)
@@ -171,6 +223,20 @@ function M:add_params()
     params:set_action('ch' .. n .. '_midi_chan', function(v)
       self.midi_chan[n] = v
     end)
+
+    -- Four selectable MIDI CCs, one per operator: each hit STREAMS that op's envelope
+    -- contour (ceilinged by its FM ratio) on the chosen CC (see stream_op_ccs), so the
+    -- op ratio + op env sequences show up on the receiving synth as a control envelope.
+    -- 0 = off (that op streams no CC). Default to the general-purpose controllers 20..23
+    -- (undefined in the MIDI spec, so unlikely to collide with modwheel/breath).
+    for op = 1, 4 do
+      local default_cc = 19 + op  -- 20, 21, 22, 23
+      params:add_number('ch' .. n .. '_op' .. op .. '_cc', 'op ' .. op .. ' cc', 0, 127, default_cc,
+        function(p) return p.value == 0 and 'off' or ('cc ' .. p.value) end)
+      params:set_action('ch' .. n .. '_op' .. op .. '_cc', function(v)
+        self.op_cc[n][op] = v
+      end)
+    end
   end
 end
 
@@ -209,12 +275,15 @@ function M:note(ch, ev)
   if d == AUDIO or ev.level <= 0 then return end
   local note = M.freq_to_note(ev.freq)
   local volts = M.note_to_volts(note)
-  local harm = ev.harm or HARM_MIN
   if d == MIDI or d == AUDIO_MIDI then
     self:midi_bend(ch, M.bend_value(note, self.bend_range))  -- JI/geode detune
     self:midi_note(ch, round(note), M.velocity(ev.level), ev.dur)
-    self:midi_cc(ch, 1, M.ratio_to_cc(ev.op1 or 1))  -- modwheel = op1 FM ratio
-    self:midi_cc(ch, 2, M.ratio_to_cc(ev.op2 or 1))  -- breath   = op2 FM ratio
+    -- four per-operator CC ENVELOPE streams: each op traces its envelope contour as
+    -- CC over the note, up to a ceiling set by its FM ratio, on its selectable CC
+    -- (0 = off). ev.ratios/ev.env_segs come from Burst:fire; skip if a caller omits them.
+    local ccs = self.op_cc[ch]
+    local ops, total = self:build_stream_ops(ev, M.ratio_ceiling, function(op) return ccs[op] end)
+    if ops and total > 0 then self:stream_op_ccs(ch, ops, total) end
   elseif d == CROW12 then
     self:crow_pair(1, 2, volts, ev)
   elseif d == CROW34 then
@@ -224,10 +293,33 @@ function M:note(ch, ev)
     -- channel always retriggers its own voice instead of stealing a sibling's
     self.crow.ii.jf.play_voice(ch, volts, clamp(ev.level, 0, 1) * 5)
   elseif d == ER301 and self.crow then
+    -- pitch v/oct + trigger on CV(ch)/TR(ch), then FOUR per-operator CV ENVELOPE
+    -- streams on ports ch*10+op (ch1 -> 11..14, ch2 -> 21..24, ...): the CV analog of
+    -- the MIDI CC streams, each op's ratio-ceilinged envelope contour as CV.
     self.crow.ii.er301.cv(ch, volts)
     self.crow.ii.er301.tr_pulse(ch)
-    self.crow.ii.er301.cv(ch + self.num_channels, M.harm_to_volts(harm))  -- harm CV on port 7..12
+    local ops, total = self:build_stream_ops(ev, M.cv_ceiling, function(op) return ch * 10 + op end)
+    if ops and total > 0 then self:stream_op_cvs(ch, ops, total) end
   end
+end
+
+-- Build the per-op stream descriptors from an event's ratios + env segments.
+-- `ceiling_fn(ratio)` -> the op's peak value (127 for CC, OP_CV_MAX volts for CV);
+-- `dest_fn(op)` -> the op's CC number / CV port, skipped when nil or <= 0. Returns
+-- {ops, total_seconds}; ops[op] = {dest, ceiling, atk, dec, atkC, decC}.
+function M:build_stream_ops(ev, ceiling_fn, dest_fn)
+  local ratios, segs = ev.ratios, ev.env_segs
+  if not (ratios and segs) then return nil, 0 end
+  local ops, total = {}, 0
+  for op = 1, 4 do
+    local seg, dest = segs[op], dest_fn(op)
+    if seg and dest and dest > 0 then
+      ops[op] = { dest = dest, ceiling = ceiling_fn(ratios[op]),
+                  atk = seg[1], dec = seg[2], atkC = seg[3], decC = seg[4] }
+      total = math.max(total, seg[1] + seg[2])
+    end
+  end
+  return ops, total
 end
 
 function M:midi_cc(ch, cc, val)
@@ -240,6 +332,75 @@ function M:midi_bend(ch, val)
   local conn = self.midi_conn
   if not conn then return end
   conn:pitchbend(val, self.midi_chan[ch] or 1)
+end
+
+-- Generic per-hit envelope streamer, shared by the MIDI CC + ER-301 CV streams. Walks
+-- a shared time grid at stream_rate Hz over `total` seconds; each step calls
+-- on_step(op, o, env01) for every present op (o = its descriptor, env01 = its 0..1
+-- contour value now). Bumps the per-channel generation so a new hit / notes_off cancels
+-- this stream at its next step; runs on_close() (the zero-out) once the note ends,
+-- unless a newer hit already superseded it (monophonic per channel, like the note).
+function M:stream_env(ch, ops, total, on_step, on_close)
+  self.stream_gen[ch] = (self.stream_gen[ch] or 0) + 1
+  local token = self.stream_gen[ch]
+  local step = 1 / self.stream_rate
+  clock.run(function()
+    local t = 0
+    while t <= total and self.stream_gen[ch] == token do
+      for op = 1, 4 do
+        local o = ops[op]
+        if o then on_step(op, o, M.env_at(t, o.atk, o.dec, o.atkC, o.decC)) end
+      end
+      clock.sleep(step)
+      t = t + step
+    end
+    if self.stream_gen[ch] == token then on_close() end
+  end)
+end
+
+-- MIDI CC stream: each op's ratio-ceilinged envelope contour as CC on o.dest, sent only
+-- when the rounded 0..127 value CHANGES (flat tails stay cheap). cc_last persists per
+-- channel so a value equal to the previous hit's tail isn't resent; a final 0 closes it.
+function M:stream_op_ccs(ch, ops, total)
+  local last = self.cc_last[ch]
+  local mc = self.midi_chan[ch] or 1
+  self:stream_env(ch, ops, total,
+    function(op, o, env01)
+      local v = round(o.ceiling * env01)
+      if v ~= last[op] and self.midi_conn then
+        self.midi_conn:cc(o.dest, v, mc); last[op] = v
+      end
+    end,
+    function()
+      for op = 1, 4 do
+        local o = ops[op]
+        if o and last[op] ~= 0 and self.midi_conn then
+          self.midi_conn:cc(o.dest, 0, mc); last[op] = 0
+        end
+      end
+    end)
+end
+
+-- ER-301 CV stream: each op's ratio-ceilinged envelope contour as CV (volts) on its
+-- port o.dest, sent only when the value CHANGES at 0.01 V resolution (dedup keeps i2c
+-- traffic down). cv_last persists per channel; a final 0 V closes each op's CV.
+function M:stream_op_cvs(ch, ops, total)
+  local last = self.cv_last[ch]
+  self:stream_env(ch, ops, total,
+    function(op, o, env01)
+      local q = round(o.ceiling * env01 * 100)  -- quantize to 0.01 V (dedup + clean 0)
+      if q ~= last[op] and self.crow then
+        self.crow.ii.er301.cv(o.dest, q / 100); last[op] = q
+      end
+    end,
+    function()
+      for op = 1, 4 do
+        local o = ops[op]
+        if o and last[op] and last[op] ~= 0 and self.crow then
+          self.crow.ii.er301.cv(o.dest, 0); last[op] = 0
+        end
+      end
+    end)
 end
 
 -- ---- MIDI clock out ---------------------------------------------------------
@@ -330,13 +491,32 @@ function M:midi_note(ch, note, vel, dur)
   end)
 end
 
--- flush hanging MIDI notes for one channel (engine stop, dest/device change)
+-- flush hanging MIDI notes for one channel (engine stop, dest/device change), and
+-- cancel any running envelope stream (bump the gen so it bails), zeroing whatever it
+-- left non-zero so a control value doesn't hang mid-contour — on both the MIDI CC and
+-- ER-301 CV surfaces (only the channel's active destination has non-zero state).
 function M:notes_off(ch)
   local conn = self.midi_conn
   local mc = self.midi_chan[ch] or 1
   for note, _ in pairs(self.active[ch]) do
     if conn then conn:note_off(note, 0, mc) end
     self.active[ch][note] = nil
+  end
+  self.stream_gen[ch] = (self.stream_gen[ch] or 0) + 1  -- invalidate the in-flight stream
+  local cclast, ccs = self.cc_last[ch], self.op_cc[ch]
+  for op = 1, 4 do
+    local cc = ccs[op]
+    if cclast[op] and cclast[op] ~= 0 and cc and cc > 0 then
+      if conn then conn:cc(cc, 0, mc) end
+      cclast[op] = 0
+    end
+  end
+  local cvlast = self.cv_last[ch]
+  for op = 1, 4 do
+    if cvlast[op] and cvlast[op] ~= 0 then
+      if self.crow then self.crow.ii.er301.cv(ch * 10 + op, 0) end
+      cvlast[op] = 0
+    end
   end
 end
 
