@@ -3,11 +3,6 @@
 six channels repeatedly fire **bursts** — short flurries of FM notes
 whose rhythm, pitch, density and tone come from a stack of looping value sequences.
 
-> 📖 **graphical documentation:** a rich, page-by-page guide with grid diagrams
-> lives in [`docs/potionshop-guide.html`](docs/potionshop-guide.html) (open it in
-> a browser), plus a printable [cheatsheet](docs/potionshop-cheatsheet.html). the
-> text below mirrors them.
-
 ## hardware
 
 **required**
@@ -28,7 +23,7 @@ whose rhythm, pitch, density and tone come from a stack of looping value sequenc
 in the maiden REPL type:
 
 ```
-;install https://github.com/echophon/potionshop/archive/refs/tags/v0.1.zip
+;install https://github.com/echophon/potionshop/archive/refs/tags/v0.3-beta.zip
 ```
 
 on initial install, Norns will need to be restarted to load the new engine.
@@ -76,8 +71,6 @@ lit cells are steps; the one dim cell just past the last step of a lane is its
 - **tap a step** → opens the value picker on it.
 - **tap the append slot** → adds a step and opens the picker on it.
 - when a channel runs, its current step glows full-bright as the **playhead**.
-
-there is **no A/B flip** — the lane you edit is simply the half you press.
 
 ### step picker
 
