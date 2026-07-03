@@ -1196,6 +1196,25 @@ check('PERF rate col14 sets 2x', geng.channels[1].rate == 2)
 ctl:press(12, 6)
 check('PERF mode exited', ctl.perfMode == false)
 
+-- pressing a sequence selector while a latch page is open exits that page and switches
+-- straight to the selected sequence (rather than leaving the page latched underneath).
+ctl:press(11, 6)                       -- enter MIX
+check('MIX mode entered for seq-selector test', ctl.mixMode == true)
+ctl:press(1, 6)                        -- row6 col1 = op1 ratio sequence selector
+check('seq selector exits the open MIX page', ctl.mixMode == false)
+check('seq selector switches to the selected sequence', ctl.selectedParam == 'opRatio1')
+ctl:press(12, 6)                       -- enter PERF
+check('PERF mode entered for seq-selector test', ctl.perfMode == true)
+ctl:press(0, 7)                        -- row7 col0 = div/reps sequence selector
+check('seq selector exits the open PERF page', ctl.perfMode == false)
+check('seq selector switches to div/reps', ctl.selectedParam == 'div')
+-- an armed action mode is likewise cleared by selecting a sequence page
+ctl:press(13, 7)                       -- arm CLR (action mode)
+check('CLR action armed', ctl.actionMode == 'clear')
+ctl:press(0, 6)                        -- note sequence selector
+check('seq selector clears the armed action mode', ctl.actionMode == nil)
+check('seq selector switches to note', ctl.selectedParam == 'note')
+
 -- FM algorithm is a per-channel static scalar (MIX page col 15), not a global engine
 -- field or a dedicated grid page/mode.
 check('algo is a per-channel field, not global', geng.algo == nil and geng.channels[1].algo ~= nil)
@@ -1892,24 +1911,12 @@ check('note_to_volts C5 = +1V', approx(Outputs.note_to_volts(72), 1))
 check('velocity scales level linearly', Outputs.velocity(0.5) == 64)
 check('velocity floors at 1', Outputs.velocity(0.001) == 1)
 check('velocity caps at 127', Outputs.velocity(1.5) == 127)
--- ratio_ceiling: FM ratio -> the streamed CC's ceiling (0..127 over the curated span)
-check('ratio_ceiling: max ratio = 127', approx(Outputs.ratio_ceiling(14), 127))
-check('ratio_ceiling: min ratio = 0', approx(Outputs.ratio_ceiling(0.125), 0))
--- cv_ceiling: FM ratio -> the ER-301 CV stream's ceiling (0..OP_CV_MAX volts)
-check('cv_ceiling: max ratio = OP_CV_MAX volts', approx(Outputs.cv_ceiling(14), Outputs.OP_CV_MAX))
-check('cv_ceiling: min ratio = 0V', approx(Outputs.cv_ceiling(0.125), 0))
--- curve_seg: SC Env interpolation (a->b at pos, curvature)
-check('curve_seg: linear midpoint', approx(Outputs.curve_seg(0, 1, 0.5, 0), 0.5))
-check('curve_seg: clamps to a at pos<=0', Outputs.curve_seg(0, 1, 0, -4) == 0)
-check('curve_seg: clamps to b at pos>=1', Outputs.curve_seg(0, 1, 1, -4) == 1)
-check('curve_seg: negative curve is fast-start (>linear at midpoint)',
-  Outputs.curve_seg(0, 1, 0.5, -4) > 0.5)
--- env_at: 0 before, rises through attack, peaks at end of attack, falls, 0 after
-check('env_at: 0 at t=0', Outputs.env_at(0, 0.1, 0.2, 0, 0) == 0)
-check('env_at: linear attack midpoint = 0.5', approx(Outputs.env_at(0.05, 0.1, 0.2, 0, 0), 0.5))
-check('env_at: peak (=1) at end of attack', approx(Outputs.env_at(0.1, 0.1, 0.2, 0, 0), 1))
-check('env_at: linear decay midpoint = 0.5', approx(Outputs.env_at(0.2, 0.1, 0.2, 0, 0), 0.5))
-check('env_at: 0 after decay ends', Outputs.env_at(0.31, 0.1, 0.2, 0, 0) == 0)
+-- ratio_cc: FM ratio -> 0..127 CC over the curated span (one value per hit, no envelope)
+check('ratio_cc: max ratio = 127', Outputs.ratio_cc(14) == 127)
+check('ratio_cc: min ratio = 0', Outputs.ratio_cc(0.125) == 0)
+-- ratio_cv: FM ratio -> ER-301 CV volts (0..OP_CV_MAX)
+check('ratio_cv: max ratio = OP_CV_MAX volts', approx(Outputs.ratio_cv(14), Outputs.OP_CV_MAX))
+check('ratio_cv: min ratio = 0V', approx(Outputs.ratio_cv(0.125), 0))
 check('bend_value: in-tune note is centered', Outputs.bend_value(60, 2) == 8192)
 check('bend_value: +0.25 st over ±2 range = +1/8 scale', Outputs.bend_value(60.25, 2) == 8192 + 1024)
 check('bend_value: -0.25 st over ±2 range = -1/8 scale', Outputs.bend_value(59.75, 2) == 8192 - 1024)
@@ -1926,94 +1933,52 @@ check('default destination is audio', outs:wants_audio(1) == true)
 outs:note(1, {freq = 440, level = 0.5, dur = 0.5})
 check('audio destination sends nothing external', #midi_log == 0 and #crow_log == 0)
 
--- helper: pull the value stream for one CC number out of the midi log, in order.
-local function cc_values(log, ccnum)
-  local out = {}
-  for _, m in ipairs(log) do
-    if m[1] == 'cc' and m[2] == ccnum then out[#out + 1] = m[3] end
-  end
-  return out
-end
 local function max_of(t) local m = 0 for _, v in ipairs(t) do m = math.max(m, v) end return m end
 
--- midi: note on with velocity/channel, note off after dur, then a per-op CC envelope
--- stream tracing each op's contour. env_stream_rate 100 Hz = 0.01s steps; a {0.01,0.02} linear
--- envelope traces 0 -> 127 (attack end) -> 64 (decay mid) -> 0.
+-- midi: note on with velocity/channel, note off after dur, then four per-op CCs, each
+-- carrying that op's FM ratio (ratio_cc), on the default CC numbers 20..23.
 ofake:set('ch1_output', Outputs.DEST.MIDI)
 ofake:set('ch1_midi_chan', 5)
-ofake:set('env_stream_rate', 100)
 check('midi destination disables internal audio', outs:wants_audio(1) == false)
-outs:note(1, {freq = 261.6256, level = 0.5,
-  ratios = {14, 0.125, 14, 14},
-  env_segs = {{0.01, 0.02, 0, 0}, {0.01, 0.02, 0, 0}, {0.01, 0.02, 0, 0}, {0.01, 0.02, 0, 0}},
-  dur = 0.03})
+outs:note(1, {freq = 261.6256, level = 0.5, ratios = {14, 0.125, 14, 0.125}, dur = 0.5})
 check('midi pitch bend precedes the note, centered for an in-tune note',
   midi_log[1][1] == 'pb' and midi_log[1][2] == 8192 and midi_log[1][3] == 5)
 check('midi note_on: middle C, vel 64, chan 5',
   midi_log[2][1] == 'on' and midi_log[2][2] == 60
   and midi_log[2][3] == 64 and midi_log[2][4] == 5)
-check('op1 CC stream opens at 0 on the channel (cc20, attack starts from 0)',
+check('op1 cc (cc20) = op1 ratio 14 -> 127, on the channel',
   midi_log[3][1] == 'cc' and midi_log[3][2] == 20
-  and midi_log[3][3] == 0 and midi_log[3][4] == 5)
-clock._run_until(4)  -- advance well past the 0.03s stream + the note dur
-local op1 = cc_values(midi_log, 20)
-check('op1 CC stream peaks at the ratio ceiling (127) then returns to 0',
-  max_of(op1) == 127 and op1[#op1] == 0)
-check('op1 CC stream traces attack->peak->decay->0', (function()
-  -- 0.01/0.02 linear @ 100Hz: values at t=0,0.01,0.02,0.03 = 0,127,64,0
-  return #op1 == 4 and op1[1] == 0 and op1[2] == 127 and op1[3] == 64 and op1[4] == 0
-end)())
-check('op2 CC (min ratio -> ceiling 0) streams only silence',
-  max_of(cc_values(midi_log, 21)) == 0)
-check('midi note_off still scheduled after dur',
-  (function() for _, m in ipairs(midi_log) do if m[1] == 'off' and m[2] == 60 then return true end end end)())
+  and midi_log[3][3] == 127 and midi_log[3][4] == 5)
+check('op2 cc (cc21) = op2 ratio 0.125 -> 0',
+  midi_log[4][1] == 'cc' and midi_log[4][2] == 21 and midi_log[4][3] == 0)
+check('op3 cc (cc22) = op3 ratio 14 -> 127',
+  midi_log[5][1] == 'cc' and midi_log[5][2] == 22 and midi_log[5][3] == 127)
+check('op4 cc (cc23) = op4 ratio 0.125 -> 0',
+  #midi_log == 6 and midi_log[6][1] == 'cc' and midi_log[6][2] == 23
+  and midi_log[6][3] == 0 and midi_log[6][4] == 5)
+clock._run_until(4)  -- 0.5 s at 120 bpm = 1 beat
+check('midi note_off scheduled after dur',
+  #midi_log == 7 and midi_log[7][1] == 'off' and midi_log[7][2] == 60)
 
--- op CC number 0 = that operator's CC is disabled (no stream for it)
+-- op CC number 0 = that operator's CC is disabled (no message for it)
 ofake:set('ch1_op2_cc', 0)
 midi_log = {}
-outs:note(1, {freq = 261.6256, level = 0.5,
-  ratios = {14, 14, 14, 14},
-  env_segs = {{0.01, 0.02, 0, 0}, {0.01, 0.02, 0, 0}, {0.01, 0.02, 0, 0}, {0.01, 0.02, 0, 0}},
-  dur = 0.03})
-clock._run_until(8)
-check('op2 cc=0 suppresses op2 stream (no cc21 traffic)', #cc_values(midi_log, 21) == 0)
-check('op1/op3/op4 still stream', #cc_values(midi_log, 20) > 0
-  and #cc_values(midi_log, 22) > 0 and #cc_values(midi_log, 23) > 0)
+outs:note(1, {freq = 261.6256, level = 0.5, ratios = {14, 14, 14, 14}, dur = 0.5})
+check('op2 cc=0 suppresses op2 CC (three op CCs, not four)',
+  #midi_log == 5 and midi_log[3][2] == 20 and midi_log[4][2] == 22 and midi_log[5][2] == 23)
 ofake:set('ch1_op2_cc', 21)  -- restore default
+clock._run_until(8)
 
--- retrigger: a new hit bumps the CC-stream generation so the prior stream is cancelled
--- (its next step bails). The note itself is cut + retriggered as before.
+-- retrigger same pitch: old note cut first, stale timer's off dropped. Each hit emits
+-- pb, note, then four per-op CCs (cc20..23): pb,on,cc,cc,cc,cc / pb,off,on,cc,cc,cc,cc.
 midi_log = {}
-local g0 = outs.stream_gen[1]
-outs:note(1, {freq = 261.6256, level = 0.5, dur = 0.5,
-  ratios = {1, 1, 1, 1}, env_segs = {{0.1, 0.2, 0, 0}, {0.1, 0.2, 0, 0}, {0.1, 0.2, 0, 0}, {0.1, 0.2, 0, 0}}})
-outs:note(1, {freq = 261.6256, level = 0.9, dur = 0.5,
-  ratios = {1, 1, 1, 1}, env_segs = {{0.1, 0.2, 0, 0}, {0.1, 0.2, 0, 0}, {0.1, 0.2, 0, 0}, {0.1, 0.2, 0, 0}}})
-check('retrigger bumps the CC-stream generation twice', outs.stream_gen[1] == g0 + 2)
-check('retrigger cuts the held note (an off precedes the second on)', (function()
-  local ons, off_between = 0, false
-  for _, m in ipairs(midi_log) do
-    if m[1] == 'on' then ons = ons + 1 end
-    if m[1] == 'off' and ons == 1 then off_between = true end
-  end
-  return ons == 2 and off_between
-end)())
+outs:note(1, {freq = 261.6256, level = 0.5, dur = 0.5, ratios = {1, 1, 1, 1}})
+outs:note(1, {freq = 261.6256, level = 0.9, dur = 0.5, ratios = {1, 1, 1, 1}})
+check('retrigger cuts the held note first',
+  midi_log[2][1] == 'on' and midi_log[8][1] == 'off' and midi_log[9][1] == 'on')
 clock._run_until(16)
-check('retrigger settles with two offs (the cut + one surviving timer)',
-  (function() local n = 0 for _, m in ipairs(midi_log) do if m[1] == 'off' then n = n + 1 end end return n == 2 end)())
-
--- notes_off cancels a running CC stream and zeros any non-zero CC it left
-ofake:set('env_stream_rate', 20)  -- 0.05s steps: stream stays open across the cancel
-midi_log = {}
-outs:note(1, {freq = 261.6256, level = 0.5, dur = 1.0,
-  ratios = {14, 14, 14, 14}, env_segs = {{0.2, 0.8, 0, 0}, {0.2, 0.8, 0, 0}, {0.2, 0.8, 0, 0}, {0.2, 0.8, 0, 0}}})
-clock._run_until(16.5)  -- part-way up the attack: CCs are non-zero and climbing
-outs:notes_off(1)
-local after_cancel = #midi_log
-clock._run_until(40)
-check('notes_off halts the CC stream (no further messages)', #midi_log == after_cancel)
-check('notes_off zeroed the streamed CCs', outs.cc_last[1][1] == 0)
-ofake:set('env_stream_rate', 100)  -- restore for later fire() tests
+check('exactly one note_off after retrigger settles', #midi_log == 14
+  and midi_log[14][1] == 'off')
 
 -- zero-level hits are silent everywhere (matches the internal voice)
 midi_log = {}
@@ -2057,37 +2022,23 @@ ofake:set('ch4_output', Outputs.DEST.AUDIO)
 check('last jf channel leaving sends jf.mode(0)', crow_log[3][1] == 'jf_mode'
   and crow_log[3][2] == 0)
 
--- er301: pitch v/oct + trigger on port = channel, then four per-op CV envelope streams
--- on ports ch*10+op (ch5 -> 51..54), each tracing its op's contour up to a cv_ceiling.
+-- er301: pitch v/oct + trigger on port = channel, then four per-op ratio CVs on ports
+-- ch*10+op (ch5 -> 51..54), each carrying that op's FM ratio (ratio_cv), one per hit.
 local function er301_cv(log, port)
-  local out = {}
-  for _, m in ipairs(log) do
-    if m[1] == '301cv' and m[2] == port then out[#out + 1] = m[3] end
-  end
-  return out
+  for _, m in ipairs(log) do if m[1] == '301cv' and m[2] == port then return m[3] end end
 end
 ofake:set('ch5_output', Outputs.DEST.ER301)
-ofake:set('env_stream_rate', 100)
 crow_log = {}
-outs:note(5, {freq = 523.2511, level = 0.5,
-  ratios = {14, 0.125, 14, 14},
-  env_segs = {{0.01, 0.02, 0, 0}, {0.01, 0.02, 0, 0}, {0.01, 0.02, 0, 0}, {0.01, 0.02, 0, 0}},
-  dur = 0.03})
+outs:note(5, {freq = 523.2511, level = 0.5, ratios = {14, 0.125, 14, 14}, dur = 0.5})
 check('er301 pitch cv + tr on port = channel', crow_log[1][1] == '301cv' and crow_log[1][2] == 5
   and approx(crow_log[1][3], 1) and crow_log[2][1] == '301tr' and crow_log[2][2] == 5)
-clock._run_until(104)  -- flush the 0.03s CV streams
-local cv51 = er301_cv(crow_log, 51)
-check('er301 op1 CV stream on port 51 peaks at cv_ceiling (5V) then returns to 0',
-  max_of(cv51) == Outputs.OP_CV_MAX and cv51[#cv51] == 0)
-check('er301 op1 CV stream traces attack->peak->decay->0', (function()
-  -- 0.01/0.02 linear @ 100Hz, ratio 14 -> ceiling 5V: 0, 5, 2.5, 0
-  return #cv51 == 4 and cv51[1] == 0 and approx(cv51[2], 5)
-    and approx(cv51[3], 2.5) and cv51[4] == 0
-end)())
-check('er301 op2 CV (min ratio -> ceiling 0) streams only 0V', max_of(er301_cv(crow_log, 52)) == 0)
-check('er301 op3/op4 CV streams present on ports 53/54',
-  #er301_cv(crow_log, 53) > 0 and #er301_cv(crow_log, 54) > 0)
-check('er301 sends no legacy brightness CV on port 11', #er301_cv(crow_log, 11) == 0)
+check('er301 op1 CV on port 51 = op1 ratio 14 -> OP_CV_MAX volts',
+  approx(er301_cv(crow_log, 51), Outputs.OP_CV_MAX))
+check('er301 op2 CV on port 52 = op2 ratio 0.125 -> 0V', approx(er301_cv(crow_log, 52), 0))
+check('er301 op3/op4 CVs on ports 53/54 = op3/op4 ratios',
+  approx(er301_cv(crow_log, 53), Outputs.OP_CV_MAX) and approx(er301_cv(crow_log, 54), Outputs.OP_CV_MAX))
+check('er301 sends exactly pitch + tr + four op CVs (six messages)', #crow_log == 6)
+check('er301 sends no legacy brightness CV on port 11', er301_cv(crow_log, 11) == nil)
 
 -- burst integration: fire() respects wants_audio and forwards final values
 engine = { trigs = 0 }
@@ -2096,14 +2047,12 @@ local oeng = Burst.new()
 oeng.outputs = outs
 midi_log = {}
 -- fire(ch, beat, freq, level, env1, env2, env3, env4, div, total, hit_idx)
-oeng:fire(1, 0, 440, 0.5, 4, 3, 8, 8, 4, 1, 0)  -- ch1 midi: external only (pb + note + CC stream)
-check('fire on midi channel skips engine.trig',
-  engine.trigs == 0 and midi_log[1][1] == 'pb' and midi_log[2][1] == 'on')
+oeng:fire(1, 0, 440, 0.5, 4, 3, 8, 8, 4, 1, 0)  -- ch1 midi: external only (pb + note + 4 op CCs)
+check('fire on midi channel skips engine.trig', engine.trigs == 0 and #midi_log == 6)
 ofake:set('ch1_output', Outputs.DEST.AUDIO_MIDI)
 midi_log = {}
 oeng:fire(1, 0, 440, 0.5, 4, 3, 8, 8, 4, 1, 0)
-check('audio+midi fires both external + engine',
-  engine.trigs == 1 and midi_log[1][1] == 'pb' and midi_log[2][1] == 'on')
+check('audio+midi fires both external + engine', engine.trigs == 1 and #midi_log == 6)
 oeng:fire(2, 0, 440, 0.5, 4, 3, 8, 8, 4, 1, 0)  -- ch2 is on crow 3+4
 check('fire on crow channel skips engine.trig', engine.trigs == 1)
 engine = nil

@@ -1097,8 +1097,12 @@ end
 
 -- Select a sequence page (row 6 / row 7 page buttons). A paired page is
 -- represented by its first member; both A/B (or both pair) lanes are always shown
--- — no A/B flip.
+-- — no A/B flip. Pressing a sequence selector also EXITS any open latch page
+-- (MIX/PERF/PROB/PRISM) or armed action mode and switches straight to the sequence,
+-- so a page-select always takes you to that sequence rather than being swallowed by
+-- the still-latched page.
 function GridUI:select_page(page)
+  self:_clear_latches()
   self.selectedParam = page
   self.picker = nil
   self:render_all()

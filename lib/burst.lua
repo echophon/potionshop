@@ -918,18 +918,12 @@ function Burst:fire(ch, beat, freq, level, env1, env2, env3, env4, div, total, h
                 atk4, dec4, atkC4, decC4)
   end
   if out then
-    -- external voices can't render FM timbre; hand them the four op ratios AND each
-    -- op's resolved envelope segment {atk, dec, atkCurve, decCurve}. The MIDI + ER-301
-    -- paths STREAM each op's ratio-ceilinged envelope contour as CC / CV (see
-    -- outputs.stream_op_ccs / stream_op_cvs), so both the op ratio and op env sequences
-    -- reach the outside world as live control envelopes. The note length (for MIDI /
-    -- crow) follows op1's (carrier) envelope.
+    -- external voices can't render FM timbre; hand them the four sequenced op ratios.
+    -- The MIDI + ER-301 paths send each op's ratio as one CC / CV per hit (the operator
+    -- ratio sequence, no envelope). The note length (for MIDI / crow) follows op1's
+    -- (carrier) envelope.
     out:note(ch, { freq = geo_freq, level = actual_level,
                    ratios = {ratio1, ratio2, ratio3, ratio4},
-                   env_segs = { {atk1, dec1, atkC1, decC1},
-                                {atk2, dec2, atkC2, decC2},
-                                {atk3, dec3, atkC3, decC3},
-                                {atk4, dec4, atkC4, decC4} },
                    dur = atk1 + dec1 })
   end
 
