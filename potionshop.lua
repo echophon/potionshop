@@ -52,9 +52,10 @@ local function make_grid_wrapper(dev)
   local w = {
     dev = dev,
     buf = {},        -- key (y*16+x, 0-based) -> brightness
-    strobe = {},     -- key -> 'slow' | 'fast'
+    strobe = {},     -- key -> 'slow' | 'fast' | 'pulse'
     slow_on = true,
     fast_on = true,
+    pulse_factor = 1,  -- 0..1 smooth sine, multiplies the 'pulse' base brightness
   }
   function w:set_led(x, y, b) self.buf[y * 16 + x] = b end
   function w:set_strobe(x, y, s)
@@ -67,7 +68,10 @@ local function make_grid_wrapper(dev)
     for k, b in pairs(self.buf) do
       local lvl = b
       local sp = self.strobe[k]
-      if sp then
+      if sp == 'pulse' then
+        -- smooth breathing fade (never fully dark, so the button stays legible)
+        lvl = math.floor(b * self.pulse_factor + 0.5)
+      elseif sp then
         local on = (sp == 'fast') and self.fast_on or self.slow_on
         if not on then lvl = math.floor(b * 0.2) end
       end
@@ -122,20 +126,33 @@ function init()
   psync:add_globals()
   outs:add_params()
   psync:add_channels()
+  -- MIDI clock out follows the script's OWN transport (norns is the master with
+  -- its internal clock): the first channel to start sends MIDI Start + begins the
+  -- 24 ppqn stream, the last to stop sends MIDI Stop. Guarded on the 0<->1 running
+  -- transition so a live relaunch never re-sends Start (which would snap external
+  -- sequencers back to bar 1). outs gates the whole thing on `midi clock out`.
   eng:on(function(ev)
     if ev.type == 'stop' then outs:notes_off(ev.ch) end
+    if ev.type == 'launch' or ev.type == 'stop' then
+      local any = false
+      for i = 1, Burst.NUM_CHANNELS do if eng:is_running(i) then any = true; break end end
+      outs:set_transport(any)  -- edge-guarded Start/Stop + 24 ppqn stream
+    end
   end)
 
   psync:attach()
   params:bang()
   psync:enable_triggers()
 
-  -- strobe blink driver (~15 Hz): slow ≈ 0.6 Hz, fast ≈ 1.4 Hz
+  -- strobe blink driver (~15 Hz): slow ≈ 0.6 Hz, fast ≈ 1.4 Hz. The 'pulse' mode
+  -- (idle launch buttons) rides a smooth ≈0.4 Hz sine between 0.15x and 1.0x of
+  -- its base brightness — a breathing onboarding cue rather than a hard blink.
   strobe_metro = metro.init()
   strobe_metro.time = 1 / 15
   strobe_metro.event = function(c)
     gw.slow_on = (math.floor(c / 8) % 2) == 0
     gw.fast_on = (math.floor(c / 3) % 2) == 0
+    gw.pulse_factor = 0.15 + 0.85 * (0.5 + 0.5 * math.sin(c * 0.168))
     gw:refresh()
     if psync then psync:flush() end  -- coalesced repaint for param-menu edits
   end
@@ -169,7 +186,10 @@ function init()
           if bars[i] % iv == 0 then eng:bar_reset(i); did = true end
         end
       end
-      if did then controller:refresh() end
+      if did then
+        if outs then outs:clock_reset() end  -- realign downstream gear to the bar
+        controller:refresh()
+      end
     end
   end)
 
@@ -182,7 +202,7 @@ function redraw() if ui_screen then ui_screen:redraw() end end
 
 function cleanup()
   if eng then eng:stop_all() end
-  if outs then outs:all_notes_off() end
+  if outs then outs:clock_stop(); outs:all_notes_off() end
   if engine and engine.panic then engine.panic() end
   if strobe_metro then strobe_metro:stop() end
   if screen_metro then screen_metro:stop() end

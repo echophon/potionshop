@@ -9,32 +9,38 @@
 --   * lowercase text, font_face 1 / size 8, `a: x // b: y` formatting
 --
 -- Control scheme:
---   E1 = select channel (1..6)
---   E2 = scroll the cursor through every position on a sequence page
---        (main/alt): the run line, then each step of each param line in
---        turn. Each param line ends in a temporary `_` add slot.
---        (Other pages: select line.)
---   E3 = edit under the cursor. run: right = launch, left = stop. steps:
---        change the value (grid-reachable snapped); decrement below the
---        lowest value to remove the step; on `_`, increment to append one.
---   K2 / K3 = page back / forward (main · alt · perf · prob · scale · snd,
---        clamped; order mirrors the grid's row-6 button layout)
+--   E1 = jump the focused channel (1..6) — on a sequence page this snaps the
+--        cursor between channel rows; on the mode pages it's the same channel select.
+--   E2 = scroll the cursor. On a sequence page it walks every step of channel 1,
+--        then channel 2 … through channel 6 of the visible lane, then flips the page
+--        to lane 2 (the B offset layer, or `reps` on the div/reps page) and continues
+--        channel 1..6 — so "scroll down" transitions A -> B. Each channel's steps end
+--        in a temporary `_` add slot. (Mode pages: select line.)
+--   E3 = edit under the cursor. steps: change the value (grid-reachable snapped);
+--        decrement below the lowest value to remove the step; on `_`, increment to
+--        append one. (The perf `run` line: right = launch, left = stop.)
+--   K2 / K3 = page back / forward. The chain mirrors the grid's param pages one-for-one
+--        (note · opRatio1..4 · div/reps · opEnv1..4) then the four mode pages
+--        (perf · prob · scale · mix), clamped.
 --   K1 = untouched — left to the norns system menus
 --
--- Pages: `main` edits launch + the eight A-layer param sequences (via the same
--- commit_step path the grid uses; the list scrolls in a window since it exceeds
--- the visible rows); `alt` is its clone for the B (additive
--- offset) layer, snapping to the same extended value set params_sync uses
--- (literal 0 = no offset, plus the picker grid); `perf` / `prob` edit
--- the selected channel's mode fields — the same fields the grid's perfMode/
--- probMode presses set, picking only from GridUI's shared value tables. The
--- screen's perf page also carries the per-channel quantize (the grid keeps that
--- on its own QNT page). `scale` edits the global musical state (root, key mask)
--- the grid's scale picker drives — its E2 cursor walks root and the twelve
--- chromatic keys, and E3 sets/toggles via the controller's set_root / set_mask.
--- The grid's PERF/PROB/SCALE/QNT buttons switch the matching pages (SCALE opens
--- the shared scale picker; the grid QNT page maps to the screen's perf tab); the
--- screen tab follows, and main/alt drive the grid's paramLayer.
+-- Pages: each SEQUENCE page is one grid param page shown as six channel rows (the
+-- transpose of the old channel-focused main/alt). It shows lane 1 (the A layer, or
+-- `div`) across all six channels; E2 scrolling past the last channel reveals lane 2
+-- (the B additive-offset layer, or `reps`). Edits flow through the same commit_step
+-- path the grid uses; the B lane snaps to the same extended value set params_sync uses
+-- (literal 0 = no offset, plus the picker grid). `perf` / `prob` edit the focused
+-- channel's mode fields — the same fields the grid's perfMode/probMode presses set,
+-- picking only from GridUI's shared value tables; `perf` line 1 is the channel's
+-- launch/stop (`run`), and the page also carries the per-channel quantize + env mode +
+-- geode (the grid keeps those on its own PRISM page). `scale` edits the focused
+-- channel's root (per-channel) plus the global key mask that the grid's ROOT/scale page
+-- drives — its E2 cursor walks root and the twelve chromatic keys, and E3 sets/toggles
+-- via the controller's set_root (per-channel) / set_mask (global).
+-- The grid's PERF/PROB/SCALE/PRISM buttons switch the matching pages (SCALE opens the
+-- shared scale picker; the grid PRISM page maps to the screen's perf tab), and a grid
+-- param-page button (note/opRatio/div/opEnv) switches the matching screen sequence page
+-- — the two surfaces always agree on which param is showing (via selectedParam).
 --
 -- Redraw model: state changes set `dirty`; the host calls tick() at ~15 Hz
 -- (piggybacking on the strobe metro) and we repaint only when dirty — the
@@ -44,21 +50,38 @@ local seqx   = require 'seqx'
 local GridUI = require 'grid_ui'
 
 local SEQ_LEN = GridUI.SEQ_LEN  -- max steps per sequence (shared cap with the grid)
-local PARAMS = {'div', 'reps', 'note', 'level', 'attack', 'decay', 'modatk', 'moddec'}
--- alt (B-layer) page: div/reps, attack/decay and modatk/moddec have no B layer
--- (see GridUI.has_b), so it carries only the params that take an additive offset.
-local B_PARAMS = {}
-for _, p in ipairs(PARAMS) do if GridUI.has_b(p) then B_PARAMS[#B_PARAMS + 1] = p end end
--- Page order mirrors the grid's row-6 button layout (op · perf · prob · scale),
--- after the two sequence pages. K2/K3 walk this list; the grid mode buttons
--- map onto the same pages (see _sync_page_from_grid).
-local PAGES  = {'main', 'alt', 'perf', 'prob', 'scale', 'op'}
--- main line 1 = run + all params; alt line 1 = run + the B-capable params.
--- scale = root + 12 chromatic keys = 13 stops. op = r1..r4 + 4 levels.
--- PERF now carries 4 lines (reset/oct/rate/quantize); the scale page dropped its
--- quantize line (now per-channel) so it's root + 12 keys = 13.
-local LINES_PER_PAGE = {1 + #PARAMS, 1 + #B_PARAMS, 4, 3, 13, 8}
-local PAGE_PERF, PAGE_PROB, PAGE_SCALE, PAGE_OP = 3, 4, 5, 6
+-- One SEQUENCE page per grid param page, in the grid's row-6-then-row-7 reading order
+-- (note + the four op ratios on row 6; div/reps + the four op envelopes on row 7). A
+-- paired page is keyed by its first member ('div'), exactly like the grid's
+-- selectedParam, so grid<->screen page sync is a straight index lookup. Each page shows
+-- six channel rows of one lane at a time (see row_lanes / _cur_lane).
+local SEQ_PAGES = {'note', 'opRatio1', 'opRatio2', 'opRatio3', 'opRatio4',
+                   'div', 'opEnv1', 'opEnv2', 'opEnv3', 'opEnv4'}
+local NUM_SEQ = #SEQ_PAGES
+-- param (grid selectedParam) -> its sequence-page index; 'reps' folds onto the div page.
+local SEQ_PAGE_INDEX = {}
+for i, p in ipairs(SEQ_PAGES) do SEQ_PAGE_INDEX[p] = i end
+SEQ_PAGE_INDEX['reps'] = SEQ_PAGE_INDEX['div']
+-- Full K2/K3 chain: the sequence pages, then the four mode pages. The grid mode
+-- buttons and param-page buttons both map onto this list (see _sync_page_from_grid).
+local PAGES = {}
+for _, p in ipairs(SEQ_PAGES) do PAGES[#PAGES + 1] = p end
+for _, p in ipairs({'perf', 'prob', 'scale', 'mix'}) do PAGES[#PAGES + 1] = p end
+local PAGE_PERF, PAGE_PROB, PAGE_SCALE, PAGE_MIX =
+  NUM_SEQ + 1, NUM_SEQ + 2, NUM_SEQ + 3, NUM_SEQ + 4
+-- Mode-page line counts (sequence pages use the per-channel cursor, not sel_line):
+-- PERF = run + reset/oct/rate/quantize/env mode/geode = 7 (the grid splits
+-- quantize+env+geode onto its PRISM page). prob = prob/mode + note/op-seq/op-env
+-- trig = 5 (the op trigs are ONE switch each for all four B lanes).
+-- scale = root + 12 chromatic keys = 13. mix = algo + mod
+-- index + 4 op levels + fm fb + filter + pan + channel level = 10 (all four
+-- op ratios are sequenced, edited on the seq pages).
+local LINES_PER_PAGE = {}
+for i = 1, NUM_SEQ do LINES_PER_PAGE[i] = 6 end  -- unused for seq pages; kept for clamps
+LINES_PER_PAGE[PAGE_PERF]  = 7
+LINES_PER_PAGE[PAGE_PROB]  = 5
+LINES_PER_PAGE[PAGE_SCALE] = 13
+LINES_PER_PAGE[PAGE_MIX]   = 10
 
 local NOTE_NAMES = {'c','c#','d','d#','e','f','f#','g','g#','a','a#','b'}
 
@@ -86,13 +109,15 @@ end
 -- with the grid + params surfaces.
 local nearest_index = GridUI.nearest_index
 
--- compact value formatting for the lines (envelope axes on the 0..31 grid scale).
-local function fmt(param, v)
-  if param == 'attack' or param == 'decay'
-      or param == 'modatk' or param == 'moddec' then
-    return tostring(math.floor(v * 31 + 0.5))
+-- compact value formatting for the lines. `layer` matters for op envelopes: the A
+-- lane shows a shape NAME, the B lane an integer index offset.
+local function fmt(param, v, layer)
+  if param:match('^opEnv') then
+    if layer == 'B' then return tostring(math.floor(v + 0.5)) end
+    return GridUI.SHAPE_NAMES[math.floor(v + 0.5)] or tostring(v)
   end
   if param == 'level' then return string.format('%.2f', v) end
+  if param:match('^opRatio') then return (v % 1 == 0) and tostring(math.floor(v)) or tostring(v) end
   if param == 'harm' then return string.format('%.1f', v) end
   if param == 'reps' and v <= 0 then return 'r' .. (1 - v) end  -- rest of 1-v steps
   return tostring(v)
@@ -113,7 +138,9 @@ function Screen.new(engine, controller)
   self.SPV = controller.STEP_PICKER_VALUES
   self.sel_ch = 0
   self._focus_seen = 0  -- last grid focusSeq adopted (edge-trigger; see _sync_focus_from_grid)
-  self.sel_line = {4, 4, 1, 1, 1, 1, 1}  -- per-page focused line (main/alt default to note)
+  self.sel_line = {}    -- per-page focused line (mode pages only; seq pages use the cursor)
+  for p = 1, #PAGES do self.sel_line[p] = 1 end
+  self.sel_lane = 1     -- which lane a sequence page's cursor is in (1 = A/div, 2 = B/reps)
   self.sel_step = 0
   self.page = 1
   self.dirty = true
@@ -154,15 +181,47 @@ function Screen:tick()
   if self.dirty then self:redraw() end
 end
 
--- pages 1 (main) and 2 (alt) are the two sequence pages; alt edits the
--- B (additive offset) layer through the same machinery.
-function Screen:_seq_page() return self.page <= 2 end
-function Screen:layer() return (self.page == 2) and 'B' or 'A' end
+-- the first NUM_SEQ pages are the per-param sequence pages.
+function Screen:_seq_page() return self.page <= NUM_SEQ end
+-- the grid param key for the current sequence page (matches ctl.selectedParam).
+function Screen:_page_key() return SEQ_PAGES[self.page] end
+-- the two lanes this page shows, straight from the grid's row_lanes (A|B, or div|reps).
+-- Relies on ctl.selectedParam == _page_key(), the invariant set_page/_sync maintain.
+function Screen:_lanes() return self.ctl:row_lanes() end
+function Screen:_cur_lane() return self:_lanes()[self.sel_lane] end
+-- layer of the lane the cursor is currently in (drives _layout snapping + paramLayer).
+function Screen:layer() return self:_cur_lane().layer end
 
--- value layout for the focused param on this page. The B layer's value set
--- is params_sync's: literal 0 (the no-offset default) plus the picker grid —
--- prepended only where the A layout doesn't already start at 0.
+-- header label for the current page: the visible lane's param on a sequence page
+-- ('note', 'note b' on the B lane, 'reps' on div's second lane), else the page name.
+function Screen:_page_display()
+  if not self:_seq_page() then return PAGES[self.page] end
+  local li = self:_cur_lane()
+  return (li.layer == 'B') and (li.param .. ' b') or li.param
+end
+
+-- the focused line index for the current page: the focused channel row on a sequence
+-- page, else the mode page's selected line.
+function Screen:_focus_line()
+  if self:_seq_page() then return self.sel_ch + 1 end
+  return self.sel_line[self.page]
+end
+
+-- value layout for the focused param on this page. Op-ratio B is the integer
+-- index-offset set (its first value is already 0 = no shift). For every other B
+-- lane the additive offset set is literal 0 (no offset) prepended to the picker grid.
 function Screen:_layout(param)
+  -- op ratios and op envelopes share the integer index-offset B lane.
+  if self:layer() == 'B' and (param:match('^opRatio') or param:match('^opEnv')) then
+    return GridUI.OP_RATIO_OFFSETS
+  end
+  -- op-ratio A is role-dependent: show the focused channel's set for this op (carrier
+  -- vs modulator under its algo), matching the grid step picker. Mirrors GridUI.
+  if self:layer() == 'A' and param:match('^opRatio') then
+    local op = tonumber(param:sub(-1))
+    local algo = (self.ctl:chan(self.sel_ch) or {}).algo or 1
+    return GridUI.op_ratio_set(algo, op)
+  end
   local layout = self.SPV[param]
   if self:layer() == 'B' and layout[1] ~= 0 then
     local t = {0}
@@ -172,71 +231,66 @@ function Screen:_layout(param)
   return layout
 end
 
--- the param list for the current sequence page: main (A) shows all eight; alt (B)
--- shows only the B-capable ones (the paired pages have no offset).
-function Screen:_seq_params()
-  return (self:layer() == 'B') and B_PARAMS or PARAMS
-end
-
--- sequence page line 1 is `run`; lines 2.. are the page's params.
+-- the param whose steps the cursor is editing: the current lane's param (nil off a
+-- sequence page). For div/reps this is 'div' (lane 1) or 'reps' (lane 2).
 function Screen:main_param()
   if not self:_seq_page() then return nil end
-  local line = self.sel_line[self.page]
-  if line >= 2 then return self:_seq_params()[line - 1] end
-  return nil
+  return self:_cur_lane().param
 end
 
--- cursor positions on a sequence-page line: `run` has one; a param line has
--- one per step plus a trailing `_` add slot (unless at the SEQ_LEN grid cap).
-function Screen:_main_positions(line)
-  if line == 1 then return 1 end
-  local param = self:_seq_params()[line - 1]
-  local len = seqx.len(self.ctl:seq_ref(self.sel_ch, param, self:layer()))
+-- cursor positions in one channel's row on a lane: one per step plus a trailing `_`
+-- add slot (unless the sequence is already at the SEQ_LEN grid cap).
+function Screen:_main_positions(lane, ch)
+  local li = self:_lanes()[lane]
+  local len = seqx.len(self.ctl:seq_ref(ch, li.param, li.layer))
   return (len < SEQ_LEN) and (len + 1) or len
 end
 
--- true when the cursor sits on the focused param's `_` add slot.
+-- true when the cursor sits on the focused channel's `_` add slot.
 function Screen:_on_add_slot()
-  local param = self:main_param()
-  if not param then return false end
-  return self.sel_step >= seqx.len(self.ctl:seq_ref(self.sel_ch, param, self:layer()))
+  if not self:_seq_page() then return false end
+  local li = self:_cur_lane()
+  return self.sel_step >= seqx.len(self.ctl:seq_ref(self.sel_ch, li.param, li.layer))
 end
 
 function Screen:_clamp_step()
-  local param = self:main_param()
-  if not param then self.sel_step = 0; return end
-  self.sel_step = clamp(self.sel_step, 0, self:_main_positions(self.sel_line[self.page]) - 1)
+  if not self:_seq_page() then return end
+  self.sel_step = clamp(self.sel_step, 0, self:_main_positions(self.sel_lane, self.sel_ch) - 1)
 end
 
--- move the sequence-page cursor one position, flowing across lines: run,
--- then every step (+ add slot) of each param line in turn.
+-- move the sequence-page cursor one position, flowing across channels then lanes:
+-- every step (+ add slot) of channel 1, ... channel 6 in lane 1 (A/div), then the
+-- same across lane 2 (B/reps). Advancing off the bottom of lane 1 reveals lane 2 —
+-- this is the "scroll down switches to B" gesture.
 function Screen:_move_cursor(dir)
-  local pg = self.page
-  local line, pos = self.sel_line[pg], self.sel_step + dir
-  if pos < 0 then
-    if line > 1 then
-      line = line - 1
-      pos = self:_main_positions(line) - 1
+  local lane, ch, step = self.sel_lane, self.sel_ch, self.sel_step + dir
+  if step < 0 then
+    if ch > 0 then
+      ch = ch - 1; step = self:_main_positions(lane, ch) - 1
+    elseif lane == 2 then
+      lane = 1; ch = 5; step = self:_main_positions(lane, ch) - 1
     else
-      pos = 0
+      step = 0
     end
-  elseif pos >= self:_main_positions(line) then
-    if line < LINES_PER_PAGE[pg] then
-      line = line + 1
-      pos = 0
+  elseif step >= self:_main_positions(lane, ch) then
+    if ch < 5 then
+      ch = ch + 1; step = 0
+    elseif lane == 1 then
+      lane = 2; ch = 0; step = 0
     else
-      pos = self:_main_positions(line) - 1
+      step = self:_main_positions(lane, ch) - 1
     end
   end
-  self.sel_line[pg], self.sel_step = line, pos
+  self.sel_lane, self.sel_ch, self.sel_step = lane, ch, step
 end
 
--- keep the grid's selected param + layer agreeing with the focused line/page.
+-- keep the grid's selected param + layer agreeing with the focused page + lane.
 function Screen:_sync_selected_param()
-  local param = self:main_param()
-  if param and (self.ctl.selectedParam ~= param or self.ctl.paramLayer ~= self:layer()) then
-    self.ctl.selectedParam = param
-    self.ctl.paramLayer = self:layer()
+  if not self:_seq_page() then return end
+  local key, layer = self:_page_key(), self:layer()
+  if self.ctl.selectedParam ~= key or self.ctl.paramLayer ~= layer then
+    self.ctl.selectedParam = key
+    self.ctl.paramLayer = layer
     self.ctl:render_all()
   end
 end
@@ -245,12 +299,12 @@ function Screen:set_page(p)
   self.page = ((p - 1) % #PAGES) + 1
   local c = self.ctl
   c.kbMode = false; c.actionMode = nil
-  -- the screen has no QNT tab (quantize sits on its PERF page); always clear the
-  -- grid's qntMode here so only one grid page is ever latched.
-  c.qntMode   = false
+  -- the screen has no PRISM tab (quantize + env mode + geode sit on its PERF page);
+  -- always clear the grid's prismMode here so only one grid page is ever latched.
+  c.prismMode = false
   c.perfMode  = (self.page == PAGE_PERF)
   c.probMode  = (self.page == PAGE_PROB)
-  c.opMode    = (self.page == PAGE_OP)
+  c.mixMode   = (self.page == PAGE_MIX)
   -- the scale page shares the grid's scale picker, so the grid follows the
   -- screen onto it (and the keymask/root/quantize stay one source of truth)
   if self.page == PAGE_SCALE then
@@ -259,6 +313,7 @@ function Screen:set_page(p)
     c.picker = nil
   end
   if self:_seq_page() then
+    c.selectedParam = self:_page_key()  -- set before layer() reads row_lanes()
     c.paramLayer = self:layer()
     self:_clamp_step()
   end
@@ -269,17 +324,19 @@ end
 -- The grid's PERF/PROB/SND buttons toggle the same modes set_page sets; follow
 -- them so the screen tab always matches what the grid is showing. With no mode
 -- active we're on a sequence page: the grid shows both A/B halves at once and no
--- longer flips paramLayer, so this falls back to the screen's own main/alt
--- choice (K2/K3), which still drives paramLayer for the screen's two seq pages.
+-- longer flips paramLayer; on a sequence page we follow the grid's selectedParam
+-- straight onto the matching per-param screen page (the lane the cursor sits in is
+-- the screen's own choice, driven by E2). 'reps' folds onto the div page.
 function Screen:_sync_page_from_grid()
   local c = self.ctl
   self.page = (c.picker and c.picker.kind == 'scale') and PAGE_SCALE
     or c.perfMode and PAGE_PERF or c.probMode and PAGE_PROB
-    -- grid QNT page has no screen tab of its own; quantize lives on the screen's
-    -- PERF page, so follow the grid there.
-    or c.qntMode and PAGE_PERF
-    or c.opMode and PAGE_OP
-    or ((c.paramLayer == 'B') and 2 or 1)
+    -- grid PRISM page has no screen tab of its own; quantize + env mode + geode live
+    -- on the screen's PERF page, so follow the grid there.
+    or c.prismMode and PAGE_PERF
+    or c.mixMode and PAGE_MIX
+    or SEQ_PAGE_INDEX[c.selectedParam]
+    or 1
 end
 
 -- Channel focus follows the grid: the grid bumps focusSeq each time a press
@@ -304,6 +361,8 @@ function Screen:enc(n, d)
   self:_sync_page_from_grid()
   self:_sync_focus_from_grid()
   if n == 1 then
+    -- jump the focused channel: on a sequence page this snaps the cursor between
+    -- channel rows (keeping the lane); on a mode page it's the same channel select.
     self.sel_ch = clamp(self.sel_ch + d, 0, 5)
     self:_clamp_step()
   elseif n == 2 then
@@ -326,21 +385,22 @@ function Screen:_edit_value(d)
   elseif self.page == PAGE_PERF then self:_edit_perf(d)
   elseif self.page == PAGE_PROB then self:_edit_prob(d)
   elseif self.page == PAGE_SCALE then self:_edit_scale(d)
-  elseif self.page == PAGE_OP then self:_edit_op(d) end
+  elseif self.page == PAGE_MIX then self:_edit_mix(d) end
   self.ctl:render_all()
 end
 
--- Scale page cursor: line 1 = root, lines 2..13 = the twelve chromatic keys
--- (pitch class = line - 2). E3 turns right/left to raise or lower the root; on a
--- key, right adds it to the mask, left removes it (mirroring the run line's
--- right=on / left=off feel). All edits route through the controller's global
--- setters so on_edit reflects them into the params. (quantize is per-channel now
--- — it lives on the perf page, not here.)
+-- Scale page cursor: line 1 = root (the selected channel's tonic transpose,
+-- -12..+11 semitones), lines 2..13 = the twelve chromatic keys (pitch class =
+-- line - 2). E3 raises/lowers the root of the selected channel; on a key, right adds
+-- it to the (global) mask, left removes it. Root routes through the controller's
+-- per-channel set_root; the mask through set_mask (global). (quantize is on the perf
+-- page, not here.)
 function Screen:_edit_scale(d)
   local c = self.ctl
   local line = self.sel_line[PAGE_SCALE]
   if line == 1 then
-    c:set_root(((self.engine.root or 0) + d) % 12)
+    local cur = self.engine.channels[self.sel_ch + 1].root or 0
+    c:set_root(self.sel_ch, clamp(cur + d, -12, 11))
   else
     local pc = line - 2
     local cur, has = {}, false
@@ -359,16 +419,12 @@ function Screen:_edit_scale(d)
   end
 end
 
+-- Sequence-page edit: E3 changes the value under the cursor (focused channel + lane +
+-- step), snapping to the lane's grid-reachable value set. On the `_` add slot a right
+-- turn appends a step; decrementing a step below the lowest value removes it.
 function Screen:_edit_main(d)
-  local param = self:main_param()
-  if not param then
-    -- `run` line: turn right to launch, left to stop
-    local ch1 = self.sel_ch + 1
-    if d > 0 and not self.engine:is_running(ch1) then self.engine:launch(ch1)
-    elseif d < 0 and self.engine:is_running(ch1) then self.engine:stop(ch1) end
-    return
-  end
-  local layer = self:layer()
+  local li = self:_cur_lane()
+  local param, layer = li.param, li.layer
   local seq = self.ctl:seq_ref(self.sel_ch, param, layer)
   local src = seqx.values(seq)
   if #src == 0 then return end
@@ -409,17 +465,28 @@ local function step_table(cur, tbl, d)
   return tbl[clamp(idx + d, 1, #tbl)]
 end
 
--- OP page cursor: lines 1..4 = op1..op4 ratio (op1 default 1.0, now editable),
--- lines 5..8 = op1..op4 level. Ratio steps the curated set; level the 0..1 grid.
-function Screen:_edit_op(d)
+-- MIX page cursor in signal-flow order (matching the grid's left->right layout):
+-- line 1 = mod index, 2 = FM algorithm, lines 3..6 = op1..op4 level (0..1 grid),
+-- 7 = FM feedback, 8 = filter (DJ position), 9 = pan, 10 = channel level/volume.
+-- (Op ratios are sequenced.)
+function Screen:_edit_mix(d)
   local ch = self.sel_ch
   local c = self.engine.channels[ch + 1]
-  local line = self.sel_line[PAGE_OP]
-  if line <= 4 then
-    local field = 'opRatio' .. line       -- line 1->op1 .. 4->op4
-    self.ctl:set_scalar(ch, field, step_table(c[field], GridUI.RATIO_VALUES, d))
+  local line = self.sel_line[PAGE_MIX]
+  if line == 2 then
+    self.ctl:set_scalar(ch, 'modIndex', step_table(c.modIndex, GridUI.MOD_INDEX_VALUES, d))
+  elseif line == 1 then
+    self.ctl:set_scalar(ch, 'algo', step_table(c.algo, GridUI.ALGO_VALUES, d))
+  elseif line == 7 then
+    self.ctl:set_scalar(ch, 'fmFeedback', step_table(c.fmFeedback, GridUI.FM_FEEDBACK_VALUES, d))
+  elseif line == 8 then
+    self.ctl:set_scalar(ch, 'filterPos', step_table(c.filterPos, GridUI.FILTER_VALUES, d))
+  elseif line == 9 then
+    self.ctl:set_scalar(ch, 'pan', step_table(c.pan, GridUI.PAN_VALUES, d))
+  elseif line == 10 then
+    self.ctl:set_scalar(ch, 'level', step_table(c.level, GridUI.OP_LEVEL_VALUES, d))
   else
-    local field = 'opLevel' .. (line - 4) -- line 5->op1 .. 8->op4
+    local field = 'opLevel' .. (line - 2)  -- line 3->op1 .. 6->op4
     self.ctl:set_scalar(ch, field, step_table(c[field], GridUI.OP_LEVEL_VALUES, d))
   end
 end
@@ -429,27 +496,45 @@ function Screen:_edit_prob(d)
   local c = self.engine.channels[ch + 1]
   local line = self.sel_line[PAGE_PROB]
   if line == 1 then
-    -- step the discrete 25/50/75/100% set shared with the grid prob page
+    -- step the 32-value probability grid shared with the grid prob picker
     self.ctl:set_scalar(ch, 'burstProb', step_table(c.burstProb, GridUI.PROB_VALUES, d))
   elseif line == 2 then
     self.ctl:set_scalar(ch, 'probHit', not c.probHit)
-  else
+  elseif line == 3 then
     self.ctl:set_scalar(ch, 'altTrig', clamp(c.altTrig + d, 0, #GridUI.ALT_TRIG_MODE_NAMES - 1))
+  elseif line == 4 then
+    -- ONE hold/step switch for all four op-ratio B lanes
+    self.ctl:set_scalar(ch, 'opSeqTrig', clamp(c.opSeqTrig + d, 0, 1))
+  else
+    -- line 5: ONE hold/step switch for all four op-env B lanes
+    self.ctl:set_scalar(ch, 'opEnvTrig', clamp(c.opEnvTrig + d, 0, 1))
   end
 end
 
+-- PERF page cursor: line 1 = run (launch/stop the focused channel — right launches,
+-- left stops), then reset/oct/rate/quantize/env mode/geode (lines 2..7). Run lives here
+-- now that the sequence pages are per-param (no per-channel run line to hang it on).
 function Screen:_edit_perf(d)
   local ch = self.sel_ch
   local c = self.engine.channels[ch + 1]
   local line = self.sel_line[PAGE_PERF]
   if line == 1 then
-    self.ctl:set_scalar(ch, 'resetInterval', step_table(c.resetInterval, GridUI.RESET_INTERVALS, d))
+    local ch1 = ch + 1
+    if d > 0 and not self.engine:is_running(ch1) then self.engine:launch(ch1)
+    elseif d < 0 and self.engine:is_running(ch1) then self.engine:stop(ch1) end
   elseif line == 2 then
-    self.ctl:set_scalar(ch, 'octave', step_table(c.octave, GridUI.OCTAVE_VALUES, d))
+    self.ctl:set_scalar(ch, 'resetInterval', step_table(c.resetInterval, GridUI.RESET_INTERVALS, d))
   elseif line == 3 then
+    self.ctl:set_scalar(ch, 'octave', step_table(c.octave, GridUI.OCTAVE_VALUES, d))
+  elseif line == 4 then
     self.ctl:set_scalar(ch, 'rate', step_table(c.rate, GridUI.RATE_VALUES, d))
-  else
+  elseif line == 5 then
     self.ctl:set_scalar(ch, 'quantize', step_table(c.quantize, GridUI.QUANTIZE_VALUES, d))
+  elseif line == 6 then
+    -- env mode / geode are 0-based option indices (grid PRISM page mirrors)
+    self.ctl:set_scalar(ch, 'envMode', clamp(c.envMode + d, 0, #GridUI.ENV_MODE_NAMES - 1))
+  else
+    self.ctl:set_scalar(ch, 'geodeMode', clamp(c.geodeMode + d, 0, #GridUI.GEODE_MODE_NAMES - 1))
   end
 end
 
@@ -502,9 +587,11 @@ function Screen:draw_header()
   screen.rect(2 + self.sel_ch * 6, 6, 4, 1)
   screen.fill()
 
-  -- page // bpm (page slightly brighter; reflects grid reality)
+  -- page // bpm (page slightly brighter; reflects grid reality). On a sequence page
+  -- show the visible lane's param (+ ' b' on the B offset lane), e.g. 'note', 'note b',
+  -- 'reps'; grid mid-gestures (PICK/ROOT/…) still surface through current_page().
   local page_name = string.lower(self.ctl:current_page())
-  if page_name == 'main' then page_name = PAGES[self.page] end
+  if page_name == 'main' then page_name = self:_page_display() end
   local bpm
   if clock then
     if clock.get_tempo then bpm = clock.get_tempo()
@@ -571,18 +658,18 @@ end
 function Screen:page_lines()
   local c = self.engine.channels[self.sel_ch + 1]
   if self:_seq_page() then
-    local run_val = self.engine:is_running(self.sel_ch + 1) and 'on' or 'off'
-    local lines = {
-      {'run', run_val, '', run_val},
-    }
-    for i, p in ipairs(self:_seq_params()) do
-      local vals = seqx.values(self.ctl:seq_ref(self.sel_ch, p, self:layer()))
-      local focused = (self.sel_line[self.page] == i + 1)
+    -- six channel rows of the visible lane's param; the focused channel gets the
+    -- windowed cursor + `_` add slot, the rest just show their sequence.
+    local li = self:_cur_lane()
+    local lines = {}
+    for ch = 0, 5 do
+      local vals = seqx.values(self.ctl:seq_ref(ch, li.param, li.layer))
+      local focused = (ch == self.sel_ch)
       -- slide a 4-value window so the cursor's step is always visible
       local first = focused and math.max(1, self.sel_step + 1 - 3) or 1
       local last = math.min(#vals, first + 3)
       local shown = {}
-      for j = first, last do shown[#shown + 1] = fmt(p, vals[j]) end
+      for j = first, last do shown[#shown + 1] = fmt(li.param, vals[j], li.layer) end
       -- the temporary `_` add slot, shown while the cursor sits on it
       local on_add = focused and self.sel_step >= #vals
       if on_add then shown[#shown + 1] = '_' end
@@ -594,33 +681,47 @@ function Screen:page_lines()
         tok = shown[ti]
         pre = prefix .. table.concat(shown, ' ', 1, ti - 1) .. (ti > 1 and ' ' or '')
       end
-      lines[i + 1] = {p, prefix .. table.concat(shown, ' ') .. suffix, pre, tok}
+      lines[ch + 1] = {tostring(ch + 1), prefix .. table.concat(shown, ' ') .. suffix, pre, tok}
     end
     return lines
   end
   local lines
-  if self.page == PAGE_OP then
-    local function r(v) return (v % 1 == 0) and tostring(math.floor(v)) or tostring(v) end
+  if self.page == PAGE_MIX then
+    -- signal-flow order: FM algorithm + mod index, the four static op levels, FM
+    -- feedback, then the output stage: DJ filter, pan + channel level/volume. All
+    -- four op ratios are sequenced (shown/edited on the per-param seq pages),
+    -- absent here.
     lines = {
-      {'op1 r', r(c.opRatio1)}, {'op2 r', r(c.opRatio2)}, {'op3 r', r(c.opRatio3)}, {'op4 r', r(c.opRatio4)},
+      {'alg',   GridUI.ALGO_NAMES[c.algo] or '?'},
+      {'index', string.format('%d', c.modIndex)},
       {'op1 l', string.format('%.2f', c.opLevel1)},
       {'op2 l', string.format('%.2f', c.opLevel2)},
       {'op3 l', string.format('%.2f', c.opLevel3)},
       {'op4 l', string.format('%.2f', c.opLevel4)},
+      {'fm fb', string.format('%.2f', c.fmFeedback)},
+      {'filter', GridUI.filter_label(c.filterPos)},
+      {'pan',   GridUI.pan_label(c.pan)},
+      {'level', string.format('%.2f', c.level)},
     }
   elseif self.page == PAGE_PROB then
+    local function trig(v) return GridUI.ALT_TRIG_MODE_NAMES[v + 1] end
     lines = {
       {'prob', round(c.burstProb * 100) .. '%'},
       {'mode', c.probHit and 'hit' or 'burst'},
-      {'note', GridUI.ALT_TRIG_MODE_NAMES[c.altTrig + 1]},
+      {'note', trig(c.altTrig)},        -- note B trig
+      {'op seq', trig(c.opSeqTrig)},    -- all four op-ratio B lanes
+      {'op env', trig(c.opEnvTrig)},    -- all four op-env B lanes
     }
   else  -- PAGE_PERF
     local iv = c.resetInterval
     lines = {
+      {'run',   self.engine:is_running(self.sel_ch + 1) and 'on' or 'off'},
       {'reset', iv == 0 and 'off' or (iv .. (iv == 1 and ' bar' or ' bars'))},
       {'oct',   (c.octave > 0 and '+' or '') .. c.octave},
       {'rate',  fmt_rate(c.rate)},
       {'qnt',   '1/' .. c.quantize},
+      {'env',   GridUI.ENV_MODE_NAMES[c.envMode + 1] or '?'},
+      {'geo',   GridUI.GEODE_MODE_NAMES[c.geodeMode + 1] or '?'},
     }
   end
   -- single-value lines: the whole value is the focused token
@@ -628,13 +729,13 @@ function Screen:page_lines()
   return lines
 end
 
--- max line rows that fit above the step squares (y 52/58); longer pages (the
--- main page now carries 8 params + run = 9 lines) scroll a window around focus.
+-- max line rows that fit above the step squares (y 52/58); longer pages (scale =
+-- 13 lines) scroll a window around focus. Sequence pages are always 6 rows.
 local MAX_VISIBLE_LINES = 7
 
 function Screen:draw_lines()
   local lines = self:page_lines()
-  local focus = self.sel_line[self.page]
+  local focus = self:_focus_line()
   local n = #lines
   -- scroll the visible window so the focused line is always shown, keeping the
   -- top-of-list anchored until the cursor pushes past the window
@@ -672,21 +773,19 @@ function Screen:draw_steps()
     local vals = seqx.values(seq)
     local ph = seqx.playhead(seq)
     for i = 1, math.min(#vals, SEQ_LEN) do
-      local lvl = GridUI.value_brightness(lane.param, vals[i])
+      local lvl = GridUI.value_brightness(lane.param, vals[i], lane.layer)
       if running and (i - 1) == ph then lvl = 15 end
       screen.level(math.max(1, lvl))
       screen.rect(2 + (i - 1) * 5, y, 4, 4)
       screen.fill()
     end
   end
-  -- cursor underline: beneath the lane (row) holding the focused param — top
-  -- row for lane 1, bottom row for lane 2; on the add slot it sits past the
-  -- last square, reading as the `_` itself
-  local param = self:main_param()
-  if self:_seq_page() and param then
-    local bottom = lanes[2] and lanes[2].param == param and lanes[2].layer == self:layer()
+  -- cursor underline: beneath the lane the cursor sits in — top row for lane 1
+  -- (A/div), bottom row for lane 2 (B/reps); on the add slot it sits past the last
+  -- square, reading as the `_` itself
+  if self:_seq_page() then
     screen.level(8)
-    screen.rect(2 + self.sel_step * 5, bottom and 63 or 57, 4, 1)
+    screen.rect(2 + self.sel_step * 5, (self.sel_lane == 2) and 63 or 57, 4, 1)
     screen.fill()
   end
 end
@@ -727,13 +826,15 @@ function Screen:_draw_mini_kb(yb, lit, cursor_pc)
   end
 end
 
--- Scale page: shown while the grid's scale picker is open. Displays — and, via
--- E2/E3, edits — the two global musical params the picker drives: root (its own
--- single-select keyboard, mirroring the grid) and key mask (a membership
--- keyboard). The E2 cursor ticks above the focused key dot, or underlines the
--- root label. (quantize moved to the per-channel perf page.)
+-- Scale page: shown while the grid's ROOT/scale page is open. Displays — and, via
+-- E2/E3, edits — the SELECTED channel's root (per-channel tonic, pitch class on the
+-- keyboard + octave in the label) and the global key mask (a membership keyboard).
+-- The E2 cursor ticks above the focused key dot, or underlines the root label.
+-- (quantize moved to the per-channel perf page.)
 function Screen:draw_scale_lines()
-  local root = (self.engine.root or 0) % 12
+  local rootOffset = self.engine.channels[self.sel_ch + 1].root or 0  -- -12..+11
+  local root = rootOffset % 12                                        -- pitch class
+  local rootOct = math.floor(rootOffset / 12)                         -- -1 / 0
   local cursor = self.sel_line[PAGE_SCALE]
   local on = {}
   for _, s in ipairs(self.engine.scale) do on[s % 12] = true end
@@ -746,9 +847,11 @@ function Screen:draw_scale_lines()
     if focus then screen.rect(LABEL_X, y + 2, screen.text_extents(str), 1); screen.fill() end
   end
 
-  -- root keyboard (single selection) + key-mask keyboard (membership)
+  -- root keyboard (per-channel tonic, pitch class shown; octave in the label) +
+  -- key-mask keyboard (global membership)
   self:_draw_mini_kb(15, function(pc) return pc == root end, (cursor == 1) and root or nil)
-  label(19, cursor == 1, 'root ' .. NOTE_NAMES[root + 1])
+  local octLabel = (rootOct == 0) and '' or ('' .. rootOct)   -- '' or '-1'
+  label(19, cursor == 1, 'root ' .. NOTE_NAMES[root + 1] .. octLabel)
 
   self:_draw_mini_kb(31, function(pc) return on[pc] end,
     (cursor >= 2 and cursor <= 13) and (cursor - 2) or nil)

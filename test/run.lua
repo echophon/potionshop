@@ -37,15 +37,37 @@ check('degree -1 in major = previous B (floor-mod)',
   scales.degree_to_semitones(-1, major) == -1)
 check('custom scale hijaz preserved literally', #scales.by_name.hijaz == 7
   and scales.by_name.hijaz[2] == 1)
-check('12 scale names in picker order', #scales.names == 12
-  and scales.names[1] == 'chromatic' and scales.names[12] == 'wuSheng')
-check('7 grid preset names, subset of scales.names', #scales.picker_names == 7
-  and scales.picker_names[1] == 'major' and scales.by_name[scales.picker_names[7]] ~= nil)
+check('expanded scale list, every name resolves to intervals',
+  #scales.names >= 12 and scales.names[1] == 'chromatic'
+  and scales.by_name[scales.names[#scales.names]] ~= nil)
+check('scale list gained the extra modes', scales.by_name.lydian ~= nil
+  and scales.by_name.blues ~= nil and scales.by_name.wholeTone ~= nil)
+check('no grid preset list anymore (presets moved to params menu)',
+  scales.picker_names == nil)
 check('root transposes tonic up by semitones',
   approx(scales.degree_to_freq(0, major, 2),
     require('musicutil').note_num_to_freq(26)))
+check('negative root transposes tonic DOWN (per-channel -1 octave)',
+  approx(scales.degree_to_freq(0, major, -12),
+    require('musicutil').note_num_to_freq(12)))
 check('root defaults to 0 (no transposition)',
   approx(scales.degree_to_freq(0, major, 0), scales.degree_to_freq(0, major)))
+-- JUST INTONATION: the in-between intervals are pure ratios, not 12-TET. The
+-- tonic (degree 0) and octaves stay exact; degrees in between ring as rationals.
+local tonic = scales.degree_to_freq(0, major)
+check('JI table is one octave [1,2)', scales.JI_RATIOS[0] == 1
+  and scales.JI_RATIOS[7] == 3/2 and scales.JI_RATIOS[11] == 15/8)
+check('major 3rd (degree 2) = pure 5/4 above tonic',
+  approx(scales.degree_to_freq(2, major), tonic * 5/4))
+check('perfect 5th (degree 4) = pure 3/2 above tonic',
+  approx(scales.degree_to_freq(4, major), tonic * 3/2))
+check('JI fifth is sharper than the 12-TET fifth',
+  scales.degree_to_freq(4, major) > tonic * 2^(7/12))
+check('chromatic degree 4 = pure major third (5/4)',
+  approx(scales.degree_to_freq(4, scales.by_name.chromatic), tonic * 5/4))
+check('octave of any degree is exact 2:1',
+  approx(scales.degree_to_freq(2 + #major, major),
+         2 * scales.degree_to_freq(2, major)))
 
 -- ---- seqx / sequins ----------------------------------------------------
 local seqx = require 'seqx'
@@ -94,53 +116,66 @@ local eng = Burst.new()
 local LEVEL_CONST = 16 / 31  -- the fixed init volume (default_channel), not randomized
 local ok_div, ok_reps, ok_note, ok_ratio, ok_ad, ok_len, ok_level_const, ok_op1 =
   true, true, true, true, true, true, true, true
+local ok_single = true  -- shapes + op2/3/4 randomize to a SINGLE held step
 for _ = 1, 200 do
   eng:randomize(1)
   local c = eng.channels[1]
   for _, v in ipairs(seqx.values(c.div))  do if not in_set(v, Burst.MUSICAL_DIVS) then ok_div = false end end
   for _, v in ipairs(seqx.values(c.reps)) do if not in_set(v, {1,2,3,4}) then ok_reps = false end end
   for _, v in ipairs(seqx.values(c.note)) do if not (v >= 0 and v <= 15 and v == math.floor(v)) then ok_note = false end end
-  -- per-op ratios are static scalars now: each must land on the curated set.
-  for _, v in ipairs({c.opRatio2, c.opRatio3, c.opRatio4}) do
-    if not in_set(v, Burst.RATIO_VALUES) then ok_ratio = false end
-  end
-  -- carrier (attack/decay) and modulator (modatk/moddec) envelope shapes must
-  -- all land on the i/31 picker grid.
-  for _, seq in ipairs({c.attack, c.decay, c.modatk, c.moddec}) do
-    for _, v in ipairs(seqx.values(seq)) do
-      local k = v * 31
-      if not (approx(k, math.floor(k + 0.5)) and k >= 0 and k <= 31) then ok_ad = false end
+  -- op2/3/4 ratios are sequenced now: every A-layer step must land on the LOWER 32
+  -- (RATIO_PICKER_COUNT) of that op's ROLE set under the channel's algo (carrier ->
+  -- CARRIER_RATIOS, else MODULATOR_RATIOS) — the exact cells the A grid picker shows, so
+  -- the value stays highlightable/editable (the upper 32 are B-offset reach only).
+  for _, op in ipairs({2, 3, 4}) do
+    local set = Burst.op_ratio_set(c.algo, op)
+    local low = {} for i = 1, math.min(Burst.RATIO_PICKER_COUNT, #set) do low[i] = set[i] end
+    for _, v in ipairs(seqx.values(c['opRatio' .. op])) do
+      if not in_set(v, low) then ok_ratio = false end
     end
   end
-  -- volume is a constant: randomize must leave it at the init value, length 1.
-  local lv = seqx.values(c.level)
-  if #lv ~= 1 or not approx(lv[1], LEVEL_CONST) then ok_level_const = false end
-  -- op1 ratio is editable but NOT scrambled: randomize keeps it at the 1.0 anchor.
-  if c.opRatio2 == nil then ok_ratio = false end
-  if not approx(c.opRatio1, 1) then ok_op1 = false end
+  -- the four per-operator envelope shapes are sequenced as shape INDICES; randomize
+  -- draws from the upper part of the short A-picker bank, so every step must be an
+  -- integer in SHAPE_RANDOMIZE_MIN..SHAPE_PICKER_COUNT (a slice of the picker range).
+  for _, seq in ipairs({c.opEnv1, c.opEnv2, c.opEnv3, c.opEnv4}) do
+    for _, v in ipairs(seqx.values(seq)) do
+      if not (v == math.floor(v) and v >= Burst.SHAPE_RANDOMIZE_MIN and v <= Burst.SHAPE_PICKER_COUNT) then ok_ad = false end
+    end
+  end
+  -- channel level is a static scalar: randomize must leave it at the init value.
+  if not approx(c.level, LEVEL_CONST) then ok_level_const = false end
+  -- op1 ratio is sequenced but NOT scrambled: randomize keeps its A lane at the 1.0
+  -- anchor (a single step), so a randomized channel stays pitched.
+  local o1 = seqx.values(c.opRatio1)
+  if #o1 ~= 1 or not approx(o1[1], 1) then ok_op1 = false end
   local dl = seqx.len(c.div)
   if not (dl >= 2 and dl <= 4) then ok_len = false end
+  -- the four env shapes + op2/3/4 ratios randomize to ONE held step (stable timbre)
+  for _, seq in ipairs({c.opEnv1, c.opEnv2, c.opEnv3, c.opEnv4, c.opRatio2, c.opRatio3, c.opRatio4}) do
+    if seqx.len(seq) ~= 1 then ok_single = false end
+  end
 end
 check('div values all in MUSICAL_DIVS', ok_div)
 check('reps values all in {1,2,3,4}', ok_reps)
 check('note values 0..15 integer', ok_note)
-check('per-op ratios land on the curated RATIO_VALUES set', ok_ratio)
+check('sequenced op2/3/4 ratio steps land on the lower-32 of the role set', ok_ratio)
 check('randomize keeps op1 ratio at the 1.0 anchor', ok_op1)
-check('carrier+mod env values land on picker grid (i/31)', ok_ad)
-check('randomize leaves volume at the fixed init constant', ok_level_const)
+check('carrier+mod randomize shapes land in the upper short bank (16..32)', ok_ad)
+check('randomize leaves channel level at the fixed init constant', ok_level_const)
 check('lengths: div/reps/note 2..4', ok_len)
+check('shapes + op2/3/4 randomize to a single held step', ok_single)
 
--- mutate must also leave volume untouched (a constant), even with a custom level,
--- and keep per-op ratios on the curated set.
+-- mutate must also leave the channel level untouched (a static scalar), even with a
+-- custom value, and keep per-op ratios on the curated set.
 local emut = Burst.new()
-emut.channels[1].level = seqx.new{0.42}
+emut.channels[1].level = 0.42
 for _ = 1, 50 do emut:mutate(1) end
-check('mutate leaves volume unchanged',
-  seqx.len(emut.channels[1].level) == 1 and approx(seqx.values(emut.channels[1].level)[1], 0.42))
-check('mutate keeps ratios on the curated set',
-  in_set(emut.channels[1].opRatio2, Burst.RATIO_VALUES)
-  and in_set(emut.channels[1].opRatio4, Burst.RATIO_VALUES))
-check('mutate keeps op1 ratio at the 1.0 anchor', approx(emut.channels[1].opRatio1, 1))
+check('mutate leaves channel level unchanged', approx(emut.channels[1].level, 0.42))
+check('mutate keeps sequenced ratio steps on the curated set',
+  in_set(seqx.values(emut.channels[1].opRatio2)[1], Burst.RATIO_VALUES)
+  and in_set(seqx.values(emut.channels[1].opRatio4)[1], Burst.RATIO_VALUES))
+check('mutate keeps op1 ratio at the 1.0 anchor',
+  seqx.len(emut.channels[1].opRatio1) == 1 and approx(seqx.values(emut.channels[1].opRatio1)[1], 1))
 
 -- ---- burst: clock-coroutine scheduling --------------------------------
 print('burst scheduling:')
@@ -156,6 +191,19 @@ eng2:launch(1)
 check('single-shot fired exactly one hit', #fires == 1)
 check('single-shot stopped the channel', eng2:is_running(1) == false)
 check('fire freq = degree_to_freq(0, major) = C1', approx(fires[1].freq, 32.7032))
+
+-- per-channel root transposes the fired freq at fire time (root is per channel now)
+clock._reset()
+local engR = Burst.new()
+local firesR = {}
+engR:on(function(ev) if ev.type == 'fire' then firesR[#firesR + 1] = ev end end)
+engR.channels[1].reps = seqx.new{1}
+engR.channels[1].div  = seqx.new{4}
+engR.channels[1].note = seqx.new{0}
+engR.channels[1].root = 2      -- +2 semitones (per-channel tonic transpose)
+engR:launch(1)
+check('per-channel root transposes fired freq (degree 0, root +2)',
+  #firesR == 1 and approx(firesR[1].freq, scales.degree_to_freq(0, scales.by_name.major, 2)))
 
 -- octave scalar: applied per hit in fire, so external outputs and the ghost
 -- note see the shifted freq
@@ -233,10 +281,45 @@ check('alt-trig step arpeggiates the B pitch per hit',
   and approx(step[2], scales.degree_to_freq(5, major))
   and approx(step[3], scales.degree_to_freq(7, major)))
 
--- per-op FM ratios are static per-channel scalars (op1 pinned 1.0). They pass
--- straight to trig args 4/5/6 (r2/r3/r4); op1 has no ratio arg (always 1.0).
--- engine.trig(freq, amp, algo, r2, r3, r4, modIndex,
---             atk, aDec, ampCurve, mDec, feedback, drive, ch, op1..op4, modAtk).
+-- op-env trig: 'hold' draws opEnv1's shape once per burst (every hit shares its
+-- contour); 'step' advances the opEnv1 B (index-offset) lane per hit, re-resolved
+-- against the held A, so the envelope shape arpeggiates — exactly like the op-ratio
+-- trig. A=1 + B {0,14,31} resolves to shapes 1/15/32 (tick/click/plop, distinct
+-- decMul: 0.03/0.10/0.20 in the length-sorted table), observed on op1's env-decay trig
+-- arg (arg 17 = decMul*gap in shape envMode): hold => three equal decays; step =>
+-- three distinct decays.
+local function env_step_decays(trig_mode)
+  clock._reset()
+  local saved = engine
+  local decs = {}
+  engine = { trig = function(...) local a = {...}; decs[#decs + 1] = a[17] end }
+  local e = Burst.new()
+  set_quant(e, 0)
+  e.channels[1].div  = seqx.new{4}
+  e.channels[1].reps = seqx.new{3}          -- single 3-hit burst
+  e.channels[1].note = seqx.new{0}
+  e.channels[1].opEnv1  = seqx.new{1}            -- A: held shape index per burst
+  e.channels[1].opEnv1B = seqx.new{0, 14, 31}    -- B: index offsets -> shapes 1/15/32
+  e.channels[1].opEnvTrig = trig_mode
+  e:launch(1)
+  clock._run_until(4)
+  engine = saved
+  return decs
+end
+check('op-env trig defaults to hold', Burst.new().channels[1].opEnvTrig == 0)
+local sh_hold = env_step_decays(0)
+check('op-env hold holds one shape across the burst',
+  #sh_hold == 3 and approx(sh_hold[1], sh_hold[2]) and approx(sh_hold[2], sh_hold[3]))
+local sh_step = env_step_decays(1)
+check('op-env step arpeggiates the shape per hit',
+  #sh_step == 3 and not approx(sh_step[1], sh_step[2])
+  and not approx(sh_step[2], sh_step[3]) and not approx(sh_step[1], sh_step[3]))
+
+-- all four op ratios are sequenced (A value + B offset, drawn per burst). The drawn
+-- op2/3/4 values pass straight to trig args 4/5/6 (r2/r3/r4); op1's drawn value rides
+-- as r1 at arg 14; the per-channel pan rides at arg 15.
+-- engine.trig(freq, amp, algo, r2, r3, r4, modIndex, feedback, ch,
+--             lvl1..4, r1, pan, then per-op env {atk,dec,atkCurve,decCurve} x4 at 16..31).
 local function first_trig()
   clock._reset()
   local saved = engine
@@ -246,10 +329,11 @@ local function first_trig()
   set_quant(e, 0)
   e.channels[1].div = seqx.new{4}
   e.channels[1].reps = seqx.new{1}
-  e.channels[1].opRatio1 = 0.5
-  e.channels[1].opRatio2 = 2
-  e.channels[1].opRatio3 = 3.5
-  e.channels[1].opRatio4 = 7
+  e.channels[1].opRatio1 = seqx.new{0.5}
+  e.channels[1].opRatio2 = seqx.new{2}
+  e.channels[1].opRatio3 = seqx.new{3}
+  e.channels[1].opRatio4 = seqx.new{7}
+  e.channels[1].pan = -0.5
   e:launch(1)
   clock._run_until(2)
   engine = saved
@@ -257,14 +341,211 @@ local function first_trig()
 end
 local off = first_trig()
 check('algo passes at trig arg 3 (default channel = 1)', off and off[3] == 1)
-check('per-op ratios pass at trig args 4/5/6', -- op2/3/4
-  off and approx(off[4], 2) and approx(off[5], 3.5) and approx(off[6], 7))
--- op1 ratio is unpinned: it rides as r1 at trig arg 20 (appended last).
-check('op1 ratio passes at trig arg 20', off and approx(off[20], 0.5))
+check('sequenced op2/3/4 ratios pass at trig args 4/5/6',
+  off and approx(off[4], 2) and approx(off[5], 3) and approx(off[6], 7))
+-- op1 ratio (sequenced): its drawn value rides as r1 at trig arg 14.
+check('op1 ratio passes at trig arg 14', off and approx(off[14], 0.5))
+check('pan passes at trig arg 15', off and approx(off[15], -0.5))
 
--- envelope shape from the paired attack/decay sequences. attack -> absolute time
--- (0.001 + a^2*0.4) at trig arg 8; decay -> gap-relative amp decay at trig arg 9.
-local function env_trig(attack_n, decay_n)
+-- op ratio B lane is an INDEX OFFSET: it shifts A's position UP the op's ROLE SET
+-- (never an off-grid sum), reaching the higher upper-32 ratios. Under algo 1 op2 is a
+-- modulator, so B walks MODULATOR_RATIOS. A {2} + B {4} -> the 4th entry above 2.0 (arg 4).
+local function ratio_b_trig()
+  clock._reset()
+  local saved = engine
+  local cap
+  engine = { trig = function(...) cap = cap or {...} end }
+  local e = Burst.new()
+  set_quant(e, 0)
+  e.channels[1].algo = 1                   -- op2 = modulator -> MODULATOR_RATIOS
+  e.channels[1].div = seqx.new{4}
+  e.channels[1].reps = seqx.new{1}
+  e.channels[1].opRatio2 = seqx.new{2}    -- A: base ratio
+  e.channels[1].opRatio2B = seqx.new{4}   -- B: +4 index offset (walks up the role set)
+  e:launch(1)
+  clock._run_until(2)
+  engine = saved
+  return cap
+end
+local rb = ratio_b_trig()
+check('op2 ratio B index-offset shifts A up the role set (arg 4)',
+  rb and approx(rb[4], Burst.op_ratio(2, 4, Burst.MODULATOR_RATIOS)) and rb[4] > 2)
+
+-- op_ratio properties (generic list-walk; the 3rd arg is the list, default = union):
+-- B=0 is identity; positive offsets are monotonic non-decreasing on the sorted list;
+-- offsets clamp at the top rather than overflowing.
+local rv = Burst.RATIO_VALUES
+local sorted = true
+for i = 2, #rv do if rv[i] < rv[i - 1] then sorted = false end end
+check('RATIO_VALUES is sorted ascending', sorted)
+check('op_ratio B=0 is identity for each value in the union', (function()
+  for _, a in ipairs(Burst.RATIO_VALUES) do if not approx(Burst.op_ratio(a, 0), a) then return false end end
+  return true
+end)())
+check('op_ratio is monotonic non-decreasing in the offset',
+  Burst.op_ratio(1, 0) <= Burst.op_ratio(1, 1) and Burst.op_ratio(1, 1) <= Burst.op_ratio(1, 5)
+  and Burst.op_ratio(1, 5) < rv[#rv] + 1e-9)
+check('B offset walks UP WITHIN the op role set (stays in-role)', (function()
+  -- B now walks the op's role set, not the union: a carrier base + offset stays a
+  -- carrier ratio (never lands on a modulator-only value), and it moves up the set.
+  local C = Burst.CARRIER_RATIOS
+  for _, a in ipairs(C) do
+    for off = 0, 6 do
+      local r = Burst.op_ratio(a, off, C)
+      if not in_set(r, C) then return false end       -- in-role
+      if r < a - 1e-9 then return false end            -- monotonic up
+    end
+  end
+  -- and it actually REACHES the upper 32 (e.g. low A + offset climbs past 2.0)
+  return Burst.op_ratio(C[Burst.RATIO_PICKER_COUNT], 8, C) > C[Burst.RATIO_PICKER_COUNT]
+end)())
+check('op_ratio clamps at the top of the role set',
+  approx(Burst.op_ratio(rv[#rv], 31), rv[#rv]) and approx(Burst.op_ratio(rv[#rv], 99), rv[#rv]))
+
+-- ---- dynamic op-ratio role sets (carrier vs modulator by algorithm) ----
+print('op-ratio role sets:')
+check('32 algorithms across the mirrors', #Burst.ALGO_MODULATORS == 32)
+check('op1 is a carrier in every algorithm (1..32)', (function()
+  for a = 1, 32 do if not Burst.is_carrier(a, 1) then return false end end
+  return true
+end)())
+check('algo 8 (additive) makes all four ops carriers',
+  Burst.is_carrier(8, 2) and Burst.is_carrier(8, 3) and Burst.is_carrier(8, 4))
+check('algo 1 (single stack) makes op2/3/4 modulators',
+  (not Burst.is_carrier(1, 2)) and (not Burst.is_carrier(1, 3)) and (not Burst.is_carrier(1, 4)))
+check('AM algo 17 makes op2 a modulator (ring source), op3/op4 carriers',
+  (not Burst.is_carrier(17, 2)) and Burst.is_carrier(17, 3) and Burst.is_carrier(17, 4))
+check('op_ratio_set: carrier op -> CARRIER_RATIOS, modulator op -> MODULATOR_RATIOS',
+  Burst.op_ratio_set(1, 1) == Burst.CARRIER_RATIOS
+  and Burst.op_ratio_set(1, 2) == Burst.MODULATOR_RATIOS)
+-- randomize honors the role: under an all-carrier algo, op2/3/4 land on CARRIER_RATIOS;
+-- under a single-stack algo they land on MODULATOR_RATIOS.
+local rand_carrier_ok, rand_mod_ok = true, true
+for _ = 1, 100 do
+  local ec = Burst.new(); ec.channels[1].algo = 8; ec:randomize(1)
+  local em = Burst.new(); em.channels[1].algo = 1; em:randomize(1)
+  for _, op in ipairs({2, 3, 4}) do
+    if not in_set(seqx.values(ec.channels[1]['opRatio' .. op])[1], Burst.CARRIER_RATIOS) then rand_carrier_ok = false end
+    if not in_set(seqx.values(em.channels[1]['opRatio' .. op])[1], Burst.MODULATOR_RATIOS) then rand_mod_ok = false end
+  end
+end
+check('randomize under all-carrier algo draws op2/3/4 from CARRIER_RATIOS', rand_carrier_ok)
+check('randomize under single-stack algo draws op2/3/4 from MODULATOR_RATIOS', rand_mod_ok)
+
+-- op-ratio trig mode (prob page): affects ONLY the B (offset) lane, mirroring the
+-- note alt-trig. hold draws B once per burst (held); step advances the B index per
+-- hit, re-resolved against the held A. A single 3-hit burst with A held at {2} and
+-- B {0,1,2} -> hold: 2,2,2; step: walks UP the list (2, then two finer ratios).
+local function op_ratio_trig_seq(trig_mode)
+  clock._reset()
+  local saved = engine
+  local r2 = {}
+  engine = { trig = function(...) local a = {...}; r2[#r2 + 1] = a[4] end }
+  local e = Burst.new()
+  set_quant(e, 0)
+  e.channels[1].algo = 1                   -- op2 = modulator -> MODULATOR_RATIOS
+  e.channels[1].div  = seqx.new{4}
+  e.channels[1].reps = seqx.new{3}        -- length-1 finite -> single 3-hit burst
+  e.channels[1].opRatio2  = seqx.new{2}   -- A: held per burst
+  e.channels[1].opRatio2B = seqx.new{0, 1, 2}  -- B: index offsets
+  e.channels[1].opSeqTrig = trig_mode
+  e:launch(1)
+  clock._run_until(4)
+  engine = saved
+  return r2
+end
+local MOD = Burst.MODULATOR_RATIOS
+local hold_r = op_ratio_trig_seq(0)
+check('op ratio trig hold holds one B offset across the burst',
+  #hold_r == 3 and approx(hold_r[1], 2) and approx(hold_r[2], 2) and approx(hold_r[3], 2))
+local step_r = op_ratio_trig_seq(1)
+check('op ratio trig step walks the index UP per hit (A held)',
+  #step_r == 3 and approx(step_r[1], 2)
+  and step_r[2] == Burst.op_ratio(2, 1, MOD) and step_r[3] == Burst.op_ratio(2, 2, MOD)
+  and step_r[2] > step_r[1] and step_r[3] > step_r[2])
+check('op ratio trig defaults to hold (0)', Burst.new().channels[1].opSeqTrig == 0)
+
+-- the A lane stays held regardless of trig mode: a multi-step A under step trig must
+-- NOT advance within the burst (B {0} -> all three hits use A's first value, 2).
+local function op_ratio_A_held(trig_mode)
+  clock._reset()
+  local saved = engine
+  local r2 = {}
+  engine = { trig = function(...) local a = {...}; r2[#r2 + 1] = a[4] end }
+  local e = Burst.new()
+  set_quant(e, 0)
+  e.channels[1].div  = seqx.new{4}
+  e.channels[1].reps = seqx.new{3}
+  e.channels[1].opRatio2  = seqx.new{2, 3, 4}  -- A: must stay held within a burst
+  e.channels[1].opSeqTrig = trig_mode
+  e:launch(1)
+  clock._run_until(4)
+  engine = saved
+  return r2
+end
+local a_step = op_ratio_A_held(1)
+check('op ratio step leaves the A lane held within the burst',
+  #a_step == 3 and approx(a_step[1], 2) and approx(a_step[2], 2) and approx(a_step[3], 2))
+
+-- op1 is sequenced the same way (A value + B index offset + per-hit trig), and its
+-- drawn value rides as r1 at trig arg 14. A {2} + B {0,1,2} under step trig walks the
+-- index UP per hit, exactly like op2 above but observed on arg 14.
+local function op1_ratio_trig_seq(trig_mode)
+  clock._reset()
+  local saved = engine
+  local r1 = {}
+  engine = { trig = function(...) local a = {...}; r1[#r1 + 1] = a[14] end }
+  local e = Burst.new()
+  set_quant(e, 0)
+  e.channels[1].div  = seqx.new{4}
+  e.channels[1].reps = seqx.new{3}        -- length-1 finite -> single 3-hit burst
+  e.channels[1].opRatio1  = seqx.new{2}   -- A: held per burst
+  e.channels[1].opRatio1B = seqx.new{0, 1, 2}  -- B: index offsets
+  e.channels[1].opSeqTrig = trig_mode
+  e:launch(1)
+  clock._run_until(4)
+  engine = saved
+  return r1
+end
+local hold_r1 = op1_ratio_trig_seq(0)
+check('op1 ratio trig hold holds one B offset across the burst (arg 14)',
+  #hold_r1 == 3 and approx(hold_r1[1], 2) and approx(hold_r1[2], 2) and approx(hold_r1[3], 2))
+local step_r1 = op1_ratio_trig_seq(1)
+-- op1 is a carrier in every algo, so its B walks CARRIER_RATIOS.
+local CAR = Burst.CARRIER_RATIOS
+check('op1 ratio trig step walks the index UP per hit on arg 14',
+  #step_r1 == 3 and approx(step_r1[1], 2)
+  and step_r1[2] == Burst.op_ratio(2, 1, CAR) and step_r1[3] == Burst.op_ratio(2, 2, CAR)
+  and step_r1[2] > step_r1[1] and step_r1[3] > step_r1[2])
+check('op1 ratio trig shares the single opSeqTrig switch (defaults hold)',
+  Burst.new().channels[1].opSeqTrig == 0)
+
+-- PER-OPERATOR envelope SHAPES: each op's sequenced shape INDEX resolves (in fire)
+-- to {attack, decay, atkCurve, decCurve} scaled to the inter-hit gap, grouped per op
+-- at trig args 16..31 (op1 16-19, op2 20-23, op3 24-27, op4 28-31). div 4 @ 120bpm
+-- => gap 0.5s. Expectations derive from Burst.SHAPES so this survives table tuning.
+local GAP = 0.5
+local function exp_atk(sh) return math.max(0.001, GAP * sh[1]) end
+local function shp(i) return Burst.SHAPES[i] end
+-- op K's env args occupy trig 16..31 in groups of 4 (atk, dec, atkCurve, decCurve):
+-- op1->16, op2->20, op3->24, op4->28.
+-- pick representative shapes BY their contour, not a hard-coded index, so this
+-- survives reordering the table:
+--   I_INSTANT = the SHORTEST instant-attack shape (atkMul 0, min decMul)
+--   I_LONGATK = the longest-attack shape (max atkMul)
+--   I_LONGDEC = the longest-decay shape (max decMul)
+local I_INSTANT, I_LONGATK, I_LONGDEC
+do
+  local bestdec, maxatk, maxdec
+  for i, s in ipairs(Burst.SHAPES) do
+    if s[1] == 0 and (bestdec == nil or s[2] < Burst.SHAPES[bestdec][2]) then bestdec = i end
+    if maxatk == nil or s[1] >= Burst.SHAPES[maxatk][1] then maxatk = i end
+    if maxdec == nil or s[2] >= Burst.SHAPES[maxdec][2] then maxdec = i end
+  end
+  I_INSTANT, I_LONGATK, I_LONGDEC = bestdec, maxatk, maxdec
+end
+-- drive an env on op K (others held at the instant shape), return the captured trig.
+local function env_trig(op, idx)
   clock._reset()
   local saved = engine
   local cap
@@ -273,51 +554,37 @@ local function env_trig(attack_n, decay_n)
   set_quant(e, 0)
   e.channels[1].div = seqx.new{4}
   e.channels[1].reps = seqx.new{1}
-  e.channels[1].attack = seqx.new{attack_n}
-  e.channels[1].decay  = seqx.new{decay_n}
+  for k = 1, 4 do e.channels[1]['opEnv' .. k] = seqx.new{I_INSTANT} end
+  e.channels[1]['opEnv' .. op] = seqx.new{idx}
   e:launch(1)
   clock._run_until(2)
   engine = saved
   return cap
 end
-local e_lo = env_trig(0, 0)
-local e_hi = env_trig(1, 1)
-check('attack 0 -> ~instant (trig arg 8)', e_lo and approx(e_lo[8], 0.001))
-check('attack 1 -> ~0.4s absolute (trig arg 8)', e_hi and approx(e_hi[8], 0.401))
-check('higher decay -> longer amp decay (trig arg 9)', e_lo and e_hi and e_hi[9] > e_lo[9])
+-- op1's envelope rides args 16..19.
+local s_inst = env_trig(1, I_INSTANT)
+local s_atk  = env_trig(1, I_LONGATK)
+local s_dec  = env_trig(1, I_LONGDEC)
+check('instant-attack op env -> ~0.001s attack (op1 arg 16)', s_inst and approx(s_inst[16], 0.001))
+check('longer-attack op env -> longer gap-relative attack (op1 arg 16)',
+  s_atk and s_inst and s_atk[16] > s_inst[16] and approx(s_atk[16], exp_atk(shp(I_LONGATK))))
+check('longer-decay op env -> longer decay (op1 arg 17)', s_dec and s_inst and s_dec[17] > s_inst[17])
+-- op-env curves pass straight through to trig (no per-channel curve scaling).
+check('op env feeds dec curve (op1 arg 19)', s_inst and approx(s_inst[19], shp(I_INSTANT)[4]))
+check('op env feeds atk curve (op1 arg 18)', s_inst and approx(s_inst[18], shp(I_INSTANT)[3]))
 
--- modulator envelope: a second paired sequence (modatk/moddec) mapped exactly
--- like the carrier env, but feeding the FM-brightness env. modAttack -> trig arg
--- 19 (appended last); modDecay -> trig arg 11. Independent of the carrier env.
-local function mod_env_trig(modatk_n, moddec_n)
-  clock._reset()
-  local saved = engine
-  local cap
-  engine = { trig = function(...) cap = cap or {...} end }
-  local e = Burst.new()
-  set_quant(e, 0)
-  e.channels[1].div = seqx.new{4}
-  e.channels[1].reps = seqx.new{1}
-  e.channels[1].modatk = seqx.new{modatk_n}
-  e.channels[1].moddec = seqx.new{moddec_n}
-  e:launch(1)
-  clock._run_until(2)
-  engine = saved
-  return cap
-end
-local m_lo = mod_env_trig(0, 0)
-local m_hi = mod_env_trig(1, 1)
-check('mod attack 0 -> ~instant (trig arg 19)', m_lo and approx(m_lo[19], 0.001))
-check('mod attack 1 -> ~0.4s absolute (trig arg 19)', m_hi and approx(m_hi[19], 0.401))
-check('higher mod decay -> longer FM body (trig arg 11)', m_lo and m_hi and m_hi[11] > m_lo[11])
--- the modulator env is independent of the carrier env: changing modatk/moddec
--- must not move the carrier attack/decay (args 8/9).
-check('mod env does not disturb carrier env (args 8/9 stable)',
-  m_lo and m_hi and approx(m_lo[8], m_hi[8]) and approx(m_lo[9], m_hi[9]))
+-- each operator carries its OWN envelope: driving op3's env feeds args 24..27 and
+-- must NOT disturb op1's env (args 16..19).
+local o3_inst = env_trig(3, I_INSTANT)
+local o3_dec  = env_trig(3, I_LONGDEC)
+check('op3 env feeds its own decay (op3 arg 25)', o3_dec and o3_inst and o3_dec[25] > o3_inst[25])
+check('op3 env feeds atk curve (op3 arg 26)', o3_inst and approx(o3_inst[26], shp(I_INSTANT)[3]))
+check('op3 env does not disturb op1 env (args 16/17 stable)',
+  o3_inst and o3_dec and approx(o3_inst[16], o3_dec[16]) and approx(o3_inst[17], o3_dec[17]))
 
--- shape-mode amp decay tracks the inter-hit gap: 4x faster division -> ~1/4
--- the decay, so dense/fast channels self-shorten instead of piling up.
-local function amp_decay_for_div(divv)
+-- op-env decay tracks the inter-hit gap: 4x faster division -> ~1/4 the decay
+-- (read op1's decay at arg 17), so dense/fast channels self-shorten.
+local function op1_decay_for_div(divv)
   clock._reset()
   local saved = engine
   local cap
@@ -329,13 +596,13 @@ local function amp_decay_for_div(divv)
   e:launch(1)
   clock._run_until(2)
   engine = saved
-  return cap and cap[9]
+  return cap and cap[17]
 end
-local slow, fast = amp_decay_for_div(2), amp_decay_for_div(8)
-check('amp decay scales with division (4x faster ~= 1/4 the hit)',
+local slow, fast = op1_decay_for_div(2), op1_decay_for_div(8)
+check('op env decay scales with division (4x faster ~= 1/4 the hit)',
   slow and fast and approx(fast, slow / 4))
 
--- the global FM algorithm reaches trig arg 3 (4-op engine routing selector).
+-- the per-channel FM algorithm reaches trig arg 3 (4-op engine routing selector).
 local function algo_trig(algo)
   clock._reset()
   local saved = engine
@@ -345,15 +612,15 @@ local function algo_trig(algo)
   set_quant(e, 0)
   e.channels[1].div = seqx.new{4}
   e.channels[1].reps = seqx.new{1}
-  e.algo = algo
+  e.channels[1].algo = algo
   e:launch(1)
   clock._run_until(2)
   engine = saved
   return cap and cap[3]
 end
-check('global algo feeds trig arg 3', algo_trig(5) == 5)
+check('per-channel algo feeds trig arg 3', algo_trig(5) == 5)
 
--- the channel index rides along as trig arg 14 so the SC engine can keep each
+-- the channel index rides along as trig arg 9 so the SC engine can keep each
 -- channel monophonic (a new hit releases the previous voice, no droning overlap).
 local function chan_arg(ch)
   clock._reset()
@@ -367,14 +634,14 @@ local function chan_arg(ch)
   e:launch(ch)
   clock._run_until(2)
   engine = saved
-  return cap and cap[14]
+  return cap and cap[9]
 end
-check('channel index feeds trig arg 14', chan_arg(3) == 3)
+check('channel index feeds trig arg 9', chan_arg(3) == 3)
 
--- VOICE macros: engine-wide globals read straight at fire time. trig args
--- 10/12/13 = ampCurve, feedback, drive; arg 7 = modIndex. (mod decay arg 11 and
--- mod attack arg 19 are now per-channel sequenced, not globals.)
--- `setup(e)` mutates the engine before launch; returns the first trig.
+-- voice scalars/macros read straight at fire time. trig args: 7 = modIndex,
+-- 8 = feedback; op1's per-segment env curves ride args 18 (atk) / 19 (dec), passed
+-- through unscaled (default 'tail' decCurve -4). `setup(e)` mutates the engine before
+-- launch; returns the trig.
 local function macro_trig(setup)
   clock._reset()
   local saved = engine
@@ -391,27 +658,28 @@ local function macro_trig(setup)
   return cap
 end
 local d = macro_trig()
-check('voice macro defaults: modIndex=2, ampCurve=-4, feedback=0, drive=1',
-  d and approx(d[7], 2) and approx(d[10], -4) and approx(d[12], 0) and approx(d[13], 1))
--- the global voice macros feed the trig args directly (fmDecay was retired; the
--- modulator decay is now sequenced -> arg 11, with modulator attack at arg 19).
+check('voice macro defaults: modIndex=2, op1 dec curve=-4, feedback=0',
+  d and approx(d[7], 2) and approx(d[19], -4) and approx(d[8], 0))
+-- mod index and FM feedback are per-channel static scalars (MIX page); they feed the
+-- trig args directly. op-env curves pass through unscaled, so op1's dec curve at arg 19
+-- stays the shape default regardless of the other scalars.
 local gv = macro_trig(function(e)
-  e.modIndex, e.ampPunch, e.fmFeedback, e.drive = 12, 8, 1.5, 4
+  e.channels[1].modIndex, e.channels[1].fmFeedback = 12, 1.5
 end)
-check('voice macros feed trig: modIndex, ampPunch->curve, feedback, drive',
-  gv and approx(gv[7], 12) and approx(gv[10], -8) and approx(gv[12], 1.5) and approx(gv[13], 4))
--- per-operator levels ride trig args 15..18; op1 default 1, op2..4 default 15/31.
-check('op levels default: op1=1, op2..4=15/31 (args 15-18)',
-  d and approx(d[15], 1) and approx(d[16], 15/31) and approx(d[17], 15/31) and approx(d[18], 15/31))
--- now per-channel STATIC scalars: opLevel1..4 feed trig args 15-18 directly.
+check('voice scalars feed trig: modIndex, feedback (curves unscaled)',
+  gv and approx(gv[7], 12) and approx(gv[8], 1.5) and approx(gv[19], -4))
+-- per-operator levels ride trig args 10..13; op1 default 1, op2..4 default 15/31.
+check('op levels default: op1=1, op2..4=15/31 (args 10-13)',
+  d and approx(d[10], 1) and approx(d[11], 15/31) and approx(d[12], 15/31) and approx(d[13], 15/31))
+-- now per-channel STATIC scalars: opLevel1..4 feed trig args 10-13 directly.
 local ol = macro_trig(function(e)
   e.channels[1].opLevel1 = 0.2
   e.channels[1].opLevel2 = 0.4
   e.channels[1].opLevel3 = 0.6
   e.channels[1].opLevel4 = 0.8
 end)
-check('per-channel op levels feed trig args 15-18',
-  ol and approx(ol[15], 0.2) and approx(ol[16], 0.4) and approx(ol[17], 0.6) and approx(ol[18], 0.8))
+check('per-channel op levels feed trig args 10-13',
+  ol and approx(ol[10], 0.2) and approx(ol[11], 0.4) and approx(ol[12], 0.6) and approx(ol[13], 0.8))
 
 -- quantization: an off-grid division (triplet, 4/3 beats) must snap every
 -- event FORWARD to the quarter-note grid (quantize=4 -> step 1 beat). We read
@@ -486,20 +754,30 @@ erb.channels[3].note = seqx.new{0}
 erb:bar_reset(3)
 check('bar_reset does not launch a stopped channel', erb:is_running(3) == false)
 
--- reset_channel must rewind EVERY sequence (hardcoded list), including the new
--- modulator envelope, or modatk/moddec drift out of phase on a bar reset.
+-- reset_channel must rewind EVERY sequence (hardcoded list), including the
+-- per-op envelope shapes (A and B), or opEnvN drift out of phase on a bar reset.
 local rzc = Burst.new()
-rzc.channels[1].modatk = seqx.new{0.1, 0.2, 0.3}
-rzc.channels[1].moddec = seqx.new{0.4, 0.5}
-rzc.channels[1].modatk(); rzc.channels[1].modatk()  -- advance the playheads
-rzc.channels[1].moddec()
+rzc.channels[1].opEnv1 = seqx.new{1, 5, 9}
+rzc.channels[1].opEnv1B = seqx.new{0, 3}
+rzc.channels[1].opEnv1(); rzc.channels[1].opEnv1()  -- advance the playheads
+rzc.channels[1].opEnv1B()
 rzc:reset_channel(1)
-check('reset_channel rewinds modatk/moddec to step 1',
-  approx(rzc.channels[1].modatk(), 0.1) and approx(rzc.channels[1].moddec(), 0.4))
+check('reset_channel rewinds opEnv1 A/B to step 1',
+  rzc.channels[1].opEnv1() == 1 and rzc.channels[1].opEnv1B() == 0)
 
 -- ---- grid_ui: controller wiring ---------------------------------------
 local GridUI = require 'grid_ui'
 print('grid_ui controller:')
+check('GridUI exposes 32 algorithm names', #GridUI.ALGO_NAMES == 32)
+check('Burst and GridUI agree on carrier role for every algo/op', (function()
+  for a = 1, 32 do
+    for op = 1, 4 do
+      if (Burst.op_ratio_set(a, op) == Burst.CARRIER_RATIOS)
+         ~= (GridUI.op_ratio_set(a, op) == GridUI.CARRIER_RATIOS) then return false end
+    end
+  end
+  return true
+end)())
 local function mock_grid()
   return {
     leds = {},
@@ -522,7 +800,8 @@ local geng = Burst.new()
 local mg = mock_grid()
 local ctl = GridUI.new(geng, mg)
 
--- param select (row 7) — both A/B halves are always shown, so a re-press only
+-- param select — pages split across rows: row 6 cols 0..4 = note + op1..4, row 7
+-- cols 0..1 = div/reps + SHP. Both A/B halves are always shown, so a re-press only
 -- keeps the param selected (no double-press A/B flip)
 check('default selected param = note', ctl.selectedParam == 'note')
 ctl:press(0, 7)
@@ -531,7 +810,7 @@ ctl:press(0, 7)
 check('re-press keeps param selected (no layer flip)', ctl.selectedParam == 'div')
 
 -- step picker edits a value
-ctl:press(1, 7)  -- col 1 = note page
+ctl:press(0, 6)  -- row 6 col 0 = note page
 check('selected note again', ctl.selectedParam == 'note')
 ctl:press(0, 0)  -- open picker on channel 0 step 0
 check('step picker opened', ctl.picker ~= nil and ctl.picker.kind == 'step')
@@ -581,7 +860,7 @@ ctl:close_picker()
 
 -- 8-step cap: the add slot stops appearing past SEQ_LEN; commit truncates
 geng.channels[1].note = seqx.new{0, 1, 2, 3, 4, 5, 6, 7}  -- exactly 8 (A half full)
-ctl:press(1, 7)  -- col 1 = note page
+ctl:press(0, 6)  -- row 6 col 0 = note page
 ctl:press(7, 0)  -- step 7 (last A col) exists; opens it
 check('8th A step is editable (full half)', ctl.picker ~= nil and ctl.picker.col == 7)
 ctl:close_picker()
@@ -616,52 +895,142 @@ check('hit-count cells (top row) do not strobe',
   mg.strobes[6 * 16 + 0] == nil and mg.strobes[6 * 16 + 15] == nil)
 ctl:close_picker()
 
--- attack/decay is a second paired page on a SINGLE button (col 3); selecting it
--- lights only that button, not div/reps (pair-scoped highlight)
-ctl:press(3, 7)  -- col 3 = attack/decay page
-check('attack/decay page selected', ctl.selectedParam == 'attack')
-check('attack page shows attack | decay lanes',
-  ctl:row_lanes()[1].param == 'attack' and ctl:row_lanes()[2].param == 'decay')
+-- per-op envelope pages (row 7 cols 1/2/3/4 = opEnv1/2/3/4, following div/reps at
+-- col 0): an A|B sequence like the op ratios (left = A shape index, right = B index
+-- offset). Selecting one lights only its button.
+ctl:press(1, 7)  -- row 7 col 1 = opEnv1 page
+check('opEnv1 page selected', ctl.selectedParam == 'opEnv1')
+check('opEnv1 page shows opEnv1 A | B lanes',
+  ctl:row_lanes()[1].param == 'opEnv1' and ctl:row_lanes()[1].layer == 'A'
+  and ctl:row_lanes()[2].param == 'opEnv1' and ctl:row_lanes()[2].layer == 'B')
 ctl:render_all()
-check('row7 lights only the attack/decay button (col3), not div/reps (col0)',
-  mg.leds[7 * 16 + 3] == 15 and mg.leds[7 * 16 + 0] ~= 15)
-ctl:press(8, 0)  -- right half -> decay A
-check('attack page right half edits decay',
-  ctl.picker.param == 'decay' and ctl.picker.layer == 'A')
+check('row7 lights only the opEnv1 button (col1), not div/reps (col0)',
+  mg.leds[7 * 16 + 1] == 15 and mg.leds[7 * 16 + 0] ~= 15)
+ctl:press(0, 0)  -- left half -> opEnv1 A
+check('opEnv1 left half edits the A (shape) layer',
+  ctl.picker.param == 'opEnv1' and ctl.picker.layer == 'A')
+ctl:press(2, 6)  -- value grid row 6 col 3 -> shape index 3
+check('opEnv1 A picker writes a shape index step',
+  seqx.values(geng.channels[1].opEnv1)[1] == GridUI.STEP_PICKER_VALUES.opEnv1[3])
+ctl:press(8, 0)  -- right half -> opEnv1 B (offset) picker
+check('opEnv1 right half edits the B (offset) layer',
+  ctl.picker.param == 'opEnv1' and ctl.picker.layer == 'B')
+ctl:close_picker()
+ctl:press(4, 7)  -- row 7 col 4 = opEnv4 page
+check('opEnv4 page selected', ctl.selectedParam == 'opEnv4')
+
+-- sequenced op ratio pages (row 6 cols 1/2/3/4 = op1/2/3/4, following the note
+-- page at col 0): an A|B sequence like note (left = A value, right = B offset).
+ctl:press(1, 6)  -- row 6 col 1 = op1 ratio page
+check('op1 ratio page selected', ctl.selectedParam == 'opRatio1')
+check('op1 ratio page shows opRatio1 A | B lanes',
+  ctl:row_lanes()[1].param == 'opRatio1' and ctl:row_lanes()[1].layer == 'A'
+  and ctl:row_lanes()[2].param == 'opRatio1' and ctl:row_lanes()[2].layer == 'B')
+ctl:press(0, 0)  -- left half step 0 -> opRatio1 A picker
+check('op1 ratio left half edits the A layer',
+  ctl.picker.param == 'opRatio1' and ctl.picker.layer == 'A')
+ctl:press(11, 6) -- value grid row 6 col 11 -> op1 is a carrier, so CARRIER_RATIOS[12]
+check('op1 ratio A picker writes a curated (carrier-set) ratio step',
+  approx(seqx.values(geng.channels[1].opRatio1)[1], GridUI.CARRIER_RATIOS[12]))
+ctl:press(8, 0)  -- right half step 0 -> opRatio1 B (offset) picker
+check('op1 ratio right half edits the B (offset) layer',
+  ctl.picker.param == 'opRatio1' and ctl.picker.layer == 'B')
+ctl:close_picker()
+ctl:press(2, 6)  -- row 6 col 2 = op2 ratio page
+check('op2 ratio page selected', ctl.selectedParam == 'opRatio2')
+check('op2 ratio page shows opRatio2 A | B lanes',
+  ctl:row_lanes()[1].param == 'opRatio2' and ctl:row_lanes()[1].layer == 'A'
+  and ctl:row_lanes()[2].param == 'opRatio2' and ctl:row_lanes()[2].layer == 'B')
+ctl:press(4, 6)  -- row 6 col 4 = op4 ratio page
+check('op4 ratio page selected', ctl.selectedParam == 'opRatio4')
+
+-- dynamic picker: the op2 A picker filters to the channel's role set for op2, which
+-- flips with the algorithm. Press the SAME value cell under two algos and confirm the
+-- committed ratio comes from the carrier set (algo 8) vs the modulator set (algo 1).
+ctl:press(2, 6)               -- op2 ratio page
+geng.channels[1].algo = 8     -- additive -> op2 is a carrier
+ctl:press(0, 0)               -- open op2 A picker on ch1 step 0
+ctl:press(3, 6)               -- value grid row 6 col 3 -> picker index 4
+check('op2 A picker (carrier algo) writes from CARRIER_RATIOS',
+  approx(seqx.values(geng.channels[1].opRatio2)[1], GridUI.CARRIER_RATIOS[4]))
+geng.channels[1].algo = 1     -- single stack -> op2 is a modulator
+ctl:press(0, 0)               -- reopen op2 A picker
+ctl:press(3, 6)               -- same cell -> picker index 4, now the modulator set
+check('op2 A picker (modulator algo) writes from MODULATOR_RATIOS',
+  approx(seqx.values(geng.channels[1].opRatio2)[1], GridUI.MODULATOR_RATIOS[4]))
 ctl:close_picker()
 
--- modulator envelope page (col 4): paired modatk | moddec lanes, mirroring the
--- carrier attack/decay page above.
-ctl:press(4, 7)  -- col 4 = modatk/moddec page
-check('mod-env page selected', ctl.selectedParam == 'modatk')
-check('mod-env page shows modatk | moddec lanes',
-  ctl:row_lanes()[1].param == 'modatk' and ctl:row_lanes()[2].param == 'moddec')
-ctl:press(8, 0)  -- right half -> moddec A
-check('mod-env page right half edits moddec',
-  ctl.picker.param == 'moddec' and ctl.picker.layer == 'A')
-ctl:close_picker()
 -- back to the note page so later tests start from a known selection
-ctl:press(1, 7)
+ctl:press(0, 6)
 check('back to note page', ctl.selectedParam == 'note')
 
--- launch toggle (row 6)
-ctl:press(0, 6)
-check('row6 col0 launches channel 1', geng:is_running(1) == true)
-ctl:press(0, 6)
-check('re-press stops channel 1', geng:is_running(1) == false)
+-- onboarding: BEFORE the first-ever launch, idle launch buttons 'pulse' (breathing
+-- cue inviting a first press)
+check('fresh controller has not launched', ctl.hasLaunched == false)
+ctl:render_all()
+check('idle launch buttons pulse before first launch', mg.strobes[7 * 16 + 5] == 'pulse')
 
--- scale picker (row6 QNT col 14)
+-- launch toggle: a contiguous 1x6 strip on row 7 at cols 5..10 (col 5+ch = channel ch+1)
+ctl:press(5, 7)   -- ch0 = col 5, row 7
+check('launch strip (col5,row7) launches channel 1', geng:is_running(1) == true)
+check('first launch latches hasLaunched', ctl.hasLaunched == true)
+ctl:press(5, 7)
+check('re-press stops channel 1', geng:is_running(1) == false)
+ctl:press(10, 7)  -- ch5 = col 10, row 7
+check('launch strip (col10,row7) launches channel 6', geng:is_running(6) == true)
+ctl:press(10, 7)
+check('re-press stops channel 6', geng:is_running(6) == false)
+
+-- first-run gate: once any channel has ever started, the onboarding pulse is gone;
+-- a running channel is solid full-bright, an idle one a static dim (no strobe)
+geng:launch(1)  -- ch0 = col 5, row 7
+ctl:render_all()
+check('idle launch button no longer pulses after first launch', mg.strobes[7 * 16 + 6] == nil)
+check('idle launch button settles to a static dim', mg.leds[7 * 16 + 6] == 4)
+check('running launch button is solid full-bright', mg.leds[7 * 16 + 5] == 15)
+geng:stop(1)
+
+-- ROOT/scale page (row6 col 14): mask kb rows 0-1, root kb rows 2-5 (upper 2-3,
+-- lower 4-5), channel selectors on row 7 cols 5-10. root is per-channel now.
+ctl.focusCh = 0
+ctl:close_picker()
 ctl:press(14, 6)
-check('QNT opens scale picker', ctl.picker ~= nil and ctl.picker.kind == 'scale')
-ctl:press(1, 0)  -- scales.picker_names[2] = 'minor'
-check('scale picker selects minor', ctl.selectedScaleName == 'minor')
-check('engine.scale set to minor intervals', vals_eq(geng.scale, scales.by_name.minor))
-ctl:press(0, 5)  -- root keyboard white row, col 0 = semitone 0 (C)
-check('root keyboard sets engine.root to C', geng.root == 0)
-ctl:press(1, 5)  -- col 1 white = semitone 2 (D)
-check('root keyboard sets engine.root to D', geng.root == 2)
-ctl:press(14, 6)  -- close scale picker
-check('scale picker closed via QNT', ctl.picker == nil)
+check('SCALE col opens ROOT page', ctl.picker ~= nil and ctl.picker.kind == 'scale')
+check('root page seeds target = focused channel 0', ctl.rootTargets[0] == true)
+-- global mask keyboard (rows 0-1): white row col 0 = pitch class 0 (in major -> removes)
+local m0 = #geng.scale
+ctl:press(0, 1)
+check('mask keyboard edits the global scale', #geng.scale ~= m0)
+ctl:press(0, 1)
+check('mask keyboard toggles back', #geng.scale == m0)
+-- root UPPER octave (rows 2-3): white row col 0 = pitch class 0 -> offset 0 (base tonic)
+ctl:press(0, 3)
+check('root sets targeted channel 0 to offset 0', geng.channels[1].root == 0)
+check('single target auto-advances to channel 1',
+  ctl.rootTargets[1] == true and ctl.rootTargets[0] == nil)
+-- root LOWER octave (rows 4-5): white col 1 = pc 2 -> offset 2-12 = -10 (down an octave)
+ctl:press(1, 5)
+check('root lower octave sets channel 1 to -10', geng.channels[2].root == -10)
+-- single applies auto-advanced twice, so the target is channel 2 now. Add ch0 (col5)
+-- and ch3 (col8) via the row-7 channel selectors for a multi-target edit.
+check('auto-advance reached channel 2', ctl.rootTargets[2] == true)
+ctl:press(5, 7)
+ctl:press(8, 7)
+check('multi-select adds channels', ctl.rootTargets[2] and ctl.rootTargets[0] and ctl.rootTargets[3])
+-- apply root to all selected: upper white col 2 = pc 4 -> offset 4
+ctl:press(2, 3)
+check('root applies to all selected channels', geng.channels[1].root == 4
+  and geng.channels[3].root == 4 and geng.channels[4].root == 4)
+check('multi target does NOT auto-advance',
+  ctl.rootTargets[0] and ctl.rootTargets[2] and ctl.rootTargets[3])
+-- selectors refuse to empty the target set
+ctl:press(5, 7)   -- ch0 off -> {2,3}
+ctl:press(7, 7)   -- ch2 off -> {3}
+ctl:press(8, 7)   -- try ch3 off -> refused
+check('selector refuses to empty the target set',
+  ctl.rootTargets[3] == true)
+ctl:press(14, 6)  -- close
+check('ROOT page closed via SCALE col', ctl.picker == nil)
 
 -- entering the scale page is exclusive with the other row-6 latch modes, so
 -- only the active page's button stays lit (regression: a prior PERF/PROB/SND
@@ -686,51 +1055,129 @@ check('set_mask refuses to empty the scale', vals_eq(geng.scale, {0, 4, 7}))
 -- prob mode (row6 col 13)
 ctl:press(13, 6)
 check('PROB mode entered', ctl.probMode == true)
-ctl:press(12, 0)  -- PROB_COLS[2] -> PROB_VALUES[2] = 0.5 on channel 0
-check('prob option sets burstProb 0.5', approx(geng.channels[1].burstProb, 0.5))
-ctl:press(1, 0)   -- ALT_TRIG_COLS[2] -> altTrig = 1 (step) on channel 0
-check('alt-trig key sets altTrig to step', geng.channels[1].altTrig == 1)
-ctl:press(0, 0)   -- ALT_TRIG_COLS[1] -> altTrig = 0 (hold)
-check('alt-trig key sets altTrig to hold', geng.channels[1].altTrig == 0)
+ctl:press(0, 0)   -- prob cell (col 0) -> opens the 32-value scalar picker
+check('prob cell opens the scalar picker', ctl.picker ~= nil
+  and ctl.picker.kind == 'scalar' and ctl.picker.field == 'burstProb')
+ctl:press(15, 6)  -- picker row 6 col 15 -> PROB_VALUES[16] = 16/32 = 0.5
+check('prob picker sets burstProb 0.5', approx(geng.channels[1].burstProb, 0.5))
+check('prob picker closes after the pick', ctl.picker == nil)
+check('PROB mode still latched after the pick', ctl.probMode == true)
+-- note alt(B) trig toggle (col 3): single button, hold (0) <-> step (1)
+ctl:press(3, 0)
+check('note trig button toggles to step', geng.channels[1].altTrig == 1)
+ctl:press(3, 0)
+check('note trig button toggles back to hold', geng.channels[1].altTrig == 0)
+-- op-ratio seq trig (col 4): ONE switch for all four B lanes
+check('op seq trig defaults to hold', geng.channels[1].opSeqTrig == 0)
+ctl:press(4, 0)
+check('op seq trig button toggles to step', geng.channels[1].opSeqTrig == 1)
+ctl:press(4, 0)
+check('op seq trig button toggles back to hold', geng.channels[1].opSeqTrig == 0)
+-- op-env seq trig (col 5): ONE switch for all four op-env B lanes
+check('op env trig defaults to hold', geng.channels[1].opEnvTrig == 0)
+ctl:press(5, 0)
+check('op env trig button toggles to step', geng.channels[1].opEnvTrig == 1)
+ctl:press(5, 0)
+check('op env trig button toggles back to hold', geng.channels[1].opEnvTrig == 0)
 ctl:press(13, 6)
 check('PROB mode exited', ctl.probMode == false)
 
--- OP page (row6 col 11, the old ALG slot): per-op ratio (cols 0-3) + per-op level (cols 8-11)
+-- MIX page (row6 col 11) in signal-flow order: algo (col 0) + mod index (col 1) + per-op
+-- level (cols 3-6) + FM feedback (col 8) + filter (col 13) + pan (col 14) + channel
+-- level/volume (col 15). Chorus was removed; cols 2/7/9-12 are inert.
 ctl:press(11, 6)
-check('OP mode entered', ctl.opMode == true)
-ctl:press(1, 0)   -- col1 -> op2 ratio picker on channel 0
-check('OP ratio cell opens a scalar picker',
-  ctl.picker and ctl.picker.kind == 'scalar' and ctl.picker.field == 'opRatio2')
-ctl:press(6, 6)   -- value grid row 6 col 6 -> RATIO_VALUES[1*0 + 6 + 1] = index 7
-check('OP ratio picker sets opRatio2',
-  approx(geng.channels[1].opRatio2, GridUI.RATIO_VALUES[7]) and ctl.picker == nil)
--- second picker row (row 7) reaches the upper half of the 32-value set:
--- index = 1*GRID_W + col + 1, so row7 col5 -> RATIO_VALUES[22].
-ctl:press(1, 0)   -- reopen op2 ratio picker
-ctl:press(5, 7)   -- value grid row 7 col 5 -> index 16 + 5 + 1 = 22
-check('OP ratio picker reaches row-7 values (index 22)',
-  approx(geng.channels[1].opRatio2, GridUI.RATIO_VALUES[22]) and ctl.picker == nil)
--- op1 ratio is now unpinned: col0 opens a picker like the other operators.
-ctl:press(0, 0)   -- col0 -> op1 ratio picker
-check('op1 ratio cell opens a scalar picker (unpinned)',
-  ctl.picker and ctl.picker.kind == 'scalar' and ctl.picker.field == 'opRatio1')
-ctl:press(2, 6)   -- value grid row 6 col 2 -> RATIO_VALUES[3]
-check('OP ratio picker sets opRatio1',
-  approx(geng.channels[1].opRatio1, GridUI.RATIO_VALUES[3]) and ctl.picker == nil)
-ctl:press(8, 0)   -- col8 -> op1 level picker
-check('OP level cell opens a scalar picker',
+check('MIX mode entered', ctl.mixMode == true)
+-- col2 is a dark separator now (chorus removed) — inert.
+ctl:press(2, 0)
+check('MIX col2 is inert (separator)', ctl.picker == nil)
+ctl:press(0, 0)   -- col0 -> algorithm picker
+check('MIX col0 opens the algorithm scalar picker',
+  ctl.picker and ctl.picker.field == 'algo')
+ctl:press(1, 0)   -- col1 -> mod index picker
+check('MIX col1 opens the mod index scalar picker',
+  ctl.picker and ctl.picker.field == 'modIndex')
+ctl:press(14, 0)  -- col14 -> pan picker
+check('MIX col14 opens the pan scalar picker',
+  ctl.picker and ctl.picker.field == 'pan')
+ctl:press(0, 6)   -- value grid row 6 col 0 -> PAN_VALUES[1] = -1 (hard left)
+check('MIX pan picker sets c.pan hard left', approx(geng.channels[1].pan, -1))
+ctl:press(14, 0)  -- reopen pan picker
+ctl:press(0, 7)   -- value grid row 7 col 0 -> PAN_VALUES[17] = 0 (centre, grid-exact)
+check('MIX pan picker can return to dead centre', approx(geng.channels[1].pan, 0))
+ctl:press(15, 0)  -- col15 -> channel level/volume picker
+check('MIX col15 opens the channel level scalar picker',
+  ctl.picker and ctl.picker.field == 'level')
+ctl:press(0, 6)   -- value grid row 6 col 0 -> OP_LEVEL_VALUES[1] = 0
+check('MIX channel level picker sets c.level', approx(geng.channels[1].level, 0))
+ctl:press(3, 0)   -- col3 -> op1 level picker
+check('MIX op level cell opens a scalar picker',
   ctl.picker and ctl.picker.field == 'opLevel1')
 ctl:press(15, 7)  -- value grid row 7 col 15 -> OP_LEVEL_VALUES[32] = 1.0
-check('OP level picker sets opLevel1', approx(geng.channels[1].opLevel1, 1.0))
+check('MIX op level picker sets opLevel1', approx(geng.channels[1].opLevel1, 1.0))
+ctl:press(8, 0)   -- col8 -> FM feedback picker
+check('MIX col8 opens the FM feedback scalar picker',
+  ctl.picker and ctl.picker.field == 'fmFeedback')
+ctl:close_picker()
+-- DJ filter (col 13): one bipolar knob, centre = no filter, left = LP, right = HP.
+check('filterPos defaults to 0 (no filter)', geng.channels[1].filterPos == 0)
+ctl:press(13, 0)  -- col13 -> filter picker
+check('MIX col13 opens the filter scalar picker',
+  ctl.picker and ctl.picker.field == 'filterPos')
+ctl:press(0, 6)   -- value grid row 6 col 0 -> FILTER_VALUES[1] = -1 (LP closed)
+check('MIX filter picker sets filterPos to the LP extreme',
+  approx(geng.channels[1].filterPos, -1))
+ctl:press(13, 0)  -- reopen filter picker
+ctl:press(0, 7)   -- value grid row 7 col 0 -> FILTER_VALUES[17] = 0 (off, grid-exact)
+check('MIX filter picker can return to off (centre)',
+  approx(geng.channels[1].filterPos, 0))
+ctl:press(13, 0)
+ctl:press(15, 7)  -- value grid row 7 col 15 -> FILTER_VALUES[32] = +1 (HP extreme)
+check('MIX filter picker sets filterPos to the HP extreme',
+  approx(geng.channels[1].filterPos, 1))
+geng.channels[1].filterPos = 0  -- restore the default for later checks
 ctl:press(11, 6)
-check('OP mode exited', ctl.opMode == false)
+check('MIX mode exited', ctl.mixMode == false)
 
--- env mode + geode are engine-wide VOICE macros now (no grid SND page, col 15 dark)
-check('geodeMode is a global engine field, not per-channel',
-  geng.geodeMode ~= nil and geng.channels[1].geodeMode == nil)
-check('envMode is a global engine field, not per-channel',
-  geng.envMode ~= nil and geng.channels[1].envMode == nil)
-check('geode defaults to sustain (1)', Burst.new().geodeMode == 1)
+-- the channel-strip filter pushes to the SC engine on every set_scalar (unlike
+-- the other MIX scalars, which ride the next trig): Burst:push_filter forwards
+-- to the global norns `engine` when present, and is silent off-hardware.
+do
+  local pushed = {}
+  _G.engine = {
+    filter = function(ch, pos) pushed.filter = {ch, pos} end,
+  }
+  ctl:set_scalar(1, 'filterPos', -0.5)
+  check('set_scalar(filterPos) pushes engine.filter with 1-based ch',
+    pushed.filter and pushed.filter[1] == 2 and approx(pushed.filter[2], -0.5))
+  ctl:set_scalar(1, 'pan', 0.2)
+  pushed.filter = nil
+  ctl:set_scalar(1, 'level', 0.5)
+  check('non-strip scalars do not push the filter', pushed.filter == nil)
+  _G.engine = nil
+  local c2 = geng.channels[2]
+  c2.filterPos, c2.pan, c2.level = 0, 0, 16 / 31
+end
+check('filter labels read off/LP/HP',
+  GridUI.filter_label(0) == 'off' and GridUI.filter_label(-1) == 'LP100'
+  and GridUI.filter_label(1) == 'HP100')
+
+-- env mode + geode are per-channel now, edited on the PRISM page (renamed QNT).
+check('geodeMode is a per-channel field', geng.channels[1].geodeMode ~= nil)
+check('envMode is a per-channel field', geng.channels[1].envMode ~= nil)
+check('geode is no longer an engine-global field', geng.geodeMode == nil)
+check('geode defaults to sustain (1)', Burst.new().channels[1].geodeMode == 1)
+check('env mode defaults to shape (0)', Burst.new().channels[1].envMode == 0)
+-- PRISM page grid: quantize on cols 0-7, env mode on 9-11, geode on 13-15.
+ctl:press(15, 6)  -- enter PRISM (ROW6_PRISM_COL = 15)
+check('PRISM mode entered', ctl.prismMode == true)
+ctl:press(11, 0)  -- env-mode cell col 11 (3rd) -> envMode 2 (hit) on channel 1
+check('PRISM env-mode press sets envMode', geng.channels[1].envMode == 2)
+ctl:press(13, 0)  -- geode cell col 13 (1st) -> geodeMode 0 (transient) on channel 1
+check('PRISM geode press sets geodeMode', geng.channels[1].geodeMode == 0)
+ctl:press(6, 0)   -- quantize cell col 6 (7th) -> QUANTIZE_VALUES[7] = 24
+check('PRISM quantize press still works', geng.channels[1].quantize == 24)
+ctl:press(15, 6)  -- exit PRISM
+check('PRISM mode exited', ctl.prismMode == false)
 check('no SND grid mode exists', ctl.soundMode == nil)
 
 -- PERF mode (row6 col 12): reset cols 0-3, octave cols 5-9, rate cols 11-15
@@ -749,8 +1196,28 @@ check('PERF rate col14 sets 2x', geng.channels[1].rate == 2)
 ctl:press(12, 6)
 check('PERF mode exited', ctl.perfMode == false)
 
--- FM algorithm is now a global engine scalar, not a per-channel field or grid page.
-check('algo is a global engine field, not per-channel', geng.algo ~= nil and geng.channels[1].algo == nil)
+-- pressing a sequence selector while a latch page is open exits that page and switches
+-- straight to the selected sequence (rather than leaving the page latched underneath).
+ctl:press(11, 6)                       -- enter MIX
+check('MIX mode entered for seq-selector test', ctl.mixMode == true)
+ctl:press(1, 6)                        -- row6 col1 = op1 ratio sequence selector
+check('seq selector exits the open MIX page', ctl.mixMode == false)
+check('seq selector switches to the selected sequence', ctl.selectedParam == 'opRatio1')
+ctl:press(12, 6)                       -- enter PERF
+check('PERF mode entered for seq-selector test', ctl.perfMode == true)
+ctl:press(0, 7)                        -- row7 col0 = div/reps sequence selector
+check('seq selector exits the open PERF page', ctl.perfMode == false)
+check('seq selector switches to div/reps', ctl.selectedParam == 'div')
+-- an armed action mode is likewise cleared by selecting a sequence page
+ctl:press(13, 7)                       -- arm CLR (action mode)
+check('CLR action armed', ctl.actionMode == 'clear')
+ctl:press(0, 6)                        -- note sequence selector
+check('seq selector clears the armed action mode', ctl.actionMode == nil)
+check('seq selector switches to note', ctl.selectedParam == 'note')
+
+-- FM algorithm is a per-channel static scalar (MIX page col 15), not a global engine
+-- field or a dedicated grid page/mode.
+check('algo is a per-channel field, not global', geng.algo == nil and geng.channels[1].algo ~= nil)
 check('no ALG grid mode exists', ctl.algoMode == nil)
 
 -- ---- screen_ui: pages, edits, fire reactivity --------------------------
@@ -763,103 +1230,153 @@ local seng = Burst.new()
 local sctl = GridUI.new(seng, mock_grid())
 local sui = ScreenUI.new(seng, sctl)
 
+-- page indices in the K2/K3 chain: 10 per-param sequence pages, then the 4 mode pages.
+--   1 note · 2 opRatio1 · 3 opRatio2 · 4 opRatio3 · 5 opRatio4 · 6 div/reps ·
+--   7 opEnv1 · 8 opEnv2 · 9 opEnv3 · 10 opEnv4 · 11 perf · 12 prob · 13 scale · 14 mix
+local P_NOTE, P_OPR2, P_DIV = 1, 3, 6
+local P_PERF, P_PROB, P_SCALE, P_MIX = 11, 12, 13, 14
+
 -- smoke: redraw runs clean on every page
 local pages_ok = true
-for p = 1, 6 do
+for p = 1, 14 do
   sui:set_page(p)
   local ok, err = pcall(function() sui:redraw() end)
   if not ok then pages_ok = false; print('      redraw error page ' .. p .. ': ' .. tostring(err)) end
 end
-check('redraw runs clean on all 6 pages', pages_ok)
-sui:set_page(3)
+check('redraw runs clean on all 14 pages', pages_ok)
+sui:set_page(P_PERF)
 check('set_page syncs grid modes (perf -> perfMode)', sctl.perfMode == true)
-sui:set_page(5)
+sui:set_page(P_SCALE)
 check('scale page opens the grid scale picker', sctl.picker and sctl.picker.kind == 'scale')
 
--- main page: E3 edits land exactly on the step picker grid
-sui:set_page(1)
+-- note page: six channel rows of one param; E3 edits land exactly on the picker grid
+sui:set_page(P_NOTE)
 sui.sel_ch = 0
-sui.sel_line[1] = 4  -- note (line 1 = run)
-sui:enc(2, 0)        -- sync the grid's selected param
+sui.sel_lane = 1
+seng.channels[1].note = seqx.new{0}
 sui.sel_step = 0
 sui:enc(3, 1)
-check('main E3 edit lands on note picker grid',
+check('note page E3 edit lands on the note picker grid',
   in_set(seqx.values(seng.channels[1].note)[1], GridUI.STEP_PICKER_VALUES.note))
-check('main E2 sync keeps grid selectedParam agreeing', sctl.selectedParam == 'note')
+check('note page keeps grid selectedParam = note', sctl.selectedParam == 'note')
+check('note page main_param is the lane-1 (A) param', sui:main_param() == 'note' and sui:layer() == 'A')
 
--- prob page: prob steps the discrete 25/50/75/100% set
-sui:set_page(4)
-sui.sel_line[4] = 1
+-- prob page: prob steps the 32-value grid shared with the grid picker
+sui:set_page(P_PROB)
+sui.sel_line[P_PROB] = 1
 seng.channels[1].burstProb = 1
 sui:enc(3, -1)
-check('prob E3 steps down one discrete value', approx(seng.channels[1].burstProb, 0.75))
-sui.sel_line[4] = 2
+check('prob E3 steps down one grid value (31/32)',
+  approx(seng.channels[1].burstProb, 31 / 32))
+sui.sel_line[P_PROB] = 2
 sui:enc(3, 1)
 check('prob mode line toggles probHit', seng.channels[1].probHit == true)
-sui.sel_line[4] = 3
+sui.sel_line[P_PROB] = 3
 sui:enc(3, 1)
 check('alt-trig line steps altTrig to step', seng.channels[1].altTrig == 1)
+sui.sel_line[P_PROB] = 4   -- op-ratio seq trig (ONE switch, all four B lanes)
+sui:enc(3, 1)
+check('prob page op seq trig line steps to step', seng.channels[1].opSeqTrig == 1)
+sui:enc(3, -1)
+check('prob page op seq trig line steps back to hold', seng.channels[1].opSeqTrig == 0)
+sui.sel_line[P_PROB] = 5   -- op-env seq trig (ONE switch, all four op envs)
+sui:enc(3, 1)
+check('prob page op env trig line steps to step', seng.channels[1].opEnvTrig == 1)
+sui:enc(3, -1)
+check('prob page op env trig line steps back to hold', seng.channels[1].opEnvTrig == 0)
 
--- op page: ratio lines (1..4 = op1..op4) step the curated set, level lines
--- (5..8 = op1..op4) step the 0..1 grid.
-sui:set_page(6)
-sui.sel_line[6] = 1   -- op1 ratio (now editable, was pinned)
-seng.channels[1].opRatio1 = 1
-sui:enc(3, 1)
-check('op page ratio line steps opRatio1 up the curated set',
-  in_set(seng.channels[1].opRatio1, GridUI.RATIO_VALUES) and seng.channels[1].opRatio1 ~= 1)
-sui.sel_line[6] = 2   -- op2 ratio
-seng.channels[1].opRatio2 = 1
-sui:enc(3, 1)
-check('op page ratio line steps opRatio2 up the curated set',
-  in_set(seng.channels[1].opRatio2, GridUI.RATIO_VALUES) and seng.channels[1].opRatio2 ~= 1)
-sui.sel_line[6] = 5   -- op1 level
+-- mix page in signal-flow order: line 1 = algo, 2 = mod index, lines 3..6 = op1..op4
+-- level, 7 = fm feedback, 8 = filter, 9 = pan, 10 = channel level/volume. All four
+-- op ratios are sequenced (edited on the per-param seq pages), and chorus was
+-- removed, so absent here.
+sui:set_page(P_MIX)
+check('mix page_lines is signal-flow order (alg, index, op1 l ...)',
+  sui:page_lines()[1][1] == 'alg' and sui:page_lines()[2][1] == 'index'
+  and sui:page_lines()[3][1] == 'op1 l')
+check('mix page has 10 lines (filter added)', #sui:page_lines() == 10)
+sui.sel_line[P_MIX] = 9   -- pan
+seng.channels[1].pan = 0
+sui:enc(3, -1)
+check('mix page pan line steps pan left down the -1..1 grid',
+  in_set(seng.channels[1].pan, GridUI.PAN_VALUES) and seng.channels[1].pan < 0)
+sui.sel_line[P_MIX] = 10  -- channel level (volume)
+seng.channels[1].level = 1.0
+sui:enc(3, -1)
+check('mix page level line steps channel level down the 0..1 grid',
+  in_set(seng.channels[1].level, GridUI.OP_LEVEL_VALUES) and seng.channels[1].level < 1.0)
+sui.sel_line[P_MIX] = 8   -- DJ filter position
+seng.channels[1].filterPos = 0
+sui:enc(3, -1)
+check('mix page filter line steps toward the low-pass down the -1..1 grid',
+  in_set(seng.channels[1].filterPos, GridUI.FILTER_VALUES) and seng.channels[1].filterPos < 0)
+sui.sel_line[P_MIX] = 3   -- op1 level
 seng.channels[1].opLevel1 = 1.0
 sui:enc(3, -1)
-check('op page level line steps opLevel1 down the 0..1 grid',
+check('mix page op1 line steps opLevel1 down the 0..1 grid',
   in_set(seng.channels[1].opLevel1, GridUI.OP_LEVEL_VALUES) and seng.channels[1].opLevel1 < 1.0)
+sui.sel_line[P_MIX] = 2   -- mod index (line 1 is algo now)
+seng.channels[1].modIndex = 4
+sui:enc(3, 1)
+check('mix page index line steps modIndex up its grid',
+  in_set(seng.channels[1].modIndex, GridUI.MOD_INDEX_VALUES) and seng.channels[1].modIndex ~= 4)
 
--- perf page: values come from the shared interval/octave/rate tables
-sui:set_page(3)
-sui.sel_line[3] = 1
+-- op ratios are sequenced, each on its own per-param page (opRatio2 = page 3).
+sui:set_page(P_OPR2)
+sui.sel_ch = 0
+sui.sel_lane = 1
+check('opRatio2 page main_param is opRatio2', sui:main_param() == 'opRatio2')
+check('opRatio2 page keeps grid selectedParam = opRatio2', sctl.selectedParam == 'opRatio2')
+seng.channels[1].opRatio2 = seqx.new{1}
+sui.sel_step = 0
+sui:enc(3, 1)
+check('opRatio2 E3 steps up the curated ratio grid (A = role set)',
+  in_set(seqx.values(seng.channels[1].opRatio2)[1],
+         GridUI.op_ratio_set(seng.channels[1].algo, 2))
+  and seqx.values(seng.channels[1].opRatio2)[1] ~= 1)
+
+-- perf page: line 1 = run, then reset/oct/rate/quantize come from the shared tables
+sui:set_page(P_PERF)
+check('perf page_lines line 1 is run, line 2 reset',
+  sui:page_lines()[1][1] == 'run' and sui:page_lines()[2][1] == 'reset')
+sui.sel_line[P_PERF] = 2   -- reset
 sui:enc(3, 3)
 check('perf E3 lands in RESET_INTERVALS', in_set(seng.channels[1].resetInterval, GridUI.RESET_INTERVALS))
-check('perf page_lines labels map to reset/oct/rate', sui:page_lines()[1][1] == 'reset')
-sui.sel_line[3] = 2
+sui.sel_line[P_PERF] = 3   -- oct
 sui:enc(3, 1)
 check('oct E3 lands in OCTAVE_VALUES', in_set(seng.channels[1].octave, GridUI.OCTAVE_VALUES))
 check('oct E3 stepped up one octave', seng.channels[1].octave == 1)
 sui:enc(3, -1)  -- restore octave 0: the fire tests below expect an unshifted c1
-sui.sel_line[3] = 3
+sui.sel_line[P_PERF] = 4   -- rate
 sui:enc(3, 1)
 check('rate E3 lands in RATE_VALUES', in_set(seng.channels[1].rate, GridUI.RATE_VALUES))
 
--- scale page: E2 walks root -> 12 keys; E3 edits each (quantize is per-channel
--- now, on the perf page below — no longer a scale-page stop)
-sui:set_page(5)
-seng.root = 0
-sui.sel_line[5] = 1            -- root
+-- scale page: E2 walks root -> 12 keys; E3 edits the SELECTED channel's root
+-- (per-channel now, -12..+11 signed transpose, no wrap; mask stays global)
+sui:set_page(P_SCALE)
+local sch = sui.sel_ch + 1
+seng.channels[sch].root = 0
+sui.sel_line[P_SCALE] = 1            -- root
 sui:enc(3, 2)
-check('scale E3 raises root by semitones', seng.root == 2)
-sui:enc(3, -3)                 -- wraps below 0
-check('scale root wraps mod 12', seng.root == 11)
+check('scale E3 raises the selected channel root by semitones', seng.channels[sch].root == 2)
+sui:enc(3, -5)                 -- goes negative (down-octave transpose), no wrap
+check('scale root goes negative, clamped not wrapped', seng.channels[sch].root == -3)
 seng.scale = {0, 4, 7}
-sui.sel_line[5] = 2 + 2        -- key for pitch class 2 (D)
+sui.sel_line[P_SCALE] = 2 + 2        -- key for pitch class 2 (D)
 sui:enc(3, 1)
 check('scale E3 right adds a key to the mask', in_set(2, seng.scale) and #seng.scale == 4)
 sui:enc(3, -1)
 check('scale E3 left removes the key', not in_set(2, seng.scale) and #seng.scale == 3)
 
--- perf page: per-channel quantize on line 4, stepping the curated set
-sui:set_page(3)
+-- perf page: per-channel quantize on line 5 (after run/reset/oct/rate), curated set
+sui:set_page(P_PERF)
 seng.channels[1].quantize = 8
-sui.sel_line[3] = 4
+sui.sel_line[P_PERF] = 5
 sui:enc(3, 1)
 check('perf E3 steps quantize up the curated set', seng.channels[1].quantize == 12)
 check('perf quantize lands in QUANTIZE_VALUES', in_set(seng.channels[1].quantize, GridUI.QUANTIZE_VALUES))
 
 -- restore musical state the fire tests below assume (unshifted c1, major)
-seng.root = 0
+seng.channels[1].root = 0     -- root is per-channel now
 seng.scale = scales.by_name.major
 set_quant(seng, 32)
 
@@ -883,17 +1400,17 @@ end
 check('channel column draws note letter after fire', letter_drawn)
 
 -- grid mode buttons drive the screen tab (grid -> screen sync)
-sui:set_page(1)
-sctl:press(11, 6)  -- OP on the grid
+sui:set_page(P_NOTE)  -- selectedParam = 'note'
+sctl:press(11, 6)  -- MIX on the grid
 sui:redraw()
-check('grid OP press switches screen to op page', sui.page == 6)
-sctl:press(11, 6)  -- toggle OP off
+check('grid MIX press switches screen to mix page', sui.page == P_MIX)
+sctl:press(11, 6)  -- toggle MIX off
 sctl:press(13, 6)  -- PROB on the grid
 sui:redraw()
-check('grid PROB press switches screen to prob page', sui.page == 4)
+check('grid PROB press switches screen to prob page', sui.page == P_PROB)
 sctl:press(13, 6)  -- toggle PROB off
 sui:redraw()
-check('grid mode off returns screen to main page', sui.page == 1)
+check('grid mode off returns screen to the selectedParam seq page', sui.page == P_NOTE)
 
 -- channel focus follows the grid (grid -> screen sync)
 sui.sel_ch = 0
@@ -924,30 +1441,46 @@ end
 check('grid action mode swaps footer for status', status_drawn)
 sctl:press(14, 7)  -- leave action mode
 
--- run line: E3 right launches, left stops
-sui:set_page(1)
+-- run line now lives on the perf page (line 1): E3 right launches, left stops
+sui:set_page(P_PERF)
 seng.channels[1].reps = seqx.new{2, 2}  -- looping again (fire test made it single-shot)
-sui.sel_line[1] = 1  -- run
+sui.sel_line[P_PERF] = 1  -- run
 sui:enc(3, 1)
-check('run line E3 right launches the channel', seng:is_running(1) == true)
+check('perf run line E3 right launches the channel', seng:is_running(1) == true)
 sui:enc(3, -1)
-check('run line E3 left stops the channel', seng:is_running(1) == false)
+check('perf run line E3 left stops the channel', seng:is_running(1) == false)
 
--- E2 walks every position: run -> div steps -> div `_` -> next line
-sui.sel_line[1] = 1  -- run (div default seq {4, 8} -> 2 steps + add slot)
-sui.sel_step = 0
+-- E2 walks steps across channels, flowing off one channel onto the next (div page)
+sui:set_page(P_DIV)
+for i = 1, 6 do seng.channels[i].div = seqx.new{4, 8} end  -- 2 steps + add slot = 3 positions
+sui.sel_ch = 0; sui.sel_lane = 1; sui.sel_step = 0
 sui:enc(2, 1)
-check('E2 flows from run to div step 1', sui.sel_line[1] == 2 and sui.sel_step == 0)
-sui:enc(2, 1); sui:enc(2, 1)
+check('E2 advances within a channel', sui.sel_ch == 0 and sui.sel_step == 1)
+sui:enc(2, 1)
 check('E2 reaches the `_` add slot after the last step',
-  sui.sel_line[1] == 2 and sui.sel_step == 2 and sui:_on_add_slot())
+  sui.sel_ch == 0 and sui.sel_step == 2 and sui:_on_add_slot())
 sui:enc(2, 1)
-check('E2 flows past `_` onto the next line', sui.sel_line[1] == 3 and sui.sel_step == 0)
+check('E2 flows past `_` onto the next channel', sui.sel_ch == 1 and sui.sel_step == 0)
 sui:enc(2, -1)
-check('E2 flows backward onto the previous line`s add slot',
-  sui.sel_line[1] == 2 and sui:_on_add_slot())
+check('E2 flows backward onto the previous channel`s add slot',
+  sui.sel_ch == 0 and sui:_on_add_slot())
 
--- `_` add slot: increment appends a step at the lowest picker value
+-- "scroll down switches to B": E2 past the last channel of lane 1 reveals lane 2
+sui:set_page(P_NOTE)
+for i = 1, 6 do seng.channels[i].note = seqx.new{0}; seng.channels[i].noteB = seqx.new{0} end
+sui.sel_ch = 5; sui.sel_lane = 1; sui.sel_step = 1  -- ch6 add slot (1 step + add)
+check('cursor on last channel add slot of lane A', sui.sel_lane == 1 and sui:_on_add_slot())
+sui:enc(2, 1)
+check('E2 past lane A last channel switches to lane B (scroll -> B)',
+  sui.sel_lane == 2 and sui.sel_ch == 0 and sui.sel_step == 0 and sui:layer() == 'B')
+sui:enc(2, -1)
+check('E2 back from lane B returns to lane A last channel',
+  sui.sel_lane == 1 and sui.sel_ch == 5)
+
+-- `_` add slot: increment appends a step at the lowest picker value (div page, ch0)
+sui:set_page(P_DIV)
+seng.channels[1].div = seqx.new{4, 8}
+sui.sel_ch = 0; sui.sel_lane = 1; sui.sel_step = 2  -- ch0 add slot (div len 2)
 sui:enc(3, 1)
 check('E3 on `_` appends a step (div len 3)', seqx.len(seng.channels[1].div) == 3)
 check('appended step = lowest picker value',
@@ -961,55 +1494,62 @@ check('cursor back on the `_` add slot', sui:_on_add_slot())
 
 -- the last remaining step clamps instead of vanishing
 seng.channels[1].note = seqx.new{0}
-sui.sel_line[1] = 4  -- note
-sui:enc(2, 0)
-sui.sel_step = 0
+sui:set_page(P_NOTE)
+sui.sel_ch = 0; sui.sel_lane = 1; sui.sel_step = 0
 sui:enc(3, -1)
 check('last remaining step clamps, never removed', seqx.len(seng.channels[1].note) == 1)
 
--- K2/K3 page back/forward, clamped at the ends; grid modes + paramLayer follow
-sui:set_page(1)
+-- K2/K3 page back/forward, clamped at the ends; grid selectedParam + modes follow
+sui:set_page(P_NOTE)
 sui:key(3, 1)
-check('K3 pages forward to alt (grid layer follows)',
-  sui.page == 2 and sctl.paramLayer == 'B')
+check('K3 pages forward note -> opRatio1 (grid selectedParam follows)',
+  sui.page == 2 and sctl.selectedParam == 'opRatio1')
+sui:set_page(10)  -- opEnv4, the last sequence page
 sui:key(3, 1)
-check('K3 pages to perf (grid perfMode follows)',
-  sui.page == 3 and sctl.perfMode == true)
+check('K3 opEnv4 -> perf (grid perfMode follows)',
+  sui.page == P_PERF and sctl.perfMode == true)
 sui:key(2, 1)
-check('K2 pages back to alt (perfMode off)',
-  sui.page == 2 and sctl.perfMode == false)
+check('K2 perf -> opEnv4 (perfMode off, selectedParam follows)',
+  sui.page == 10 and sctl.perfMode == false and sctl.selectedParam == 'opEnv4')
+sui:set_page(P_NOTE)
 sui:key(2, 1)
-check('K2 back to main restores layer A', sui.page == 1 and sctl.paramLayer == 'A')
-sui:key(2, 1)
-check('K2 clamps at main (no wrap)', sui.page == 1 and sctl.perfMode == false)
+check('K2 clamps at the first page (no wrap)', sui.page == P_NOTE)
+sui:set_page(P_MIX)
+sui:key(3, 1)
+check('K3 clamps at the last page (no wrap)', sui.page == P_MIX)
 
--- alt page: editing the B (offset) layer — only B-capable params appear here
--- (div/reps/harm have no B layer, so they're absent from alt)
-sui:set_page(2)
+-- lane 2 = the B (offset) layer, reached directly by sel_lane = 2 (or E2 scroll). It
+-- snaps to the offset set (literal 0 = no offset, prepended to the picker grid).
+sui:set_page(P_NOTE)
 sui.sel_ch = 0
+sui.sel_lane = 2
 seng.channels[1].noteB = seqx.new{0}
-sui.sel_line[2] = 2  -- note (B_PARAMS = {note, level, env})
-sui:enc(2, 0)        -- sync the grid's selected param + layer
+sui:enc(2, 0)        -- sync the grid's paramLayer to the lane
+check('lane 2 on a B-capable page is the B layer',
+  sui:layer() == 'B' and sctl.paramLayer == 'B' and sui:main_param() == 'note')
 sui.sel_step = 0
 sui:enc(3, 1)
-check('alt E3 steps note B up from 0 onto the grid',
+check('lane-B E3 steps note B up from 0 onto the grid',
   approx(seqx.values(seng.channels[1].noteB)[1], GridUI.STEP_PICKER_VALUES.note[2]))
 sui:enc(3, -1)
-check('alt E3 decrement returns to 0 (no offset)',
+check('lane-B E3 decrement returns to 0 (no offset)',
   seqx.values(seng.channels[1].noteB)[1] == 0)
 sui.sel_step = 1  -- `_` add slot
 sui:enc(3, 1)
-check('alt `_` appends 0', seqx.len(seng.channels[1].noteB) == 2
+check('lane-B `_` appends 0', seqx.len(seng.channels[1].noteB) == 2
   and seqx.values(seng.channels[1].noteB)[2] == 0)
-check('div/reps/harm are absent from the alt (B) page', sui:_main_positions(1) == 1
-  and (function() sui.sel_line[2] = 2; return sui:main_param() == 'note' end)())
-sui:set_page(1)
+
+-- div/reps lane 2 is `reps` (a paired A-layer lane), not a B offset
+sui:set_page(P_DIV)
+sui.sel_lane = 2
+check('div page lane 2 is the reps A lane', sui:main_param() == 'reps' and sui:layer() == 'A')
+sui.sel_lane = 1
 
 -- focused value token gets an underscore (rect 1px tall, token width)
+sui:set_page(P_DIV)
 seng.channels[1].div = seqx.new{16, 8}
-sui.sel_line[1] = 2  -- div
+sui.sel_ch = 0; sui.sel_lane = 1; sui.sel_step = 0
 sui:enc(2, 0)
-sui.sel_step = 0
 screen._reset()
 sui:redraw()
 local underlined = false
@@ -1068,7 +1608,7 @@ check('text default reflects randomized engine values',
   vals_eq(ParamsSync.from_text('note', 'A', fake:get('ch1_note_a')),
           seqx.values(peng.channels[1].note)))
 check('seeded noteB default round-trips', fake:get('ch1_note_b') == '3')
-check('B-layer zero default shows as 0', fake:get('ch1_level_b') == '0')
+check('B-layer zero default shows as 0', fake:get('ch1_opRatio1_b') == '0')
 
 -- bang idempotence: firing every action re-applies the same engine values
 local before = {}
@@ -1118,13 +1658,43 @@ check('div has no B param', fake:lookup_param('ch1_div_b') == nil)
 check('reps has no B param', fake:lookup_param('ch1_reps_b') == nil)
 check('harm has no param at all', fake:lookup_param('ch1_harm_a') == nil)
 
--- per-op static scalars: ratios are curated options, levels are 0..31 grid units
-fake:set('ch1_ratio2', 7)   -- option index 7 -> RATIO_VALUES[7] = 2
-check('ratio option sets opRatio2', approx(peng.channels[1].opRatio2, GridUI.RATIO_VALUES[7]))
+-- op1 ratio is sequenced now (no static ch1_ratio1 scalar); op levels are 0..31 grid scalars.
+check('no static op1-ratio scalar param', fake:lookup_param('ch1_ratio1') == nil)
+check('op1 ratio has a sequenced A block', fake:lookup_param('ch1_opRatio1_a') ~= nil)
+fake:set('ch1_opRatio1_a', '1.5 2 3')
+check('op1 ratio text installs a curated-ratio sequence',
+  vals_eq(seqx.values(peng.channels[1].opRatio1), {1.5, 2, 3}))
+check('op1 ratio has a B (index-offset) block', fake:lookup_param('ch1_opRatio1_b') ~= nil)
 fake:set('ch1_level3', 0)
 check('op level 0 -> 0.0', approx(peng.channels[1].opLevel3, 0))
 fake:set('ch1_level3', 31)
 check('op level 31 -> 1.0', approx(peng.channels[1].opLevel3, 1))
+
+-- op2/3/4 ratios are sequenced: text + cursor blocks like note/level, A value + B
+-- offset, snapping every token to the curated ratio grid.
+fake:set('ch1_opRatio2_a', '1.5 2 3')
+check('op2 ratio text installs a curated-ratio sequence',
+  vals_eq(seqx.values(peng.channels[1].opRatio2), {1.5, 2, 3}))
+check('op2 ratio text normalized back (curated tokens)', fake:get('ch1_opRatio2_a') == '1.5 2 3')
+fake:set('ch1_opRatio2_b', '0 4')
+check('op2 ratio B index-offset parses (0 = no shift)',
+  vals_eq(seqx.values(peng.channels[1].opRatio2B), {0, 4}))
+check('op2 ratio has a B param (index-offset layer)', fake:lookup_param('ch1_opRatio2_b') ~= nil)
+
+-- op-ratio seq trig mode param (hold/step option, like alt trig): ONE switch
+-- for all four op-ratio B lanes (the per-op params are gone)
+fake:set('ch1_op_trig', 2)  -- option 2 = step
+check('op seq trig param sets step', peng.channels[1].opSeqTrig == 1)
+fake:set('ch1_op_trig', 1)  -- option 1 = hold
+check('op seq trig param sets hold', peng.channels[1].opSeqTrig == 0)
+check('per-op ratio trig params are gone', fake:lookup_param('ch1_op1_trig') == nil)
+
+-- op-env seq trig mode param: same single hold/step switch for all four op envs
+fake:set('ch1_openv_trig', 2)  -- option 2 = step
+check('op env trig param sets step', peng.channels[1].opEnvTrig == 1)
+fake:set('ch1_openv_trig', 1)  -- option 1 = hold
+check('op env trig param sets hold', peng.channels[1].opEnvTrig == 0)
+check('per-op env trig params are gone', fake:lookup_param('ch1_opEnv1_trig') == nil)
 
 -- reps rest tokens: rN <-> reps (1-N), so r1=0, r2=-1, r4=-3
 fake:set('ch1_reps_a', '2 r1 r4')
@@ -1132,21 +1702,48 @@ check('reps rest tokens parse: r1->0, r4->-3',
   seqx.values(peng.channels[1].reps)[2] == 0 and seqx.values(peng.channels[1].reps)[3] == -3)
 check('reps rests format back to rN', fake:get('ch1_reps_a') == '2 r1 r4')
 
--- level/env tokens are 0..31 grid units
-fake:set('ch1_level_a', '31 0')
-check('level grid units parse to i/31', approx(seqx.values(peng.channels[1].level)[1], 1)
-  and approx(seqx.values(peng.channels[1].level)[2], 0))
+-- channel level is a static scalar on the 0..31 grid (no longer a sequenced text param)
+check('no sequenced channel-level text param', fake:lookup_param('ch1_level_a') == nil)
+fake:set('ch1_level', 0)
+check('channel level 0 -> 0.0', approx(peng.channels[1].level, 0))
+fake:set('ch1_level', 31)
+check('channel level 31 -> 1.0', approx(peng.channels[1].level, 1))
+
+-- pan is a static scalar on a 0..31 grid mapped to -1..1 (index 16 = centre)
+fake:set('ch1_pan', 1)
+check('pan 1 -> hard left (-1)', approx(peng.channels[1].pan, -1))
+fake:set('ch1_pan', 16)
+check('pan 16 -> dead centre (0)', approx(peng.channels[1].pan, 0))
+fake:set('ch1_pan', 31)
+check('pan 31 -> hard right (+1)', approx(peng.channels[1].pan, 1))
+peng.channels[1].pan = 0
+psync:reflect_scalars(1)
+check('engine pan reflects back to param index 16 (centre)', fake:get('ch1_pan') == 16)
+
+-- filter: the strip scalar on the same bipolar 0..31 grid as pan (index 16 =
+-- centre = no filter). Its param action pushes straight to the SC engine
+-- (guarded on the global, absent off-hardware) as well as mutating the channel.
+fake:set('ch1_filter', 1)
+check('filter 1 -> LP extreme (-1)', approx(peng.channels[1].filterPos, -1))
+fake:set('ch1_filter', 16)
+check('filter 16 -> off (0)', approx(peng.channels[1].filterPos, 0))
+fake:set('ch1_filter', 31)
+check('filter 31 -> HP extreme (+1)', approx(peng.channels[1].filterPos, 1))
+peng.channels[1].filterPos = 0
+psync:reflect_scalars(1)
+check('engine filter state reflects back silently', fake:get('ch1_filter') == 16)
 
 -- engine/UI -> params: silent reflection only (zero action fires)
 local f0 = fake.fires
-pctl:press(0, 7)  -- col 0 = div/reps page
-pctl:press(1, 7)  -- col 1 = note page
+pctl:press(0, 7)  -- row 7 col 0 = div/reps page
+pctl:press(0, 6)  -- row 6 col 0 = note page
 pctl:press(0, 0)  -- open step picker ch0 col0
 pctl:press(5, 6)  -- pick note value 5 (value grid on rows 6-7)
 check('grid step edit reflects into text param', fake:get('ch1_note_a') == '5 8 5')
 pctl:press(13, 6)  -- PROB mode
-pctl:press(12, 0)  -- PROB_COLS[2] -> burstProb 0.5 -> prob option index 2
-check('grid prob option reflects into param', fake:get('ch1_prob') == 2)
+pctl:press(0, 0)   -- prob cell -> 32-value scalar picker
+pctl:press(15, 6)  -- pick value 16/32 = 0.5 -> prob option index 16
+check('grid prob edit reflects into param', fake:get('ch1_prob') == 16)
 pctl:press(13, 6)  -- exit PROB
 check('grid edits fired zero param actions', fake.fires == f0)
 
@@ -1175,6 +1772,14 @@ check('engine stop reflects run=0 silently', fake:get('ch1_run') == 0)
 -- copy/paste: snapshot ch1's MAIN (A-layer) sequins and paste into ch5
 fake:set('ch1_div_a', '4 8 16')
 fake:set('ch1_note_a', '1 2 3 4')
+-- ...and the per-channel MIX-page static scalars travel with copy/paste too
+peng.channels[1].level = 0.7
+peng.channels[1].opLevel2 = 0.3
+peng.channels[1].modIndex = 9
+peng.channels[1].fmFeedback = 3
+peng.channels[1].algo = 5
+peng.channels[1].pan = -1
+peng.channels[1].filterPos = -0.5
 fake:set('ch1_copy', 1)
 fake:set('ch5_paste', 1)
 local cp_ok = true
@@ -1185,20 +1790,36 @@ end
 check('copy+paste duplicates all MAIN sequins across channels', cp_ok)
 check('paste reflected into dest text param',
   vals_eq(ParamsSync.from_text('note', 'A', fake:get('ch5_note_a')), {1, 2, 3, 4}))
+local mix_ok = approx(peng.channels[5].level, 0.7)
+  and approx(peng.channels[5].opLevel2, 0.3)
+  and peng.channels[5].modIndex == 9
+  and peng.channels[5].fmFeedback == 3 and peng.channels[5].algo == 5
+  and approx(peng.channels[5].pan, -1)
+check('copy+paste duplicates MIX-page static scalars across channels', mix_ok)
+check('copy+paste carries the filter strip scalar too',
+  approx(peng.channels[5].filterPos, -0.5))
+check('paste reflected filter into dest scalar param',
+  fake:get('ch5_filter') == 9)  -- -0.5 -> grid index round(-0.5*15+16) = 9
+check('paste reflected into dest scalar param', fake:get('ch5_algorithm') == 5)
+check('paste reflected pan into dest scalar param', fake:get('ch5_pan') == 1)  -- pan -1 -> grid index 1
 
--- clear: resets all six MAIN sequins to defaults, leaving the ALT (B) layer intact
+-- clear: resets BOTH layers (A + B where present) to defaults, so the channel is blank
 fake:set('ch6_div_a', '4 8 16')
-fake:set('ch6_note_b', '1 2 3')  -- B-layer offset must survive clear
+fake:set('ch6_note_b', '1 2 3')  -- B-layer offset is cleared too now
 fake:set('ch6_clear', 1)
 -- assert against the module's own defaults so this follows DEFAULT_VALUE edits
 local cl_ok = true
 for _, p in ipairs(GridUI.PARAMS) do
   local v = seqx.values(peng.channels[6][p])
   if #v ~= 1 or not approx(v[1], GridUI.DEFAULT_VALUE[p]) then cl_ok = false end
+  if GridUI.has_b(p) then  -- every B-layer default is 0 (no offset)
+    local vb = seqx.values(peng.channels[6][p .. 'B'])
+    if #vb ~= 1 or not approx(vb[1], 0) then cl_ok = false end
+  end
 end
-check('clear resets all MAIN sequins to defaults', cl_ok)
-check('clear leaves ALT (B) layer intact',
-  vals_eq(seqx.values(peng.channels[6].noteB), {1, 2, 3}))
+check('clear resets every sequence on both layers to defaults', cl_ok)
+check('clear resets the ALT (B) layer too',
+  vals_eq(seqx.values(peng.channels[6].noteB), {0}))
 
 -- randomize trigger: result reflects exactly (grid-reachability contract)
 fake:set('ch4_randomize', 1)
@@ -1243,7 +1864,7 @@ check('flush clears the pending render', psync.render_pending == false)
 -- pset-load hook: action_read re-reflects everything
 peng.channels[5].burstProb = 0.5
 fake.action_read()
-check('action_read reflects engine state into params', fake:get('ch5_prob') == 2)
+check('action_read reflects engine state into params', fake:get('ch5_prob') == 16)
 
 -- ---- outputs: per-channel midi / crow / i2c routing ----------------------
 local Outputs = require 'outputs'
@@ -1254,9 +1875,13 @@ local fake_midi = {
   connect = function(dev)
     return {
       dev = dev,
-      note_on  = function(_, note, vel, ch) midi_log[#midi_log + 1] = {'on', note, vel, ch} end,
-      note_off = function(_, note, vel, ch) midi_log[#midi_log + 1] = {'off', note, vel, ch} end,
-      cc       = function(_, cc, val, ch) midi_log[#midi_log + 1] = {'cc', cc, val, ch} end,
+      note_on   = function(_, note, vel, ch) midi_log[#midi_log + 1] = {'on', note, vel, ch} end,
+      note_off  = function(_, note, vel, ch) midi_log[#midi_log + 1] = {'off', note, vel, ch} end,
+      cc        = function(_, cc, val, ch) midi_log[#midi_log + 1] = {'cc', cc, val, ch} end,
+      pitchbend = function(_, val, ch) midi_log[#midi_log + 1] = {'pb', val, ch} end,
+      start     = function(_) midi_log[#midi_log + 1] = {'start'} end,
+      stop      = function(_) midi_log[#midi_log + 1] = {'stop'} end,
+      clock     = function(_) midi_log[#midi_log + 1] = {'clock'} end,
     }
   end,
 }
@@ -1286,10 +1911,17 @@ check('note_to_volts C5 = +1V', approx(Outputs.note_to_volts(72), 1))
 check('velocity scales level linearly', Outputs.velocity(0.5) == 64)
 check('velocity floors at 1', Outputs.velocity(0.001) == 1)
 check('velocity caps at 127', Outputs.velocity(1.5) == 127)
-check('harm_to_volts: min ratio = 0V', approx(Outputs.harm_to_volts(0.125), 0))
-check('harm_to_volts: max ratio = 5V', approx(Outputs.harm_to_volts(14), 5))
-check('harm_to_cc: min ratio = 0', Outputs.harm_to_cc(0.125) == 0)
-check('harm_to_cc: max ratio = 127', Outputs.harm_to_cc(14) == 127)
+-- ratio_cc: FM ratio -> 0..127 CC over the curated span (one value per hit, no envelope)
+check('ratio_cc: max ratio = 127', Outputs.ratio_cc(14) == 127)
+check('ratio_cc: min ratio = 0', Outputs.ratio_cc(0.125) == 0)
+-- ratio_cv: FM ratio -> ER-301 CV volts (0..OP_CV_MAX)
+check('ratio_cv: max ratio = OP_CV_MAX volts', approx(Outputs.ratio_cv(14), Outputs.OP_CV_MAX))
+check('ratio_cv: min ratio = 0V', approx(Outputs.ratio_cv(0.125), 0))
+check('bend_value: in-tune note is centered', Outputs.bend_value(60, 2) == 8192)
+check('bend_value: +0.25 st over ±2 range = +1/8 scale', Outputs.bend_value(60.25, 2) == 8192 + 1024)
+check('bend_value: -0.25 st over ±2 range = -1/8 scale', Outputs.bend_value(59.75, 2) == 8192 - 1024)
+check('bend_value: narrower range bends further', Outputs.bend_value(60.25, 1) == 8192 + 2048)
+check('bend_value: clamps to 14-bit ceiling', Outputs.bend_value(60.4, 0.3) == 16383)
 
 clock._reset()
 local ofake = Paramset.new()
@@ -1301,31 +1933,52 @@ check('default destination is audio', outs:wants_audio(1) == true)
 outs:note(1, {freq = 440, level = 0.5, dur = 0.5})
 check('audio destination sends nothing external', #midi_log == 0 and #crow_log == 0)
 
--- midi: note on with velocity/channel, note off after dur via clock
+local function max_of(t) local m = 0 for _, v in ipairs(t) do m = math.max(m, v) end return m end
+
+-- midi: note on with velocity/channel, note off after dur, then four per-op CCs, each
+-- carrying that op's FM ratio (ratio_cc), on the default CC numbers 20..23.
 ofake:set('ch1_output', Outputs.DEST.MIDI)
 ofake:set('ch1_midi_chan', 5)
 check('midi destination disables internal audio', outs:wants_audio(1) == false)
-outs:note(1, {freq = 261.6256, level = 0.5, harm = 14, dur = 0.5})
+outs:note(1, {freq = 261.6256, level = 0.5, ratios = {14, 0.125, 14, 0.125}, dur = 0.5})
+check('midi pitch bend precedes the note, centered for an in-tune note',
+  midi_log[1][1] == 'pb' and midi_log[1][2] == 8192 and midi_log[1][3] == 5)
 check('midi note_on: middle C, vel 64, chan 5',
-  midi_log[1][1] == 'on' and midi_log[1][2] == 60
-  and midi_log[1][3] == 64 and midi_log[1][4] == 5)
-check('midi modwheel (cc1) = harmonicity, per hit, on the channel',
-  #midi_log == 2 and midi_log[2][1] == 'cc' and midi_log[2][2] == 1
-  and midi_log[2][3] == 127 and midi_log[2][4] == 5)
+  midi_log[2][1] == 'on' and midi_log[2][2] == 60
+  and midi_log[2][3] == 64 and midi_log[2][4] == 5)
+check('op1 cc (cc20) = op1 ratio 14 -> 127, on the channel',
+  midi_log[3][1] == 'cc' and midi_log[3][2] == 20
+  and midi_log[3][3] == 127 and midi_log[3][4] == 5)
+check('op2 cc (cc21) = op2 ratio 0.125 -> 0',
+  midi_log[4][1] == 'cc' and midi_log[4][2] == 21 and midi_log[4][3] == 0)
+check('op3 cc (cc22) = op3 ratio 14 -> 127',
+  midi_log[5][1] == 'cc' and midi_log[5][2] == 22 and midi_log[5][3] == 127)
+check('op4 cc (cc23) = op4 ratio 0.125 -> 0',
+  #midi_log == 6 and midi_log[6][1] == 'cc' and midi_log[6][2] == 23
+  and midi_log[6][3] == 0 and midi_log[6][4] == 5)
 clock._run_until(4)  -- 0.5 s at 120 bpm = 1 beat
 check('midi note_off scheduled after dur',
-  #midi_log == 3 and midi_log[3][1] == 'off' and midi_log[3][2] == 60)
+  #midi_log == 7 and midi_log[7][1] == 'off' and midi_log[7][2] == 60)
 
--- retrigger same pitch: old note cut first, stale timer's off dropped. Each hit
--- also emits its modwheel cc, so the sequence is on,cc / off,on,cc.
+-- op CC number 0 = that operator's CC is disabled (no message for it)
+ofake:set('ch1_op2_cc', 0)
 midi_log = {}
-outs:note(1, {freq = 261.6256, level = 0.5, dur = 0.5})
-outs:note(1, {freq = 261.6256, level = 0.9, dur = 0.5})
-check('retrigger cuts the held note first',
-  midi_log[1][1] == 'on' and midi_log[3][1] == 'off' and midi_log[4][1] == 'on')
+outs:note(1, {freq = 261.6256, level = 0.5, ratios = {14, 14, 14, 14}, dur = 0.5})
+check('op2 cc=0 suppresses op2 CC (three op CCs, not four)',
+  #midi_log == 5 and midi_log[3][2] == 20 and midi_log[4][2] == 22 and midi_log[5][2] == 23)
+ofake:set('ch1_op2_cc', 21)  -- restore default
 clock._run_until(8)
-check('exactly one note_off after retrigger settles', #midi_log == 6
-  and midi_log[6][1] == 'off')
+
+-- retrigger same pitch: old note cut first, stale timer's off dropped. Each hit emits
+-- pb, note, then four per-op CCs (cc20..23): pb,on,cc,cc,cc,cc / pb,off,on,cc,cc,cc,cc.
+midi_log = {}
+outs:note(1, {freq = 261.6256, level = 0.5, dur = 0.5, ratios = {1, 1, 1, 1}})
+outs:note(1, {freq = 261.6256, level = 0.9, dur = 0.5, ratios = {1, 1, 1, 1}})
+check('retrigger cuts the held note first',
+  midi_log[2][1] == 'on' and midi_log[8][1] == 'off' and midi_log[9][1] == 'on')
+clock._run_until(16)
+check('exactly one note_off after retrigger settles', #midi_log == 14
+  and midi_log[14][1] == 'off')
 
 -- zero-level hits are silent everywhere (matches the internal voice)
 midi_log = {}
@@ -1369,14 +2022,23 @@ ofake:set('ch4_output', Outputs.DEST.AUDIO)
 check('last jf channel leaving sends jf.mode(0)', crow_log[3][1] == 'jf_mode'
   and crow_log[3][2] == 0)
 
--- er301: cv + tr_pulse on the channel-numbered port
+-- er301: pitch v/oct + trigger on port = channel, then four per-op ratio CVs on ports
+-- ch*10+op (ch5 -> 51..54), each carrying that op's FM ratio (ratio_cv), one per hit.
+local function er301_cv(log, port)
+  for _, m in ipairs(log) do if m[1] == '301cv' and m[2] == port then return m[3] end end
+end
 ofake:set('ch5_output', Outputs.DEST.ER301)
 crow_log = {}
-outs:note(5, {freq = 523.2511, level = 0.5, harm = 14, dur = 0.5})
-check('er301 cv + tr on port = channel', crow_log[1][1] == '301cv' and crow_log[1][2] == 5
+outs:note(5, {freq = 523.2511, level = 0.5, ratios = {14, 0.125, 14, 14}, dur = 0.5})
+check('er301 pitch cv + tr on port = channel', crow_log[1][1] == '301cv' and crow_log[1][2] == 5
   and approx(crow_log[1][3], 1) and crow_log[2][1] == '301tr' and crow_log[2][2] == 5)
-check('er301 harm CV on port channel+6 (7..12)', crow_log[3][1] == '301cv'
-  and crow_log[3][2] == 11 and approx(crow_log[3][3], 5))
+check('er301 op1 CV on port 51 = op1 ratio 14 -> OP_CV_MAX volts',
+  approx(er301_cv(crow_log, 51), Outputs.OP_CV_MAX))
+check('er301 op2 CV on port 52 = op2 ratio 0.125 -> 0V', approx(er301_cv(crow_log, 52), 0))
+check('er301 op3/op4 CVs on ports 53/54 = op3/op4 ratios',
+  approx(er301_cv(crow_log, 53), Outputs.OP_CV_MAX) and approx(er301_cv(crow_log, 54), Outputs.OP_CV_MAX))
+check('er301 sends exactly pitch + tr + four op CVs (six messages)', #crow_log == 6)
+check('er301 sends no legacy brightness CV on port 11', er301_cv(crow_log, 11) == nil)
 
 -- burst integration: fire() respects wants_audio and forwards final values
 engine = { trigs = 0 }
@@ -1384,15 +2046,96 @@ engine.trig = function() engine.trigs = engine.trigs + 1 end
 local oeng = Burst.new()
 oeng.outputs = outs
 midi_log = {}
-oeng:fire(1, 0, 440, 0.5, 0, 4, 0, 0, 4, 1, 0)  -- ch1 is midi: external only (note_on + modwheel cc)
-check('fire on midi channel skips engine.trig', engine.trigs == 0 and #midi_log == 2)
+-- fire(ch, beat, freq, level, env1, env2, env3, env4, div, total, hit_idx)
+oeng:fire(1, 0, 440, 0.5, 4, 3, 8, 8, 4, 1, 0)  -- ch1 midi: external only (pb + note + 4 op CCs)
+check('fire on midi channel skips engine.trig', engine.trigs == 0 and #midi_log == 6)
 ofake:set('ch1_output', Outputs.DEST.AUDIO_MIDI)
 midi_log = {}
-oeng:fire(1, 0, 440, 0.5, 0, 4, 0, 0, 4, 1, 0)
-check('audio+midi fires both', engine.trigs == 1 and #midi_log == 2)
-oeng:fire(2, 0, 440, 0.5, 0, 4, 0, 0, 4, 1, 0)  -- ch2 is on crow 3+4
+oeng:fire(1, 0, 440, 0.5, 4, 3, 8, 8, 4, 1, 0)
+check('audio+midi fires both external + engine', engine.trigs == 1 and #midi_log == 6)
+oeng:fire(2, 0, 440, 0.5, 4, 3, 8, 8, 4, 1, 0)  -- ch2 is on crow 3+4
 check('fire on crow channel skips engine.trig', engine.trigs == 1)
 engine = nil
+
+-- midi clock out: 24 ppqn stream bracketed by Start/Stop, gated by the param.
+-- Start is DEFERRED to the next beat grid (clock_grid), not sent at the call,
+-- so it lands on-grid in phase with the voices + bar-aligned reset Starts.
+local function count_tag(log, tag)
+  local n = 0
+  for _, e in ipairs(log) do if e[1] == tag then n = n + 1 end end
+  return n
+end
+clock._reset()
+midi_log = {}
+outs.clock_co = nil; outs.clock_started = false
+ofake:set('midi_clock_out', 1)   -- off
+outs:clock_start()
+clock._run_until(2)
+check('clock out off: clock_start is a no-op', #midi_log == 0)
+clock._reset()                   -- back to beat 0 so the deferred Start has room
+midi_log = {}
+ofake:set('midi_clock_out', 2)   -- on
+outs:clock_start()
+check('clock start defers Start off the press instant', #midi_log == 0)
+clock._run_until(3)              -- Start on the beat grid, then 24 ppqn (48 pulses / 2 beats)
+check('Start lands on the beat grid then streams 24 ppqn',
+  #midi_log == 49 and midi_log[1][1] == 'start' and midi_log[49][1] == 'clock')
+outs:clock_stop()
+check('clock stop sends MIDI Stop and halts the stream', midi_log[#midi_log][1] == 'stop')
+local n_stopped = #midi_log
+clock._run_until(8)
+check('stopped stream sends nothing further', #midi_log == n_stopped)
+
+-- start then stop INSIDE the pre-Start grid wait must not emit an orphan Stop
+clock._reset()
+midi_log = {}
+outs:clock_start()               -- parks; Start pending at the next beat
+outs:clock_stop()                -- cancel before the grid wait elapses
+check('stop during a deferred start emits no orphan Stop', #midi_log == 0)
+
+-- disabling the param mid-stream halts + emits Stop
+clock._reset()
+midi_log = {}
+outs:clock_start()
+clock._run_until(2)              -- Start has gone out
+ofake:set('midi_clock_out', 1)   -- off mid-stream
+check('disabling clock out mid-stream emits Stop', midi_log[#midi_log][1] == 'stop')
+
+-- set_transport: edge-guarded Start/Stop driven by the engine run-state. A
+-- relaunch (still running) must NOT re-arm Start; only 0<->1 edges send.
+clock._reset()
+ofake:set('midi_clock_out', 2)   -- on
+outs.transport = false; outs.clock_co = nil; outs.clock_started = false
+midi_log = {}
+outs:set_transport(true)         -- first channel: 0 -> 1 (Start deferred)
+outs:set_transport(true)         -- relaunch while running: no edge, no new arm
+clock._run_until(2)
+check('set_transport sends exactly one Start across a relaunch', count_tag(midi_log, 'start') == 1)
+outs:set_transport(false)        -- last channel stops: 1 -> 0
+check('set_transport 1->0 sends Stop', midi_log[#midi_log][1] == 'stop')
+local n_after_stop = #midi_log
+outs:set_transport(false)        -- already stopped: no edge
+check('set_transport redundant stop is silent', #midi_log == n_after_stop)
+
+-- clock_reset: re-send Start to realign downstream gear, only once the stream
+-- has actually started and `midi clock reset` is on (per-bar reset scheduler)
+clock._reset()
+ofake:set('midi_clock_out', 2)   -- on
+ofake:set('midi_clock_reset', 2) -- on
+outs.transport = false; outs.clock_co = nil; outs.clock_started = false
+midi_log = {}
+outs:clock_reset()
+check('clock_reset before the stream starts is silent', #midi_log == 0)
+outs:set_transport(true)         -- arm; Start emitted on the grid
+clock._run_until(2)
+midi_log = {}
+outs:clock_reset()
+check('clock_reset while streaming re-sends Start', #midi_log == 1 and midi_log[1][1] == 'start')
+ofake:set('midi_clock_reset', 1) -- off
+midi_log = {}
+outs:clock_reset()
+check('clock_reset disabled is silent', #midi_log == 0)
+outs:clock_stop()
 
 print('')
 if fail == 0 then print('ALL PASS') else print(fail .. ' FAILURE(S)') os.exit(1) end

@@ -19,32 +19,53 @@
 --               div/reps the halves are div (left) and reps (right), both A
 --               (div/reps have no B layer). The lane you edit is the half you
 --               press; there is no A/B flip (no double-press). See row_lanes.
---   row 6     = 0..5 launch · 6..10 dark · 11 OP · 12 PERF · 13 PROB · 14 SCALE · 15 QNT
---               (SCALE opens the scale picker; QNT is the per-channel quantize
---               page. KB page disabled; FM algorithm, env mode and geode are
---               global params, not grid pages -- the old SND page was reclaimed)
---   row 7     = 0 div/reps · 1 note · 2 level · 3 attack/decay · 4 modatk/moddec
---             · 5..10 dark · 11 CLR · 12 COPY · 13 PASTE · 14 RANDOMIZE · 15 MUTATE
---             (one page-select button each; div/reps, attack/decay and
---             modatk/moddec are paired pages showing two A-layer lanes. The two
---             envelope pages are the carrier amp env and the modulator/FM-bright
---             env. timbre — per-op ratio/level — lives
---             on the OP page as static scalars)
---   CLR/COPY/PASTE act on the MAIN (A-layer) sequins of the tapped channel only;
---   the B (alt) layer is left intact so it can keep variating the copied sequins.
---   OP:    rows 0-5 = per-op RATIO (cols 0-3, op1..op4 all editable) · per-op LEVEL
---          (cols 8-11). Tap a cell to open its value picker on rows 6-7.
---   PROB:  rows 0-5 = note alt-trig hold/step (cols 0-1)
---          · prob 25/50/75/100% (cols 11-14, right-justified)
+--   row 6     = 0 note · 1 op1 ratio · 2 op2 ratio · 3 op3 ratio · 4 op4 ratio
+--             · 5..10 dark
+--             · 11 MIX · 12 PERF · 13 PROB · 14 SCALE · 15 PRISM
+--               (SCALE opens the scale picker; PRISM is the per-channel quantize +
+--               amp-dynamics page. KB page disabled; FM algorithm is a per-channel
+--               MIX scalar, not a grid page -- the old SND page was reclaimed)
+--   row 7     = 0 div/reps · 1 opEnv1 · 2 opEnv2 · 3 opEnv3 · 4 opEnv4
+--             · 5..10 launch ch0..5 (channels 1..6)
+--             · 11 COPY · 12 PASTE · 13 CLR · 14 RANDOMIZE · 15 MUTATE
+--   Page-select buttons (one per sequence page) are split across the two control
+--   rows: row 6 cols 0..4 = note + the four op-ratio pages; row 7 cols 0..4 =
+--   div/reps + the four per-op envelope pages (opEnv1..4). div/reps is the only
+--   paired page (two A-layer lanes); the op-env pages are A/B sequenced like the op
+--   ratios — A = a 1-based shape index into the curated table, B = an integer index
+--   offset that walks the table. All four op ratios are likewise sequenced pages
+--   (A value | B offset); channel level + op levels stay static on the MIX page.
+--   Channel launch/stop is a contiguous 1x6 strip on row 7 at cols 5..10 (col 5+ch =
+--   channel ch+1). A button toggles its channel's launch/stop; when an action mode
+--   (CLR/COPY/PASTE/RANDOMIZE/MUTATE) is armed it instead targets that channel.
+--   CLR clears BOTH layers (A + the B/alt layer where present) of the tapped
+--   channel; COPY/PASTE act on the MAIN (A-layer) sequins only, leaving the B (alt)
+--   layer intact so it can keep variating the copied sequins.
+--   MIX:   rows 0-5 = signal-flow order: FM ALGORITHM (col 0, per-channel) + mod INDEX (col 1),
+--          then op1-4 LEVEL (cols 3-6) + FM FEEDBACK (col 8), then the output stage:
+--          FILTER (col 13, one bipolar DJ knob: LP left / off centre / HP right) +
+--          PAN (col 14) + channel LEVEL/volume (col 15). Cols 2/7/9-12 are dark
+--          separators. Tap a cell to open its value picker on rows 6-7. (All four op
+--          ratios are sequenced — edited on their row-7 pages, not here.)
+--   PROB:  rows 0-5 = probability (col 0, tap -> 32-value picker on rows 6-7)
+--          · three hold<->step trig toggles (single button each, off=hold on=step):
+--            note alt(B) layer (col 3) · op-ratio seqs (col 4, ONE switch for all
+--            four B lanes) · op-env seqs (col 5, same)
 --          · col 15 burst/hit toggle
 --   PERF:  rows 0-5 = reset off/1/2/4 bars (cols 0..3) · octave -2..+2 (cols 5..9)
 --          · rate (cols 11..15)
---   QNT:   rows 0-5 = per-channel quantize, one cell per curated value on cols 0-7
---          ({3,4,6,8,12,16,24,32} = 1/3..1/32 events per whole note).
---   scale picker: row 0 cols 0-6 scale presets (7)
---                 rows 1-2 cols 0-6 degree (note-mask) keyboard: black row 1 / white row 2
---                 rows 4-5 cols 0-6 root keyboard: black row 4 / white row 5
---                 (quantize is no longer here — it is per-channel on the QNT page)
+--   PRISM: rows 0-5 = per-channel quantize on cols 0-7 (one cell per curated value,
+--          {3,4,6,8,12,16,24,32} = 1/3..1/32 events per whole note) · env mode
+--          (shape/burst/hit) on cols 9-11 · geode (transient/sustain/cycle) on cols
+--          13-15. Cols 8 and 12 are dark separators.
+--   ROOT/scale page: three stacked mini-keyboards (cols 0-6). Scale presets moved to
+--                 the PARAMETERS menu, so no preset row here.
+--                 rows 0-1 = global note-MASK keyboard: black row 0 / white row 1
+--                 rows 2-3 = root UPPER octave (offset 0..+11; white pc0 = base tonic)
+--                 rows 4-5 = root LOWER octave (offset -12..-1)
+--                 row 7 cols 5-10 = channel SELECTORS (which channel(s) root edits
+--                 target); a root press applies to all selected, single target
+--                 auto-advances to the next channel. root is per-channel.
 --                 keyboards are a compact piano: white keys packed at cols 0-6,
 --                 black keys offset above the white key they follow
 --   step picker:  value grid on rows 6-7 (the control rows, borrowed while
@@ -53,7 +74,7 @@
 --                 to set it. On the channel rows: tap another step to hop the
 --                 picker there, or re-tap the open step to cancel/close.
 --   scalar picker: same rows-6-7 value grid, but writes a per-channel static
---                 scalar (OP-page op ratio / op level) instead of a sequence step.
+--                 scalar (MIX-page channel level / op level) instead of a sequence step.
 --   KB mode: DISABLED — entry (row6 col 11) is commented out, so the mode is
 --            unreachable; its handle_kb_press / render_kb_mode code remains in
 --            place and can be restored by un-commenting the entry points.
@@ -68,47 +89,75 @@ local SEQ_LEN = 8
 local B_COL0 = 8
 local NUM_CHANNELS = 6
 -- All sequenced params (the row-7 page buttons are a separate, smaller list —
--- ROW7_PAGES — one per page). Timbre (per-op ratios + levels) is no longer
--- sequenced — it lives on the per-channel OP page as static scalars.
-local PARAMS = {'div', 'reps', 'note', 'level', 'attack', 'decay', 'modatk', 'moddec'}
+-- ROW7_PAGES — one per page). All four op FM ratios are sequenced (A value + B index
+-- offset, like note); channel level + op levels stay static on the MIX page.
+local PARAMS = {'div', 'reps', 'note',
+                'opEnv1', 'opEnv2', 'opEnv3', 'opEnv4',
+                'opRatio1', 'opRatio2', 'opRatio3', 'opRatio4'}
 -- Paired params share one page as two A-layer lanes (left|right) instead of a
 -- param's own A|B layers: div|reps (an additive offset on division/repeats isn't
--- musical), attack|decay (the carrier envelope shape) and modatk|moddec (the
--- modulator/FM-brightness envelope shape). A paired param therefore has no B
--- layer; every other param shows its A layer left, B right.
-local PAIRS = { {'div', 'reps'}, {'attack', 'decay'}, {'modatk', 'moddec'} }
+-- musical). div/reps is now the ONLY paired page (the per-op envelopes are A/B
+-- sequenced, like the op ratios). A paired param has no B layer; every other param
+-- shows its A layer left, B right.
+local PAIRS = { {'div', 'reps'} }
 local PAIRED, PAIR_OF = {}, {}
 for _, pr in ipairs(PAIRS) do
   PAIRED[pr[1]] = true; PAIRED[pr[2]] = true
   PAIR_OF[pr[1]] = pr;  PAIR_OF[pr[2]] = pr
 end
 local function has_b(param) return not PAIRED[param] end
--- row-7 page-select buttons: ONE per page. A paired page is represented by its
--- first member (selecting it shows both lanes via row_lanes); singles are
--- themselves. Cols 0..#ROW7_PAGES-1.
-local ROW7_PAGES = {'div', 'note', 'level', 'attack', 'modatk'}
+-- page-select buttons: ONE per page. A paired page is represented by its first
+-- member (selecting it shows both lanes via row_lanes); singles are themselves.
+-- The pages are split across the two control rows: ROW 6 (cols 0..4) = note + the
+-- four op-ratio pages; ROW 7 (cols 0..4) = div/reps + the four per-op envelope
+-- pages (opEnv1..4). Each list maps to cols 0..#list-1 on its row.
+local ROW6_PAGES = {'note', 'opRatio1', 'opRatio2', 'opRatio3', 'opRatio4'}
+local ROW7_PAGES = {'div', 'opEnv1', 'opEnv2', 'opEnv3', 'opEnv4'}
 
--- row 7
-local CLR_BUTTON_COL = 11
-local COPY_BUTTON_COL = 12
-local PASTE_BUTTON_COL = 13
+-- row 7 action buttons: COPY | PASTE | CLR | RANDOMIZE | MUTATE (copy/paste sit to
+-- the left, clear immediately right of them).
+local COPY_BUTTON_COL = 11
+local PASTE_BUTTON_COL = 12
+local CLR_BUTTON_COL = 13
 local RANDOMIZE_BUTTON_COL = 14
 local MUTATE_BUTTON_COL = 15
 -- row 6 right side
--- KB mode is disabled and the FM algorithm is now a global param (no grid page),
--- so cols 6..10 on row 6 are dark. The KB entry is commented out below; left in
--- place so the mode can be restored by un-commenting. Col 15 (the old SND page) is
--- likewise dark now that env mode + geode are global VOICE params.
+-- KB mode is disabled and the FM algorithm is now a per-channel MIX scalar (no grid
+-- page), so cols 6..10 on row 6 are dark. The KB entry is commented out below; left in
+-- place so the mode can be restored by un-commenting. Col 15 (the old SND page slot)
+-- now hosts the PRISM page (per-channel quantize + env mode + geode).
 -- local ROW6_KB_COL = 11
-local ROW6_OP_COL = 11    -- per-channel OP page (took the old ALG slot; per-op ratio + level statics)
+local ROW6_MIX_COL = 11   -- per-channel MIX page (took the old ALG slot; channel level + op level statics)
 local ROW6_PERF_COL = 12
 local ROW6_PROB_COL = 13
-local ROW6_SCALE_COL = 14 -- opens the scale picker (scale preset / degrees / root)
-local ROW6_QNT_COL = 15   -- per-channel QNT page (event snap grid, curated set)
--- OP page channel-row layout: op1..4 RATIO on cols 0..3 (op1 default 1.0, editable),
--- op1..4 LEVEL on cols 8..11 (left/right halves, like the A/B convention).
-local OP_RATIO_COL0 = 0
-local OP_LEVEL_COL0 = 8
+local ROW6_SCALE_COL = 14 -- opens the ROOT/scale page (global mask + per-channel root)
+local ROW6_PRISM_COL = 15   -- per-channel PRISM page (quantize + env mode + geode)
+-- Channel launch/stop (and action-target) buttons: a single contiguous 1x6 strip on
+-- ROW 7 at cols 5..10 (channel ch -> col 5 + ch, so ch0..5 = channels 1..6). Sits
+-- between the row-7 page buttons (cols 0..4) and the action buttons (cols 11..15),
+-- filling the row. (Was a 3x2 block at cols 8..10 across rows 6 & 7.)
+local LAUNCH_COL0 = 5
+local LAUNCH_ROW  = 7
+-- (x, y) -> channel 0..5 if it falls in the launch strip, else nil.
+local function launch_channel_at(x, y)
+  if y == LAUNCH_ROW and x >= LAUNCH_COL0 and x < LAUNCH_COL0 + NUM_CHANNELS then
+    return x - LAUNCH_COL0
+  end
+  return nil
+end
+-- MIX page channel-row layout follows the voice's signal flow left -> right: the FM
+-- SOURCE scalars first (algorithm col 0, mod index col 1), then the OPERATOR mix (op1..4
+-- LEVEL on cols 3..6, FM feedback on col 8), then the OUTPUT stage on the far right
+-- (FILTER col 13, stereo PAN col 14, channel LEVEL/volume col 15). Cols 2 and 7 are
+-- dark separators; cols 9..12 are dark. All four op ratios are sequenced (row-7
+-- pages), not here.
+local MOD_INDEX_COL = 1     -- FM mod index (PM/AM depth)
+local ALGO_COL = 0          -- FM algorithm (operator routing, per-channel)
+local OP_LEVEL_COL0 = 3     -- op1..op4 output levels on cols 3..6
+local FM_FEEDBACK_COL = 8   -- op4 self-feedback
+local FILTER_COL = 13       -- DJ filter position (LP | off | HP, output stage)
+local PAN_COL = 14          -- stereo pan (output stage)
+local MIX_LEVEL_COL = 15    -- channel level / volume (final output)
 -- The step picker's 32-value grid renders on the control rows (6-7) while a pick
 -- is in progress, leaving all six channel rows visible so the step being edited
 -- is never hidden behind the picker. (The scale picker still owns rows 0-5.)
@@ -126,53 +175,152 @@ local WHITE_KEYS = {0, 2, 4, 5, 7, 9, 11}
 -- no black key, matching a real keyboard's E-F and B-C gaps).
 local KB_WHITE_COL = {[0] = 0, [1] = 2, [2] = 4, [3] = 5, [4] = 7, [5] = 9, [6] = 11}
 local KB_BLACK_COL = {[0] = 1, [1] = 3, [3] = 6, [4] = 8, [5] = 10}
--- Scale-picker row assignments.
-local SCALE_PRESET_ROW = 0
-local DEG_BLACK_ROW, DEG_WHITE_ROW = 1, 2
-local ROOT_BLACK_ROW, ROOT_WHITE_ROW = 4, 5
--- (the scale picker no longer hosts a quantize block — quantize is per-channel on
--- its own QNT page; the right side of the scale picker is now unused.)
+-- ROOT/scale-page row assignments — three stacked mini-keyboards (each = a black
+-- key row over a white key row). The scale-preset row was removed (presets live in
+-- the PARAMETERS menu now), freeing room for a two-octave per-channel root keyboard:
+--   rows 0-1 = global scale MASK (membership)
+--   rows 2-3 = root UPPER octave (offset 0..+11; white pc0 = base tonic, offset 0)
+--   rows 4-5 = root LOWER octave (offset -12..-1)
+local MASK_BLACK_ROW,   MASK_WHITE_ROW   = 0, 1
+local ROOTHI_BLACK_ROW, ROOTHI_WHITE_ROW = 2, 3
+local ROOTLO_BLACK_ROW, ROOTLO_WHITE_ROW = 4, 5
 local RESET_INTERVALS = {0, 1, 2, 4}
 local RESET_COLS      = {0, 1, 2, 3}
 local OCTAVE_VALUES = {-2, -1, 0, 1, 2}
 local OCTAVE_COLS   = {5, 6, 7, 8, 9}
 local RATE_VALUES = {0.25, 0.5, 1, 2, 4}
 local RATE_COLS   = {11, 12, 13, 14, 15}
--- PROB page: note alt-trig mode packed left, prob options right-justified, hit
--- toggle at the far right (col 15). burstProb is a discrete 4-value set. (harm/op
--- trig columns are gone — harm and op levels no longer have a B layer.)
-local ALT_TRIG_COLS  = {0, 1}                -- note alt(B) layer: hold / step
-local PROB_VALUES   = {0.25, 0.5, 0.75, 1.0}
-local PROB_COLS     = {11, 12, 13, 14}
-local PROB_HIT_COL  = 15
+-- PROB page: probability collapsed to ONE cell (col 0) that opens a 32-value
+-- scalar picker on rows 6-7 (the same picker machinery as the MIX scalars),
+-- then three single-button hold<->step trig toggles (off=hold, on=step): the
+-- note alt(B) layer (col 3), the op-ratio sequences (col 4, ONE switch driving
+-- all four B lanes together) and the op-env sequences (col 5, same), with the
+-- burst/hit toggle at the far right (col 15).
+local PROB_COL        = 0
+local PROB_HIT_COL    = 1
+local NOTE_TRIG_COL   = 3   -- altTrig (note alt(B) layer)
+local OP_SEQ_TRIG_COL = 4   -- opSeqTrig (all four op-ratio B lanes)
+local OP_ENV_TRIG_COL = 5   -- opEnvTrig (all four op-env B lanes)
+-- 32 even probability steps (1/32 .. 1), so 100% (the default) and the old
+-- 25/50/75% presets all stay grid-exact.
+local PROB_VALUES = {}
+for i = 1, 32 do PROB_VALUES[i] = i / 32 end
 
 local ENV_MODE_NAMES       = {'shape', 'burst', 'hit'}
 local GEODE_MODE_NAMES     = {'transient', 'sustain', 'cycle'}  -- amp geode, always on
--- FM algorithm (1..16): operator routings, labelled by their shape. 1..8 are the
--- canonical Yamaha 4-op DX set; 9..16 are extended routings (see Engine_Potionshop
--- algorithms table — keep ordering in sync). One ALG grid row fits all 16 (cols 0..15).
+-- FM algorithm (1..32): operator routings, labelled by their shape. 1..8 are the
+-- canonical Yamaha 4-op DX set; 9..16 are extended PM routings; 17..32 are AM/ring &
+-- hybrid AM+FM routings (x = ring, ~ = AM shimmer, > = PM — see Engine_Potionshop
+-- algorithms table, keep ordering in sync). The algo scalar picker spans two grid rows.
 local ALGO_NAMES = {'4>3>2>1', '(4,3)>2>1', '4>3>1 2>1', '4>2>1 3>1',
                     '2>1 4>3', '4>1,2,3', '4>3 +1,2', 'additive',
                     '(4,3,2)>1', '3>2>1 +4', '4>2>1 +3', '4>3>2 +1',
-                    '4>3>1 +2', '(4,3)>1 +2', '4>1,2 +3', '4>2 3>1'}
+                    '4>3>1 +2', '(4,3)>1 +2', '4>1,2 +3', '4>2 3>1',
+                    '2x1 +3,4', '2x1 4x3', '4>3x1 +2', '4~1,2,3',
+                    '4x3x2x1', '(4,3)>1 2~1',
+                    '2~1 4~3', '4x1,2,3', '2>1 4~3', '4~3~2~1',
+                    '4>1 3x 2~', '3>2>1 4~1', '(4,3)>2x1', '4x2 3x1',
+                    '4~2 3~1', '4>3 3~2~1'}
 -- alt(B)-layer trigger mode for the note layer (altTrig):
 --   hold = add&hold (B drawn once per burst, summed onto A for every hit)
 --   step = advance the B sequins per hit (arpeggiates the alt layer)
 local ALT_TRIG_MODE_NAMES  = {'hold', 'step'}
--- Curated per-operator FM ratios for the OP-page picker (32 values across the two
--- picker rows 6-7: cols 0..15 = ratios 1..16, second row = 17..32). Mirrors
--- Burst.RATIO_VALUES (randomize/mutate) — keep the two in sync. Superset of the
--- earlier 16-value set: denser sub-octave bass, a unity-detune zone (1.25/1.75),
--- and half-integer inharmonic ratios for bell/metallic timbres.
-local RATIO_VALUES = {
-  0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1,
-  1.25, 1.5, 1.75, 2, 2.25, 2.5, 2.75, 3,
-  3.5, 4, 4.5, 5, 5.5, 6, 6.5, 7,
-  7.5, 8, 9, 10, 11, 12, 13, 14,
+-- Curated per-operator FM ratios, in two role sets. Mirrors Burst.CARRIER_RATIOS /
+-- MODULATOR_RATIOS / RATIO_VALUES — keep in sync. The op-ratio A lane shows the set
+-- for that op's ROLE under the channel's algo (carrier -> CARRIER_RATIOS 5-limit just
+-- intervals; modulator -> MODULATOR_RATIOS integers + divisions + fractions). Each set
+-- is 64 ascending values, biased LOW: the A grid picker (rows 6-7, two rows) exposes
+-- only the LOWER 32 (cols 0..15 = 1..16, second row = 17..32); the upper 32 (higher
+-- ratios) are B-offset reach only (op_ratio walks the role set). See Burst for the model.
+local CARRIER_RATIOS = {
+  -- lower 32 (A picker, 0.25 .. 2.0):
+  0.25, 0.2667, 0.2778, 0.3, 0.3125, 0.3333, 0.375, 0.4,
+  0.4167, 0.4444, 0.5, 0.5333, 0.5556, 0.6, 0.625, 0.6667,
+  0.75, 0.8, 0.8333, 0.8889, 0.9, 1.0, 1.1111, 1.125,
+  1.2, 1.25, 1.3333, 1.5, 1.6, 1.6667, 1.8, 2.0,
+  -- upper 32 (B-offset reach, 2.0 .. 8.0):
+  2.0833, 2.2222, 2.25, 2.4, 2.5, 2.6667, 2.7, 2.7778,
+  3.0, 3.125, 3.2, 3.3333, 3.375, 3.5556, 3.6, 3.75,
+  4.0, 4.1667, 4.4444, 4.5, 4.8, 5.0, 5.3333, 5.4,
+  6.0, 6.25, 6.4, 6.6667, 6.75, 7.2, 7.5, 8.0,
 }
+local MODULATOR_RATIOS = {
+  -- lower 32 (A picker, 0.25 .. 6.0 -- bright: integers 1..6 + simple fractions):
+  0.25, 0.3333, 0.4, 0.5, 0.6, 0.6667, 0.75, 0.8,
+  0.8333, 1.0, 1.2, 1.25, 1.3333, 1.4, 1.5, 1.6667,
+  1.75, 2.0, 2.25, 2.3333, 2.5, 2.6667, 3.0, 3.3333,
+  3.5, 3.6667, 4.0, 4.3333, 4.5, 5.0, 5.5, 6.0,
+  -- upper 32 (B-offset reach, 6.25 .. 16 -- high / inharmonic harmonics):
+  6.25, 6.3333, 6.5, 6.6667, 7.0, 7.3333, 7.5, 7.6667,
+  8.0, 8.3333, 8.5, 8.6667, 9.0, 9.3333, 9.5, 9.6667,
+  10.0, 10.3333, 10.5, 10.6667, 11.0, 11.3333, 11.5, 12.0,
+  12.5, 13.0, 13.5, 14.0, 14.5, 15.0, 15.5, 16.0,
+}
+-- full set = union of both, sorted ascending + de-duplicated. This is the STABLE index
+-- space params store A values against (both role sets are subsets). The B (index-offset)
+-- lane no longer walks this union — it walks the op's ROLE SET (see Burst.op_ratio). The
+-- grid step picker filters to the role set's lower 32. Mirrors Burst.RATIO_VALUES — keep in sync.
+local RATIO_VALUES = {}
+do
+  local seen = {}
+  local function add(v) if not seen[v] then seen[v] = true; RATIO_VALUES[#RATIO_VALUES + 1] = v end end
+  for _, v in ipairs(CARRIER_RATIOS)   do add(v) end
+  for _, v in ipairs(MODULATOR_RATIOS) do add(v) end
+  table.sort(RATIO_VALUES)
+end
+-- Carrier role per algo 1..22 = complement of the modulator list. Mirrors
+-- Burst.ALGO_MODULATORS / Engine_Potionshop.algorithms — keep in sync. Used to pick
+-- which role set the op-ratio A grid picker shows for a given channel.
+local ALGO_MODULATORS = {
+  {2,3,4},{2,3,4},{2,3,4},{2,3,4},{2,4},{4},{4},{},
+  {2,3,4},{2,3},{2,4},{3,4},{3,4},{3,4},{4},{3,4},
+  {2},{2,4},{3,4},{4},{2,3,4},{2,3,4},
+  {2,4},{4},{2,4},{2,3,4},{2,3,4},{2,3,4},{2,3,4},{3,4},{3,4},{2,3,4},
+}
+local function is_carrier(algo, op)
+  for _, m in ipairs(ALGO_MODULATORS[algo] or {}) do if m == op then return false end end
+  return true
+end
+local function op_ratio_set(algo, op)
+  return is_carrier(algo, op) and CARRIER_RATIOS or MODULATOR_RATIOS
+end
+-- op-ratio / op-env B lane: integer INDEX offsets 0..31 (0 = no shift, the default).
+-- For op ratios this walks UP the op's ROLE SET (the lower-32 A pick into the upper 32);
+-- for op envelopes it walks UP the SHAPES table to neighbouring contours.
+local OP_RATIO_OFFSETS = {}
+for i = 0, 31 do OP_RATIO_OFFSETS[i + 1] = i end
 
-local DEFAULT_VALUE   = {div = 8, reps = 3, note = 0, level = 0.5, attack = 0, decay = 16 / 31, modatk = 0, moddec = 8 / 31}
-local DEFAULT_VALUE_B = {div = 0, reps = 0, note = 0, level = 0, attack = 0, decay = 0, modatk = 0, moddec = 0}
+-- Envelope shape names, mirroring Burst.SHAPES order/count (keep in sync). The
+-- opEnv1..4 sequences index 1..#SHAPE_NAMES; the actual contour data (attack/decay
+-- muls + per-segment curves) lives only in lib/burst.lua (the SC engine never sees a
+-- shape -- fire() resolves it). The grid needs just count + labels.
+-- The table is SORTED SHORTEST -> LONGEST by total length (atkMul+decMul). Shapes
+-- 1..32 are the A-PICKER bank = the 32 SHORTEST contours. Shapes 33..64 are the longer
+-- half, reached ONLY by the B index-offset lane added onto an A pick (see Burst.SHAPES
+-- / op_env), so B EXTENDS a short A pick toward longer tails.
+local SHAPE_NAMES = {'tick', 'dust', 'tock', 'clip', 'prick', 'chip', 'grain', 'dit',
+                     'spike', 'tic', 'nip', 'blip', 'nick', 'plip', 'click', 'plop',
+                     'ping', 'dot', 'spit', 'rim', 'knock', 'flick', 'clave', 'dink',
+                     'dab', 'clap', 'zip', 'jab', 'poke', 'snap', 'zap', 'tink',
+                     'ting', 'bop', 'tap', 'pip', 'pop', 'pluck', 'drum', 'soft',
+                     'round', 'puff', 'body', 'ramp', 'exp', 'log', 'lin', 'swell',
+                     'arc', 'glass', 'revrs', 'tail', 'rise', 'pad', 'wedge', 'bloom',
+                     'bell', 'bow', 'surge', 'long', 'fade', 'hold', 'huge', 'drone'}
+local SHAPE_COUNT = #SHAPE_NAMES   -- 64 total contours
+-- The A lane's picker exposes only the first 32 (two grid rows) = the shortest half;
+-- the upper 32 (longer) are reachable by ADDING the B index-offset onto an A pick. The
+-- A brightness gradient normalizes against this so the A row reads full-scale.
+local SHAPE_PICKER_COUNT = 32
+-- defaults mirror Burst.SHAPE_CARRIER_DEFAULT / SHAPE_MOD_DEFAULT ('plop' / 'chip')
+local SHAPE_CARRIER_DEFAULT, SHAPE_MOD_DEFAULT = 16, 6
+
+local DEFAULT_VALUE   = {div = 8, reps = 3, note = 0,
+                         opEnv1 = SHAPE_CARRIER_DEFAULT, opEnv2 = SHAPE_MOD_DEFAULT,
+                         opEnv3 = SHAPE_MOD_DEFAULT, opEnv4 = SHAPE_MOD_DEFAULT,
+                         opRatio1 = 1, opRatio2 = 1, opRatio3 = 1, opRatio4 = 1}  -- op ratio default = unison
+local DEFAULT_VALUE_B = {div = 0, reps = 0, note = 0,
+                         opEnv1 = 0, opEnv2 = 0, opEnv3 = 0, opEnv4 = 0,           -- op env offset default = 0 (none)
+                         opRatio1 = 0, opRatio2 = 0, opRatio3 = 0, opRatio4 = 0}  -- op ratio offset default = 0 (none)
 
 -- 1-based value layouts for the step picker / KB bands. Index 1..32 maps to
 -- grid cell (y*16 + x + 1). These are the grid-reachability contract.
@@ -190,22 +338,90 @@ local STEP_PICKER_VALUES = {
     return t
   end)(),
   note = range(32, function(i) return i end),
-  level = range(32, function(i) return i / 31 end),
-  attack = range(32, function(i) return i / 31 end),
-  decay  = range(32, function(i) return i / 31 end),
-  modatk = range(32, function(i) return i / 31 end),
-  moddec = range(32, function(i) return i / 31 end),
+  -- (channel level is no longer a sequenced param — it's a MIX-page scalar using
+  -- OP_LEVEL_VALUES, the same 0..1 in 1/31 layout the op levels use.)
+  -- per-op envelope shapes: a flat 1..#SHAPES index list (the curated shape table).
+  -- The A lane picks a shape index; the B lane is an integer index offset
+  -- (OP_RATIO_OFFSETS, via picker_layout) that walks UP the table, like the op ratios.
+  opEnv1 = range(SHAPE_PICKER_COUNT, function(i) return i + 1 end),
+  opEnv2 = range(SHAPE_PICKER_COUNT, function(i) return i + 1 end),
+  opEnv3 = range(SHAPE_PICKER_COUNT, function(i) return i + 1 end),
+  opEnv4 = range(SHAPE_PICKER_COUNT, function(i) return i + 1 end),
+  -- sequenced op1/2/3/4 FM ratios: A indexes the STABLE union (RATIO_VALUES) for
+  -- params storage + off-grid snapping; the grid step picker filters this to the op's
+  -- role set (op_picker_layout). The B lane (an index offset) uses OP_RATIO_OFFSETS —
+  -- see picker_layout, which is layer-aware for op ratios.
+  opRatio1 = RATIO_VALUES,
+  opRatio2 = RATIO_VALUES,
+  opRatio3 = RATIO_VALUES,
+  opRatio4 = RATIO_VALUES,
 }
+-- Layer-aware picker layout. Op-ratio B is the one lane whose value set differs from
+-- its A lane (integer index offsets vs ratios); every other lane uses one layout for
+-- both A and B (B's "no offset" literal-0 is handled where it's drawn/parsed).
+local function picker_layout(param, layer)
+  -- op ratios and op envelopes share the integer index-offset B lane.
+  if layer == 'B' and (param:match('^opRatio') or param:match('^opEnv')) then
+    return OP_RATIO_OFFSETS
+  end
+  return STEP_PICKER_VALUES[param]
+end
+-- Role-aware variant for the op-ratio A lane: the grid step picker shows only the
+-- channel's role set for that op (carrier vs modulator under its algo), filtering the
+-- stable union that params/brightness use. Every other param/layer falls through to
+-- picker_layout. ch is the 0-based channel.
+local function op_picker_layout(self, ch, param, layer)
+  if layer == 'A' and param:match('^opRatio') then
+    local op = tonumber(param:sub(-1))
+    local algo = (self:chan(ch) or {}).algo or 1
+    return op_ratio_set(algo, op)
+  end
+  return picker_layout(param, layer)
+end
 -- OP-page op-level picker: 0..1 in 1/31 steps (same layout the old op sequins
 -- used), so every operator level stays grid-reachable.
 local OP_LEVEL_VALUES = range(32, function(i) return i / 31 end)
+-- MIX-page voice-scalar pickers (after the op levels). Each is a full 32-value grid
+-- (two grid rows) the chN_mod_index / chN_fm_feedback params map onto
+-- exactly — integer ranges so the defaults stay grid-exact.
+local MOD_INDEX_VALUES  = range(32, function(i) return i + 1 end)        -- 1..32 (brightness depth)
+local FM_FEEDBACK_VALUES = range(32, function(i) return i * 4 / 31 end)  -- 0..4 rad, 1/31-of-4 steps
+local ALGO_VALUES = range(32, function(i) return i + 1 end)  -- 1..32 FM algorithm (per-channel; 17..32 = AM/ring & hybrid)
+-- stereo pan, -1 (hard left) .. +1 (hard right) across the 32-cell grid. `range`
+-- feeds i = 0..31, so i = 16 (the 17th cell) is exactly 0 (centre), the grid-exact
+-- default; i = 0 clamps to -1 (a duplicate of i = 1, since 32 cells can't be
+-- symmetric about a centre cell otherwise). Param/grid index = i (0-based).
+local PAN_VALUES = range(32, function(i) return math.max(-1, math.min(1, (i - 16) / 15)) end)
+-- DJ filter position, same bipolar 32-cell mapping as pan: cell 16 (index i = 16)
+-- is exactly 0 = no filter (the grid-exact default); left of centre closes the
+-- low-pass toward -1, right of centre raises the high-pass toward +1.
+local FILTER_VALUES = range(32, function(i) return math.max(-1, math.min(1, (i - 16) / 15)) end)
 -- Curated per-channel quantize grids (events per whole note). Mirrors
--- Burst.QUANTIZE_VALUES — keep in sync. Edited on the per-channel QNT page.
+-- Burst.QUANTIZE_VALUES — keep in sync. Edited on the per-channel PRISM page.
 local QUANTIZE_VALUES = {3, 4, 6, 8, 12, 16, 24, 32}
 local QUANTIZE_COLS   = {0, 1, 2, 3, 4, 5, 6, 7}
+-- PRISM-page amp-dynamics selectors, right of the quantize block. env mode (3 cells,
+-- shape/burst/hit) and geode (3 cells, transient/sustain/cycle); cols 8 and 12 are
+-- dark separators. Values are 0-based (index into ENV_MODE_NAMES / GEODE_MODE_NAMES).
+local ENV_MODE_COLS   = {9, 10, 11}
+local GEODE_COLS      = {13, 14, 15}
 
 local function round(x) return math.floor(x + 0.5) end
 local function clamp(v, lo, hi) return math.max(lo, math.min(hi, v)) end
+
+-- Human-readable pan: 'C' centre, 'L<n>'/'R<n>' as a 0..100 distance from centre.
+local function pan_label(p)
+  p = p or 0
+  if math.abs(p) < 1e-6 then return 'C' end
+  return (p < 0 and 'L' or 'R') .. round(math.abs(p) * 100)
+end
+-- Human-readable filter position: 'off' at centre, 'LP<n>'/'HP<n>' as a 0..100
+-- distance into the low-/high-pass half of the knob.
+local function filter_label(p)
+  p = p or 0
+  if math.abs(p) < 1e-6 then return 'off' end
+  return (p < 0 and 'LP' or 'HP') .. round(math.abs(p) * 100)
+end
 local function eq(a, b) return math.abs(a - b) < 1e-6 end
 
 local function contains(t, v)
@@ -240,7 +456,7 @@ end
 -- screen draw_steps), so every *value* tops out at VALUE_MAX. With the playhead
 -- the only thing that can hit 15, it stays legible even over a hot step.
 local VALUE_MAX = 13
-local function value_brightness(param, value)
+local function value_brightness(param, value, layer)
   local b
   if param == 'div' then
     b = value <= 4 and 6 or value <= 8 and 8 or value <= 16 and 11 or VALUE_MAX
@@ -254,15 +470,33 @@ local function value_brightness(param, value)
     -- positive one brighter, so +n and -n no longer collide (they did under the
     -- old abs() mapping). Reads like pitch height — higher note, brighter cell.
     b = clamp(round(7 + value), 2, VALUE_MAX)
+  elseif param:match('^opRatio') then
+    if layer == 'B' then
+      -- B is an integer index offset 0..31: brightness ramps with the shift amount.
+      b = clamp(round(2 + clamp(value, 0, 31) / 31 * 11), 2, VALUE_MAX)
+    else
+      -- A ratio: brightness from its position in the full (union) ratio space (low
+      -- ratio = dim), so the sequence row reads as a pitch-height gradient regardless
+      -- of which role set the cell came from.
+      local idx = nearest_index(RATIO_VALUES, value)
+      b = clamp(round(2 + (idx - 1) / (#RATIO_VALUES - 1) * 11), 2, VALUE_MAX)
+    end
   elseif param == 'level' or param:match('^op%d') then
     b = math.max(2, round(2 + value * 11))
   elseif param == 'harm' then
     local norm = (value - 2) / 23.25
     b = clamp(round(4 + norm * 9), 4, VALUE_MAX)
-  elseif param == 'attack' or param == 'decay'
-      or param == 'modatk' or param == 'moddec' then
-    local norm = clamp(value, 0, 1)
-    b = clamp(round(2 + norm * 11), 2, VALUE_MAX)
+  elseif param:match('^opEnv') then
+    if layer == 'B' then
+      -- B is an integer index offset 0..31: brightness ramps with the shift amount.
+      b = clamp(round(2 + clamp(value, 0, 31) / 31 * 11), 2, VALUE_MAX)
+    else
+      -- A shape index 1..SHAPE_PICKER_COUNT: brightness ramps with the index, and the
+      -- table is length-sorted, so the sequence row reads as a short->long gradient
+      -- (low index = short = dim, high index = longer = bright).
+      local norm = clamp((value - 1) / math.max(1, SHAPE_PICKER_COUNT - 1), 0, 1)
+      b = clamp(round(2 + norm * 11), 2, VALUE_MAX)
+    end
   else
     b = 6
   end
@@ -288,8 +522,21 @@ GridUI.RATE_VALUES = RATE_VALUES
 GridUI.QUANTIZE_VALUES = QUANTIZE_VALUES
 GridUI.PROB_VALUES = PROB_VALUES
 GridUI.ALT_TRIG_MODE_NAMES = ALT_TRIG_MODE_NAMES
-GridUI.RATIO_VALUES = RATIO_VALUES
+GridUI.RATIO_VALUES = RATIO_VALUES          -- stable union (params index + B-walk space)
+GridUI.SHAPE_NAMES = SHAPE_NAMES            -- envelope shape labels (mirror Burst.SHAPES)
+GridUI.CARRIER_RATIOS = CARRIER_RATIOS      -- 5-limit set (carrier ops); mirror Burst
+GridUI.MODULATOR_RATIOS = MODULATOR_RATIOS  -- whole-number/division set (modulator ops)
+GridUI.op_ratio_set = op_ratio_set          -- (algo, op) -> role set
+GridUI.OP_RATIO_OFFSETS = OP_RATIO_OFFSETS  -- op ratio B index-offset layout (0..31)
+GridUI.picker_layout = picker_layout        -- layer-aware step-picker layout
 GridUI.OP_LEVEL_VALUES = OP_LEVEL_VALUES
+GridUI.MOD_INDEX_VALUES = MOD_INDEX_VALUES
+GridUI.FM_FEEDBACK_VALUES = FM_FEEDBACK_VALUES
+GridUI.ALGO_VALUES = ALGO_VALUES
+GridUI.PAN_VALUES = PAN_VALUES
+GridUI.pan_label = pan_label
+GridUI.FILTER_VALUES = FILTER_VALUES  -- bipolar DJ filter-position grid
+GridUI.filter_label = filter_label
 
 -- opts.on_status(string): pushed status text (for screen). opts.on_redraw():
 -- called after any state change so the screen can refresh too. opts.on_edit(ev):
@@ -317,11 +564,15 @@ function GridUI.new(engine, grid, opts)
   self.picker = nil            -- {kind='step'|'scalar'|'scale', ...} | nil
   self.probMode = false
   self.perfMode = false
-  self.qntMode = false         -- QNT page: per-channel event snap grid (curated set)
-  self.opMode = false          -- OP page: per-channel per-op ratio + level statics
+  self.prismMode = false         -- PRISM page: per-channel quantize + env mode + geode
+  self.mixMode = false          -- MIX page: per-channel channel level + op level statics
   self.actionMode = nil        -- 'randomize'|'mutate'|'clear'|'copy'|'paste'|nil
   self.clipboard = nil         -- {param = {vals...}} snapshot of a channel's A layer
   self.status = ''
+  -- onboarding: idle launch buttons breathe until the FIRST channel ever starts,
+  -- then settle to a static dim. Latches true on the first launch (session-scoped;
+  -- resets on script reload, which is a fresh start anyway).
+  self.hasLaunched = false
 
   self.customMask = {}
   for _, v in ipairs(scales.by_name.major) do self.customMask[#self.customMask + 1] = v end
@@ -336,13 +587,14 @@ function GridUI.new(engine, grid, opts)
 
   engine:on(function(ev)
     if ev.type == 'fire' then
-      if self.kbMode or self.probMode or self.perfMode or self.qntMode or self.opMode then return end
+      if self.kbMode or self.probMode or self.perfMode or self.prismMode or self.mixMode then return end
       -- the scale picker repurposes the channel rows; a step picker does not
       -- (it lives on rows 6-7), so let its channel-row playheads keep animating
       if self.picker and self.picker.kind == 'scale' then return end
       self:render_channel_row(ev.ch - 1)
       self.g:refresh()
     elseif ev.type == 'launch' or ev.type == 'stop' then
+      if ev.type == 'launch' then self.hasLaunched = true end  -- onboarding pulse off
       self:render_all()
     end
   end)
@@ -367,10 +619,18 @@ function GridUI:_focus(ch)
   self.on_redraw()
 end
 
+-- Channel-strip fields that live on a PERSISTENT SC synth (PotionChannel):
+-- unlike the other scalars they can't ride the next trig, so a mutation must be
+-- pushed to the engine immediately (Burst:push_filter).
+local STRIP_FIELDS = { filterPos = true }
+
 -- single edit path for channel scalar fields: grid and screen both write
 -- through here so on_edit sees every mutation. ch is 0-based.
 function GridUI:set_scalar(ch, field, value)
   self:chan(ch)[field] = value
+  if STRIP_FIELDS[field] and self.engine.push_filter then
+    self.engine:push_filter(ch + 1)
+  end
   self.on_edit{ type = 'scalar', ch = ch }
 end
 
@@ -397,10 +657,18 @@ end
 function GridUI:handle_normal_press(x, y)
   if y < 6 then
     self:_focus(y)
-    if self.qntMode then
+    if self.prismMode then
       local qi = index_of(QUANTIZE_COLS, x)
+      local ei = index_of(ENV_MODE_COLS, x)
+      local gi = index_of(GEODE_COLS, x)
       if qi ~= -1 then
         self:set_scalar(y, 'quantize', QUANTIZE_VALUES[qi + 1])
+        self:render_channel_row(y); self.g:refresh()
+      elseif ei ~= -1 then
+        self:set_scalar(y, 'envMode', ei)   -- 0-based: cell index = env-mode value
+        self:render_channel_row(y); self.g:refresh()
+      elseif gi ~= -1 then
+        self:set_scalar(y, 'geodeMode', gi)  -- 0-based: cell index = geode value
         self:render_channel_row(y); self.g:refresh()
       end
       return
@@ -426,26 +694,46 @@ function GridUI:handle_normal_press(x, y)
       return
     end
     if self.probMode then
-      local trig_idx = index_of(ALT_TRIG_COLS, x)
-      local prob_idx = index_of(PROB_COLS, x)
+      if x == PROB_COL then
+        -- probability edits through the 32-value scalar picker (rows 6-7)
+        self:open_scalar_picker(y, 'burstProb', PROB_VALUES, 'prob')
+        return
+      end
+      -- single-button hold (0) <-> step (1) toggles
       if x == PROB_HIT_COL then
         self:set_scalar(y, 'probHit', not self:chan(y).probHit)
-      elseif trig_idx ~= -1 then
-        self:set_scalar(y, 'altTrig', trig_idx)
-      elseif prob_idx ~= -1 then
-        self:set_scalar(y, 'burstProb', PROB_VALUES[prob_idx + 1])
+      elseif x == NOTE_TRIG_COL then
+        self:set_scalar(y, 'altTrig', (self:chan(y).altTrig == 1) and 0 or 1)
+      elseif x == OP_SEQ_TRIG_COL then
+        self:set_scalar(y, 'opSeqTrig', (self:chan(y).opSeqTrig == 1) and 0 or 1)
+      elseif x == OP_ENV_TRIG_COL then
+        self:set_scalar(y, 'opEnvTrig', (self:chan(y).opEnvTrig == 1) and 0 or 1)
       end
       self:render_channel_row(y); self.g:refresh()
       return
     end
-    if self.opMode then
-      -- ratios on cols 0..3 (op1..op4, all editable); levels on cols 8..11
-      local ri = x - OP_RATIO_COL0
-      local lvi = x - OP_LEVEL_COL0
-      if ri >= 0 and ri <= 3 then            -- op1..op4 ratio
-        self:open_scalar_picker(y, 'opRatio' .. (ri + 1), RATIO_VALUES, 'ratio')
-      elseif lvi >= 0 and lvi <= 3 then      -- op1..op4 level
-        self:open_scalar_picker(y, 'opLevel' .. (lvi + 1), OP_LEVEL_VALUES, 'level')
+    if self.mixMode then
+      -- signal-flow layout: algorithm (col 0) + mod index (col 1), op1..op4 levels
+      -- (cols 3..6) + FM feedback (col 8), then filter (col 13) + pan (col 14) +
+      -- channel level (col 15). Cols 2/7/9..12 are dark. All four op ratios are
+      -- sequenced (their row-7 pages).
+      if x == FILTER_COL then                    -- DJ filter (LP | off | HP)
+        self:open_scalar_picker(y, 'filterPos', FILTER_VALUES, 'filter')
+      elseif x == PAN_COL then                   -- stereo pan
+        self:open_scalar_picker(y, 'pan', PAN_VALUES, 'pan')
+      elseif x == MIX_LEVEL_COL then            -- channel level (volume)
+        self:open_scalar_picker(y, 'level', OP_LEVEL_VALUES, 'level')
+      elseif x == MOD_INDEX_COL then            -- FM mod index
+        self:open_scalar_picker(y, 'modIndex', MOD_INDEX_VALUES, 'index')
+      elseif x == FM_FEEDBACK_COL then          -- FM feedback
+        self:open_scalar_picker(y, 'fmFeedback', FM_FEEDBACK_VALUES, 'fb')
+      elseif x == ALGO_COL then                 -- FM algorithm (per-channel)
+        self:open_scalar_picker(y, 'algo', ALGO_VALUES, 'algo')
+      else
+        local lvi = x - OP_LEVEL_COL0
+        if lvi >= 0 and lvi <= 3 then           -- op1..op4 level
+          self:open_scalar_picker(y, 'opLevel' .. (lvi + 1), OP_LEVEL_VALUES, 'level')
+        end
       end
       return
     end
@@ -464,6 +752,10 @@ function GridUI:handle_picker_press(x, y)
   if p.kind == 'scale' then
     if y < 6 then self:apply_picker_value(p, x, y); return end
     if y == 6 and x == ROW6_SCALE_COL then self:close_picker(); return end
+    -- row 7 cols 5..10: channel selectors for root editing (not launch on this page)
+    if y == LAUNCH_ROW and x >= LAUNCH_COL0 and x < LAUNCH_COL0 + NUM_CHANNELS then
+      self:toggle_root_target(x - LAUNCH_COL0); return
+    end
     self:close_picker()
     self:handle_normal_press(x, y)
     return
@@ -497,7 +789,7 @@ end
 
 function GridUI:apply_picker_value(p, x, y)
   if p.kind == 'step' then
-    local v = STEP_PICKER_VALUES[p.param][y * GRID_W + x + 1]
+    local v = op_picker_layout(self, p.ch, p.param, p.layer)[y * GRID_W + x + 1]
     if v == nil then return end
     -- pressing the already-selected (full-bright) value toggles the step off:
     -- the value grid (rows 6-7) is the remove affordance, freeing the channel
@@ -515,26 +807,22 @@ function GridUI:apply_picker_value(p, x, y)
     self:set_scalar(p.ch, p.field, v)  -- single edit path: fires on_edit{scalar}
     self:close_picker()
   elseif p.kind == 'scale' then
-    if y == SCALE_PRESET_ROW then
-      local name = scales.picker_names[x + 1]
-      if not name then return end
-      self.selectedScaleName = name
-      self.customMask = {}
-      for _, vv in ipairs(scales.by_name[name]) do self.customMask[#self.customMask + 1] = vv end
-      self.engine.scale = self.customMask
-    elseif y == DEG_BLACK_ROW or y == DEG_WHITE_ROW then
-      local semitone = (y == DEG_BLACK_ROW) and KB_BLACK_COL[x] or KB_WHITE_COL[x]
+    if y == MASK_BLACK_ROW or y == MASK_WHITE_ROW then
+      -- global scale mask keyboard (rows 0-1)
+      local semitone = (y == MASK_BLACK_ROW) and KB_BLACK_COL[x] or KB_WHITE_COL[x]
       if semitone == nil then return end
       self:toggle_mask_note(semitone)
-    elseif y == ROOT_BLACK_ROW or y == ROOT_WHITE_ROW then
-      local semitone = (y == ROOT_BLACK_ROW) and KB_BLACK_COL[x] or KB_WHITE_COL[x]
-      if semitone == nil then return end
-      self.engine.root = semitone
+      self.on_edit{ type = 'global' }   -- mask stays global
+      self:render_all()
     else
-      return
+      -- root keyboard rows 2-5. upper pair (2-3) = offset pc (0..+11); lower pair
+      -- (4-5) = pc-12. apply_root reflects per targeted channel + renders.
+      local black = (y == ROOTHI_BLACK_ROW or y == ROOTLO_BLACK_ROW)
+      local semitone = black and KB_BLACK_COL[x] or KB_WHITE_COL[x]
+      if semitone == nil then return end
+      local lower = (y == ROOTLO_BLACK_ROW or y == ROOTLO_WHITE_ROW)
+      self:apply_root(lower and (semitone - 12) or semitone)
     end
-    self.on_edit{ type = 'global' }
-    self:render_all()
   end
 end
 
@@ -555,7 +843,8 @@ function GridUI:toggle_mask_note(semitone)
 end
 
 -- preset scale name whose intervals match `mask` exactly, or nil (custom mask).
--- Lets a whole-mask edit re-light the matching preset on the scale picker.
+-- Keeps selectedScaleName in step so the PARAMETERS-menu `scale` option reflects a
+-- whole-mask edit (the grid no longer shows presets).
 function GridUI:_mask_preset_name(mask)
   for _, name in ipairs(scales.names) do
     local ref = scales.by_name[name]
@@ -590,13 +879,40 @@ function GridUI:set_mask(semitones)
   self.on_edit{ type = 'global' }
 end
 
--- Global musical scalars (root tonic). Like set_mask this is the single mutation
--- path so on_edit{global} fires and the params/screen reflect; the screen scale
--- page edits through it. (quantize is per-channel now — edited via set_scalar on
--- the QNT page / chN_quantize param, not here.)
-function GridUI:set_root(semitone)
-  self.engine.root = semitone % 12
-  self.on_edit{ type = 'global' }
+-- Per-channel tonic (root) is a signed semitone transpose (-12..+11), edited via
+-- set_scalar so on_edit{scalar} reflects into params/screen like any other channel
+-- scalar. ch is 0-based. Used by the screen scale page and the grid root keyboard.
+function GridUI:set_root(ch, offset)
+  self:set_scalar(ch, 'root', clamp(offset, -12, 11))
+end
+
+-- Toggle a channel in the root-edit target set (ROOT-page channel selectors, row 7
+-- cols 5..10). Refuses to empty the set — at least one channel stays targeted.
+function GridUI:toggle_root_target(ch)
+  self.rootTargets = self.rootTargets or {}
+  if self.rootTargets[ch] then
+    local n = 0
+    for _ in pairs(self.rootTargets) do n = n + 1 end
+    if n > 1 then self.rootTargets[ch] = nil end
+  else
+    self.rootTargets[ch] = true
+  end
+  self:render_all()
+end
+
+-- Apply a root offset to every targeted channel. Single target => cycle to the next
+-- channel after applying (auto-advance); multiple => apply to all, no advance.
+function GridUI:apply_root(offset)
+  local targets = {}
+  for ch in pairs(self.rootTargets or {}) do targets[#targets + 1] = ch end
+  table.sort(targets)
+  for _, ch in ipairs(targets) do self:set_root(ch, offset) end
+  if #targets == 1 then
+    local nextch = (targets[1] + 1) % NUM_CHANNELS
+    self.rootTargets = { [nextch] = true }
+    self:_focus(nextch)
+  end
+  self:render_all()
 end
 
 -- ---- picker enter/exit -------------------------------------------------
@@ -621,9 +937,9 @@ function GridUI:open_step_picker(ch, col, param, layer)
   self:render_all()
 end
 
--- OP-page scalar picker: edits a per-channel static field (opRatioN / opLevelN)
+-- MIX-page scalar picker: edits a per-channel static field (level / opLevelN)
 -- by tapping a value on the rows-6-7 grid. `layout` is the value array, `valkind`
--- ('ratio'|'level') is for the status string.
+-- ('level') is for the status string.
 function GridUI:open_scalar_picker(ch, field, layout, valkind)
   self:_focus(ch)
   self.picker = {kind = 'scalar', ch = ch, field = field, layout = layout, valkind = valkind}
@@ -636,6 +952,8 @@ function GridUI:open_scale_picker()
   self:_clear_latches()
   self.customMask = {}
   for _, v in ipairs(self.engine.scale) do self.customMask[#self.customMask + 1] = v end
+  -- seed root-edit target with the currently focused channel (auto-advance single).
+  self.rootTargets = { [self.focusCh or 0] = true }
   self.picker = {kind = 'scale'}
   self:render_all()
 end
@@ -690,12 +1008,25 @@ function GridUI:commit_step(ch, param, vals, layer)
   self:commit_step_raw(ch, param, vals, layer)
 end
 
--- CLR/COPY/PASTE all act on the MAIN (A-layer) sequins only, leaving the B (alt)
--- layer untouched so it can keep variating whatever was cleared/copied/pasted.
+-- CLR resets BOTH layers — A and (where present) the B (alt) layer — so a cleared
+-- channel is fully blank. COPY/PASTE act on the MAIN (A-layer) sequins only,
+-- leaving the B (alt) layer untouched so it can keep variating the pasted sequins,
+-- AND on the per-channel voice scalars (pan, channel level, op levels, mod index,
+-- fm feedback, algorithm from the MIX page + env mode / geode from the PRISM page) so
+-- a copied channel carries its whole voicing. CLR leaves the scalars alone (they are
+-- not in PARAMS). quantize stays out — it's a per-channel performance grid, not voicing.
+local MIX_SCALARS = {
+  'pan', 'filterPos',
+  'level', 'opLevel1', 'opLevel2', 'opLevel3', 'opLevel4',
+  'modIndex', 'fmFeedback', 'algo', 'envMode', 'geodeMode',
+}
 
 function GridUI:clear_channel(ch)
   for _, param in ipairs(PARAMS) do
     self:commit_step_raw(ch, param, {DEFAULT_VALUE[param]}, 'A')
+    if has_b(param) then
+      self:commit_step_raw(ch, param, {DEFAULT_VALUE_B[param]}, 'B')
+    end
   end
   self:render_all()
 end
@@ -708,6 +1039,10 @@ function GridUI:copy_channel(ch)
     for i = 1, #cur do vals[i] = cur[i] end
     buf[param] = vals
   end
+  local scalars = {}
+  local c = self:chan(ch)
+  for _, field in ipairs(MIX_SCALARS) do scalars[field] = c[field] end
+  buf.scalars = scalars
   self.clipboard = buf
 end
 
@@ -721,6 +1056,12 @@ function GridUI:paste_channel(ch)
       self:commit_step_raw(ch, param, copy, 'A')
     end
   end
+  local scalars = self.clipboard.scalars
+  if scalars then
+    for _, field in ipairs(MIX_SCALARS) do
+      if scalars[field] ~= nil then self:set_scalar(ch, field, scalars[field]) end
+    end
+  end
   self:render_all()
 end
 
@@ -729,7 +1070,42 @@ end
 -- clear every row-6 latch mode + action mode (so only one page is ever active).
 function GridUI:_clear_latches()
   self.probMode = false; self.perfMode = false
-  self.qntMode = false; self.opMode = false; self.actionMode = nil
+  self.prismMode = false; self.mixMode = false; self.actionMode = nil
+end
+
+-- A channel launch-block press: apply the active action mode to the channel, or
+-- (no action mode) toggle launch/stop. Shared by row 6 & row 7 since the block
+-- straddles both rows.
+function GridUI:handle_channel_button(ch)
+  self:_focus(ch)
+  if self.actionMode == 'randomize' then
+    self.engine:randomize(ch + 1)
+    self.on_edit{ type = 'channel', ch = ch }
+    self:render_all()
+  elseif self.actionMode == 'mutate' then
+    self.engine:mutate(ch + 1)
+    self.on_edit{ type = 'channel', ch = ch }
+    self:render_all()
+  elseif self.actionMode == 'clear' then self:clear_channel(ch)
+  elseif self.actionMode == 'copy' then self:copy_channel(ch); self:render_all()
+  elseif self.actionMode == 'paste' then self:paste_channel(ch)
+  else
+    if self.engine:is_running(ch + 1) then self.engine:stop(ch + 1)
+    else self.engine:launch(ch + 1) end
+  end
+end
+
+-- Select a sequence page (row 6 / row 7 page buttons). A paired page is
+-- represented by its first member; both A/B (or both pair) lanes are always shown
+-- — no A/B flip. Pressing a sequence selector also EXITS any open latch page
+-- (MIX/PERF/PROB/PRISM) or armed action mode and switches straight to the sequence,
+-- so a page-select always takes you to that sequence rather than being swallowed by
+-- the still-latched page.
+function GridUI:select_page(page)
+  self:_clear_latches()
+  self.selectedParam = page
+  self.picker = nil
+  self:render_all()
 end
 
 function GridUI:handle_row6(x)
@@ -737,7 +1113,7 @@ function GridUI:handle_row6(x)
   -- FM algorithm is a global param, no longer a grid page).
   -- if x == ROW6_KB_COL then self:enter_kb_mode(); return end
   local LATCH = {[ROW6_PERF_COL] = 'perfMode', [ROW6_PROB_COL] = 'probMode',
-                 [ROW6_QNT_COL] = 'qntMode', [ROW6_OP_COL] = 'opMode'}
+                 [ROW6_PRISM_COL] = 'prismMode', [ROW6_MIX_COL] = 'mixMode'}
   if LATCH[x] then
     local was = self[LATCH[x]]
     self:_clear_latches()
@@ -746,34 +1122,14 @@ function GridUI:handle_row6(x)
   end
   if x == ROW6_SCALE_COL then self:open_scale_picker(); return end
 
-  if self.actionMode and x < 6 then
-    self:_focus(x)
-    if self.actionMode == 'randomize' then
-      self.engine:randomize(x + 1)
-      self.on_edit{ type = 'channel', ch = x }
-    elseif self.actionMode == 'mutate' then
-      self.engine:mutate(x + 1)
-      self.on_edit{ type = 'channel', ch = x }
-    elseif self.actionMode == 'clear' then self:clear_channel(x)
-    elseif self.actionMode == 'copy' then self:copy_channel(x)
-    elseif self.actionMode == 'paste' then self:paste_channel(x) end
-    self:render_all(); return
-  end
-
-  if x < 6 then
-    self:_focus(x)
-    if self.engine:is_running(x + 1) then self.engine:stop(x + 1)
-    else self.engine:launch(x + 1) end
-  end
+  if x < #ROW6_PAGES then self:select_page(ROW6_PAGES[x + 1]) end
 end
 
 function GridUI:handle_row7(x)
   if x < #ROW7_PAGES then
-    -- one button per page; a paired page is represented by its first member.
-    -- Both A/B (or both pair) lanes are always shown — no A/B flip.
-    self.selectedParam = ROW7_PAGES[x + 1]
-    self.picker = nil
-    self:render_all()
+    self:select_page(ROW7_PAGES[x + 1])
+  elseif launch_channel_at(x, 7) then
+    self:handle_channel_button(launch_channel_at(x, 7))
   elseif x == CLR_BUTTON_COL then self:_toggle_action('clear')
   elseif x == COPY_BUTTON_COL then self:_toggle_action('copy')
   elseif x == PASTE_BUTTON_COL then self:_toggle_action('paste')
@@ -815,6 +1171,7 @@ function GridUI:render_all()
   end
   self:render_row6()
   self:render_row7()
+  self:render_launch_block()
   self:_status()
   self.g:refresh()
   self.on_redraw()
@@ -829,12 +1186,15 @@ end
 function GridUI:render_step_picker(p)
   local vals = seqx.values(self:seq_ref(p.ch, p.param, p.layer))
   local focused = vals[p.col + 1]
-  local layout = STEP_PICKER_VALUES[p.param]
+  local layout = op_picker_layout(self, p.ch, p.param, p.layer)
   for y = 0, 1 do
     for x = 0, GRID_W - 1 do
       local v = layout[y * GRID_W + x + 1]
       local b
-      if eq(v, focused) then b = 15
+      -- a layout shorter than the 32-cell grid (e.g. the shape picker = 16 values)
+      -- leaves the trailing cells empty: draw them dark and skip the value logic.
+      if v == nil then b = 0
+      elseif eq(v, focused) then b = 15
       else
         local present = false
         for _, sv in ipairs(vals) do if eq(sv, v) then present = true break end end
@@ -842,7 +1202,7 @@ function GridUI:render_step_picker(p)
       end
       self.g:set_led(x, PICKER_ROW0 + y, b)
       -- rests (reps <= 0) pulse to set them apart from the hit-count cells.
-      if p.param == 'reps' and v <= 0 then
+      if p.param == 'reps' and v ~= nil and v <= 0 then
         self.g:set_strobe(x, PICKER_ROW0 + y, 'slow')
       end
     end
@@ -863,35 +1223,39 @@ function GridUI:render_scale_picker()
   -- clear the whole picker area first (rows 0..5)
   for y = 0, 5 do for x = 0, GRID_W - 1 do self.g:set_led(x, y, 0) end end
 
-  -- row 0: 7 scale presets, left justified
-  for x = 0, #scales.picker_names - 1 do
-    local name = scales.picker_names[x + 1]
-    self.g:set_led(x, SCALE_PRESET_ROW, name == self.selectedScaleName and 15 or 5)
-  end
-
-  -- degree (note-mask) keyboard: black row above white row
+  -- rows 0-1: global scale MASK keyboard (membership), black row above white row
   for x, semi in pairs(KB_BLACK_COL) do
-    self.g:set_led(x, DEG_BLACK_ROW, contains(self.customMask, semi) and 12 or 3)
+    self.g:set_led(x, MASK_BLACK_ROW, contains(self.customMask, semi) and 12 or 3)
   end
   for x, semi in pairs(KB_WHITE_COL) do
-    self.g:set_led(x, DEG_WHITE_ROW, contains(self.customMask, semi) and 12 or 3)
+    self.g:set_led(x, MASK_WHITE_ROW, contains(self.customMask, semi) and 12 or 3)
   end
 
-  -- root keyboard: highlights the single selected tonic
-  local root = self.engine.root or 0
-  for x, semi in pairs(KB_BLACK_COL) do
-    self.g:set_led(x, ROOT_BLACK_ROW, semi == root and 15 or 3)
+  -- rows 2-5: two-octave root keyboard. Highlight the key for every targeted
+  -- channel's root: offset >= 0 -> upper octave (pitch class = offset); offset < 0
+  -- -> lower octave (pitch class = offset + 12).
+  local hiPc, loPc = {}, {}
+  for ch in pairs(self.rootTargets or {}) do
+    local r = self:chan(ch).root or 0
+    if r >= 0 then hiPc[r] = true else loPc[r + 12] = true end
   end
-  for x, semi in pairs(KB_WHITE_COL) do
-    self.g:set_led(x, ROOT_WHITE_ROW, semi == root and 15 or 3)
+  local function draw_oct(blackRow, whiteRow, sel)
+    for x, semi in pairs(KB_BLACK_COL) do
+      self.g:set_led(x, blackRow, sel[semi] and 15 or 3)
+    end
+    for x, semi in pairs(KB_WHITE_COL) do
+      self.g:set_led(x, whiteRow, sel[semi] and 15 or 3)
+    end
   end
+  draw_oct(ROOTHI_BLACK_ROW, ROOTHI_WHITE_ROW, hiPc)
+  draw_oct(ROOTLO_BLACK_ROW, ROOTLO_WHITE_ROW, loPc)
 end
 
 function GridUI:render_channel_row(ch)
   if self.probMode then self:render_prob_row(ch); return end
   if self.perfMode then self:render_perf_row(ch); return end
-  if self.qntMode then self:render_qnt_row(ch); return end
-  if self.opMode then self:render_op_row(ch); return end
+  if self.prismMode then self:render_prism_row(ch); return end
+  if self.mixMode then self:render_mix_row(ch); return end
   local running = self.engine:is_running(ch + 1)
   -- two lanes side by side: left half (cols 0..SEQ_LEN-1) then right half
   -- (cols B_COL0..15). Normally A/B of the selected param; div/reps shows
@@ -905,7 +1269,7 @@ function GridUI:render_channel_row(ch)
     for i = 0, SEQ_LEN - 1 do
       local col = base + i
       if i < len then
-        self.g:set_led(col, ch, value_brightness(lane.param, vals[i + 1]))
+        self.g:set_led(col, ch, value_brightness(lane.param, vals[i + 1], lane.layer))
       elseif i == len and len < SEQ_LEN then
         self.g:set_led(col, ch, 1)  -- the add slot
       else
@@ -923,39 +1287,55 @@ function GridUI:render_channel_row(ch)
   end
 end
 
--- OP page: per-op ratio (cols 0..3, op1..op4 all editable) + per-op level
--- (cols 8..11), each cell's brightness encoding its value; picker opens on tap.
-function GridUI:render_op_row(ch)
+-- MIX page (signal-flow order): FM algorithm (col 0) + mod index (col 1), op1..4 level
+-- (cols 3..6) + FM feedback (col 8), then pan (col 14) + channel level/volume (col 15).
+-- Each cell's brightness encodes its value (normalised to its own range); picker opens
+-- on tap. All four op ratios are sequenced (their own row-7 pages).
+function GridUI:render_mix_row(ch)
   local c = self:chan(ch)
+  local function bright(frac) return math.max(2, round(2 + clamp(frac, 0, 1) * 11)) end
   for x = 0, GRID_W - 1 do self.g:set_led(x, ch, 0); self.g:set_strobe(x, ch, 'off') end
-  local ratios = {c.opRatio1, c.opRatio2, c.opRatio3, c.opRatio4}
+  self.g:set_led(MOD_INDEX_COL, ch, bright(((c.modIndex or 1) - 1) / 31))
+  self.g:set_led(ALGO_COL, ch, bright(((c.algo or 1) - 1) / 31))
   for op = 1, 4 do
-    -- ratio brightness from its index in the curated set (low ratio = dim)
-    local idx = nearest_index(RATIO_VALUES, ratios[op])
-    local rb = clamp(round(2 + (idx - 1) / (#RATIO_VALUES - 1) * 11), 2, VALUE_MAX)
-    self.g:set_led(OP_RATIO_COL0 + (op - 1), ch, rb)
-    local lvl = c['opLevel' .. op] or 1
-    self.g:set_led(OP_LEVEL_COL0 + (op - 1), ch, math.max(2, round(2 + lvl * 11)))
+    self.g:set_led(OP_LEVEL_COL0 + (op - 1), ch, bright(c['opLevel' .. op] or 1))
   end
+  self.g:set_led(FM_FEEDBACK_COL, ch, bright((c.fmFeedback or 0) / 4))
+  -- filter brightness = distance from centre (off = dim, either extreme = bright),
+  -- so the cell reads "how much filtering", not which direction.
+  self.g:set_led(FILTER_COL, ch, bright(math.abs(c.filterPos or 0)))
+  self.g:set_led(PAN_COL, ch, bright(((c.pan or 0) + 1) / 2))  -- -1..1 -> 0..1 brightness
+  self.g:set_led(MIX_LEVEL_COL, ch, bright(c.level or 0))
   if self.picker and self.picker.kind == 'scalar' and self.picker.ch == ch then
     local f = self.picker.field
-    local op = tonumber(f:sub(-1))
-    if f:match('^opRatio') then self.g:set_led(OP_RATIO_COL0 + (op - 1), ch, 15)
-    elseif f:match('^opLevel') then self.g:set_led(OP_LEVEL_COL0 + (op - 1), ch, 15) end
+    if f == 'filterPos' then self.g:set_led(FILTER_COL, ch, 15)
+    elseif f == 'pan' then self.g:set_led(PAN_COL, ch, 15)
+    elseif f == 'level' then self.g:set_led(MIX_LEVEL_COL, ch, 15)
+    elseif f == 'modIndex' then self.g:set_led(MOD_INDEX_COL, ch, 15)
+    elseif f == 'fmFeedback' then self.g:set_led(FM_FEEDBACK_COL, ch, 15)
+    elseif f == 'algo' then self.g:set_led(ALGO_COL, ch, 15)
+    elseif f:match('^opLevel') then self.g:set_led(OP_LEVEL_COL0 + (tonumber(f:sub(-1)) - 1), ch, 15) end
   end
 end
 
 function GridUI:render_prob_row(ch)
   local c = self:chan(ch)
+  local function bright(frac) return math.max(2, round(2 + clamp(frac, 0, 1) * 11)) end
   for x = 0, GRID_W - 1 do self.g:set_led(x, ch, 0); self.g:set_strobe(x, ch, 'off') end
-  -- note alt-trig mode (cols 0-1): hold / step
-  for i = 1, #ALT_TRIG_MODE_NAMES do
-    self.g:set_led(ALT_TRIG_COLS[i], ch, c.altTrig == (i - 1) and 15 or 4)
+  -- probability (col 0): brightness encodes the value, tap opens the 32-value picker
+  self.g:set_led(PROB_COL, ch, bright(c.burstProb or 1))
+  if self.picker and self.picker.kind == 'scalar' and self.picker.ch == ch
+     and self.picker.field == 'burstProb' then
+    self.g:set_led(PROB_COL, ch, 15)
   end
-  -- prob options (right-justified): nearest discrete value highlighted
-  local sel = nearest_index(PROB_VALUES, c.burstProb)
-  for i = 1, #PROB_VALUES do
-    self.g:set_led(PROB_COLS[i], ch, i == sel and 15 or 4)
+  -- hold<->step trig toggles (note alt(B) / all op-ratio B lanes / all op-env B
+  -- lanes): on (step) bright+strobe, off (hold) dim
+  local toggles = {{NOTE_TRIG_COL, c.altTrig}, {OP_SEQ_TRIG_COL, c.opSeqTrig},
+                   {OP_ENV_TRIG_COL, c.opEnvTrig}}
+  for _, t in ipairs(toggles) do
+    local on = t[2] == 1
+    self.g:set_led(t[1], ch, on and 14 or 4)
+    self.g:set_strobe(t[1], ch, on and 'slow' or 'off')
   end
   -- burst/hit toggle (far right)
   self.g:set_led(PROB_HIT_COL, ch, c.probHit and 14 or 4)
@@ -972,15 +1352,21 @@ function GridUI:render_perf_row(ch)
   self:render_scaled_row(ch, RATE_VALUES, RATE_COLS, c.rate)
 end
 
--- QNT page: the channel's quantize grid as one selector across cols 0..7
--- (the curated 1/3..1/32 set). Brightness scales with the value's index so the
--- coarse-to-fine ordering reads at a glance; selected cell is full-bright.
-function GridUI:render_qnt_row(ch)
+-- PRISM page: the channel's quantize grid as one selector across cols 0..7 (the
+-- curated 1/3..1/32 set), then env mode (cols 9-11) and geode (cols 13-15) selectors.
+-- Selected cell full-bright, others dim; cols 8 and 12 stay dark separators.
+function GridUI:render_prism_row(ch)
   local c = self:chan(ch)
   for x = 0, GRID_W - 1 do self.g:set_led(x, ch, 0); self.g:set_strobe(x, ch, 'off') end
   local sel = nearest_index(QUANTIZE_VALUES, c.quantize)
   for i = 1, #QUANTIZE_VALUES do
     self.g:set_led(QUANTIZE_COLS[i], ch, i == sel and 15 or 3)
+  end
+  for i = 1, #ENV_MODE_NAMES do
+    self.g:set_led(ENV_MODE_COLS[i], ch, (i - 1) == (c.envMode or 0) and 15 or 3)
+  end
+  for i = 1, #GEODE_MODE_NAMES do
+    self.g:set_led(GEODE_COLS[i], ch, (i - 1) == (c.geodeMode or 0) and 15 or 3)
   end
 end
 
@@ -997,54 +1383,83 @@ function GridUI:render_scaled_row(ch, values, cols, cur)
   end
 end
 
-function GridUI:render_action_mode()
-  local mark_running = self.actionMode == 'randomize' or self.actionMode == 'mutate'
-  for x = 0, 5 do
-    self.g:set_led(x, 6, 10)
-    self.g:set_strobe(x, 6, (mark_running and self.engine:is_running(x + 1)) and 'slow' or 'off')
+-- The channel launch/stop strip (cols 5..10 on row 7). Drawn after row 6/7 so it
+-- owns those cells. In an action mode the buttons dim to 10 (the channel-target
+-- affordance); randomize/mutate also slow-
+-- strobe the running channels so you can see what you're about to scramble.
+-- Outside an action mode a RUNNING channel is solid full-bright; an IDLE channel
+-- is a static dim, except on first run (before any channel has ever started) when
+-- it gently 'pulse'-oscillates (smooth sine fade, driven by the strobe metro) as
+-- an onboarding cue inviting a first press.
+function GridUI:render_launch_block()
+  -- ROOT/scale page: the launch strip becomes channel selectors (which channel(s)
+  -- root edits target). Lit = targeted.
+  if self.picker and self.picker.kind == 'scale' then
+    for ch = 0, NUM_CHANNELS - 1 do
+      local x = LAUNCH_COL0 + ch
+      self.g:set_strobe(x, LAUNCH_ROW, 'off')
+      self.g:set_led(x, LAUNCH_ROW, (self.rootTargets and self.rootTargets[ch]) and 15 or 4)
+    end
+    return
   end
-  for x = 6, 10 do self.g:set_led(x, 6, 0) end
-  self.g:set_led(ROW6_OP_COL, 6, 8)
-  self.g:set_led(ROW6_PERF_COL, 6, 8)
-  self.g:set_led(ROW6_PROB_COL, 6, 8)
-  self.g:set_led(ROW6_SCALE_COL, 6, 8)
-  self.g:set_led(ROW6_QNT_COL, 6, 8)
+  local action = self.actionMode
+  local mark_running = action == 'randomize' or action == 'mutate'
+  local onboarding = not self.hasLaunched
+  for ch = 0, NUM_CHANNELS - 1 do
+    local x = LAUNCH_COL0 + ch
+    local y = LAUNCH_ROW
+    local running = self.engine:is_running(ch + 1)
+    if action then
+      self.g:set_led(x, y, 10)
+      self.g:set_strobe(x, y, (mark_running and running) and 'slow' or 'off')
+    elseif running then
+      self.g:set_led(x, y, 15)
+      self.g:set_strobe(x, y, 'off')
+    elseif onboarding then
+      self.g:set_led(x, y, 8)
+      self.g:set_strobe(x, y, 'pulse')
+    else
+      self.g:set_led(x, y, 4)
+      self.g:set_strobe(x, y, 'off')
+    end
+  end
+end
+
+-- A page-select button lights when the selected param belongs to its page
+-- (itself, or the same pair via PAIR_OF identity).
+function GridUI:render_page_button(x, y, page)
+  local sel = page == self.selectedParam
+    or (PAIR_OF[page] ~= nil and PAIR_OF[self.selectedParam] == PAIR_OF[page])
+  self.g:set_led(x, y, sel and 15 or 5)
+  self.g:set_strobe(x, y, 'off')
 end
 
 function GridUI:render_row6()
-  if self.actionMode then
-    self:render_action_mode()
-  else
-    for x = 0, 5 do
-      self.g:set_led(x, 6, self.engine:is_running(x + 1) and 15 or 4)
-      self.g:set_strobe(x, 6, 'off')
+  for i, page in ipairs(ROW6_PAGES) do self:render_page_button(i - 1, 6, page) end
+  for x = #ROW6_PAGES, 10 do self.g:set_led(x, 6, 0) end  -- cols 5..10 dark (launch is on row 7 now)
+  -- In an action mode the page/mode buttons dim to a flat 8 (no strobe) so the
+  -- launch strip reads as the active target surface.
+  local dim = self.actionMode ~= nil
+  local function mode_led(col, active)
+    if dim then
+      self.g:set_led(col, 6, 8); self.g:set_strobe(col, 6, 'off')
+    else
+      self.g:set_led(col, 6, active and 15 or 8)
+      self.g:set_strobe(col, 6, active and 'fast' or 'off')
     end
-    for x = 6, 10 do self.g:set_led(x, 6, 0) end
   end
-  self.g:set_led(ROW6_PERF_COL, 6, self.perfMode and 15 or 8)
-  self.g:set_strobe(ROW6_PERF_COL, 6, self.perfMode and 'fast' or 'off')
-  self.g:set_led(ROW6_PROB_COL, 6, self.probMode and 15 or 8)
-  self.g:set_strobe(ROW6_PROB_COL, 6, self.probMode and 'fast' or 'off')
-  local scale_open = self.picker and self.picker.kind == 'scale'
-  self.g:set_led(ROW6_SCALE_COL, 6, scale_open and 15 or 8)
-  self.g:set_strobe(ROW6_SCALE_COL, 6, scale_open and 'fast' or 'off')
-  self.g:set_led(ROW6_QNT_COL, 6, self.qntMode and 15 or 8)
-  self.g:set_strobe(ROW6_QNT_COL, 6, self.qntMode and 'fast' or 'off')
-  self.g:set_led(ROW6_OP_COL, 6, self.opMode and 15 or 8)
-  self.g:set_strobe(ROW6_OP_COL, 6, self.opMode and 'fast' or 'off')
+  mode_led(ROW6_PERF_COL, self.perfMode)
+  mode_led(ROW6_PROB_COL, self.probMode)
+  mode_led(ROW6_SCALE_COL, self.picker and self.picker.kind == 'scale')
+  mode_led(ROW6_PRISM_COL, self.prismMode)
+  mode_led(ROW6_MIX_COL, self.mixMode)
 end
 
 function GridUI:render_row7()
-  for x = 0, #ROW7_PAGES - 1 do
-    local bp = ROW7_PAGES[x + 1]
-    -- a page button lights when the selected param belongs to its page (itself,
-    -- or the same pair via PAIR_OF identity).
-    local sel = bp == self.selectedParam
-      or (PAIR_OF[bp] ~= nil and PAIR_OF[self.selectedParam] == PAIR_OF[bp])
-    self.g:set_led(x, 7, sel and 15 or 5)
-    self.g:set_strobe(x, 7, 'off')
-  end
-  for x = #ROW7_PAGES, 10 do self.g:set_led(x, 7, 0) end  -- dark gap before the action buttons
+  for i, page in ipairs(ROW7_PAGES) do self:render_page_button(i - 1, 7, page) end
+  -- no gap: pages (0..4) sit directly left of the launch strip (5..10, drawn
+  -- separately by render_launch_block); this loop is a no-op while they're adjacent.
+  for x = #ROW7_PAGES, LAUNCH_COL0 - 1 do self.g:set_led(x, 7, 0) end
   local function action_led(col, name)
     self.g:set_led(col, 7, self.actionMode == name and 15 or 4)
     self.g:set_strobe(col, 7, self.actionMode == name and 'fast' or 'off')
@@ -1215,13 +1630,16 @@ end
 
 function GridUI:current_page()
   if self.kbMode then return 'KB' end
-  if self.picker and self.picker.kind == 'scale' then return 'SCALE' end
+  if self.picker and self.picker.kind == 'scale' then return 'ROOT' end
   if self.picker and self.picker.kind == 'step' then return 'PICK' end
-  if self.picker and self.picker.kind == 'scalar' then return 'OP' end
+  if self.picker and self.picker.kind == 'scalar' then
+    -- the prob picker opens from the PROB page; every other scalar is a MIX cell
+    return self.picker.field == 'burstProb' and 'PROB' or 'MIX'
+  end
   if self.perfMode then return 'PERF' end
   if self.probMode then return 'PROB' end
-  if self.qntMode then return 'QNT' end
-  if self.opMode then return 'OP' end
+  if self.prismMode then return 'PRISM' end
+  if self.mixMode then return 'MIX' end
   if self.actionMode then return string.upper(self.actionMode) end
   return 'MAIN'
 end
@@ -1235,26 +1653,40 @@ function GridUI:_status()
   elseif self.perfMode then
     s = 'PERF — cols0-3 reset, cols5-9 oct, cols11-15 rate'
   elseif self.probMode then
-    s = 'PROB — cols0-1 note trig, 11-14 prob%, 15 burst/hit'
-  elseif self.qntMode then
-    s = 'QNT — cols0-7 per-channel quantize (1/3..1/32)'
-  elseif self.opMode then
-    s = 'OP — cols0-3 op ratio, cols8-11 op level'
+    s = 'PROB — 0 prob, 3 note 4 opR 5 opE trig, 15 hit'
+  elseif self.prismMode then
+    s = 'PRISM — 0-7 quant, 9-11 env, 13-15 geode'
+  elseif self.mixMode then
+    s = 'MIX — 0 alg 1 idx, 3-6 op 8 fb, 13 flt 14 pan 15 vol'
   elseif self.actionMode then
     s = string.upper(self.actionMode) .. ' — tap a channel'
   elseif self.picker and self.picker.kind == 'scalar' then
-    local op = tonumber(self.picker.field:sub(-1))
-    local kind = self.picker.valkind == 'ratio' and 'ratio' or 'level'
-    s = 'edit ch' .. (self.picker.ch + 1) .. ' op' .. op .. ' ' .. kind ..
-        '=' .. tostring(self:chan(self.picker.ch)[self.picker.field])
+    local f = self.picker.field
+    local val = self:chan(self.picker.ch)[f]
+    if f == 'algo' then
+      s = 'edit ch' .. (self.picker.ch + 1) .. ' algo=' .. (ALGO_NAMES[val] or '?')
+    elseif f == 'pan' then
+      s = 'edit ch' .. (self.picker.ch + 1) .. ' pan=' .. pan_label(val)
+    elseif f == 'filterPos' then
+      s = 'edit ch' .. (self.picker.ch + 1) .. ' filter=' .. filter_label(val)
+    elseif f == 'burstProb' then
+      s = 'edit ch' .. (self.picker.ch + 1) .. ' prob=' .. round((val or 1) * 100) .. '%'
+    else
+      local lbl = f:match('^opLevel') and ('op' .. f:sub(-1) .. ' level')
+        or ({modIndex = 'mod index', fmFeedback = 'fm fb'})[f]
+        or 'level'
+      s = 'edit ch' .. (self.picker.ch + 1) .. ' ' .. lbl .. '=' .. tostring(val)
+    end
   elseif self.picker and self.picker.kind == 'step' then
     local pp = self.picker.param
     local raw = seqx.values(self:seq_ref(self.picker.ch, pp, self.picker.layer))[self.picker.col + 1]
-    local v = (pp == 'attack' or pp == 'decay' or pp == 'modatk' or pp == 'moddec') and round(raw * 31) or raw
+    -- op-env A shows the shape name (B is an integer offset); else the raw value
+    local v = raw
+    if pp:match('^opEnv') and self.picker.layer ~= 'B' and raw then v = SHAPE_NAMES[raw] or raw end
     s = 'edit ch' .. (self.picker.ch + 1) .. ' step ' .. self.picker.col .. ' ' ..
         pp .. (self.picker.layer == 'B' and 'B' or '') .. '=' .. tostring(v)
   elseif self.picker and self.picker.kind == 'scale' then
-    s = 'scale: row0 preset, rows1-2 keys, rows4-5 root'
+    s = 'ROOT: 0-1 mask, 2-5 root oct, r7 ch-select'
   else
     local pr = PAIR_OF[self.selectedParam]
     s = pr and ('edit ' .. pr[1] .. ' | ' .. pr[2])

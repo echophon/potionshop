@@ -35,7 +35,7 @@ on initial install, Norns will need to be restarted to load the new engine.
 
 ## start
 
-on initial load, each channel sequence is randomized.  launch one or more channels from row 6 on the lower left corner.
+on initial load, each channel sequence is randomized.  launch one or more channels from the launch strip on the bottom row (cols 5-10 = channels 1-6).
 these will likely loop at different intervals creating evolving sequences.  refer to the guide for a step-by-step tutorial on the components of a sequence.
 
 ## the voice
@@ -44,8 +44,8 @@ each channel is a **four-operator FM** voice (Yamaha DX21/DX27/DX100/TX81Z-style
 4 sine operators, **16 algorithms** (operator routings — the canonical 8 DX shapes
 plus 8 extended ones), per-operator feedback, and an always-on amp **geode**
 (per-hit amplitude contour). the algorithm, geode mode and amp-decay env mode are
-single **engine-wide** settings (in the PARAMETERS menu, VOICE group) shared by all
-six channels; each channel's individual colour comes from its **per-operator
+**per-channel** settings (algorithm on the MIX page; geode + env mode on the PRISM
+page); each channel's individual colour comes from its **per-operator
 ratios and levels** (OP page) and its two **envelopes**.
 
 ## grid UI
@@ -99,25 +99,33 @@ sequence glow dim.
 
 ### launch
 
-`[x: 0-5, y: 6]`
+`[x: 5-10, y: 7]` — a contiguous 1×6 strip (col 5 = channel 1 … col 10 = channel 6)
 
-toggle each channel running / stopped (bright = running). a channel loops bursts
-until stopped; a channel whose `reps` sequence has a single step is **single-shot**
-(it fires one burst and stops) — give `reps` two or more steps to loop.
+toggle each channel running / stopped (bright = running). on **first run** (until
+any channel has started) the idle buttons gently breathe (a slow pulse) to invite a
+first press; once you've launched anything the breathing settles to a static dim. a
+channel loops bursts until stopped; a channel whose `reps` sequence has a single
+step is **single-shot** (it fires one burst and stops) — give `reps` two or more
+steps to loop.
 
 ### param select
 
-`[x: 0-4, y: 7]`
+choose which param rows 0–5 show/edit — one button per **page**, split across the
+two control rows:
 
-choose which param rows 0–5 show/edit — one button per **page**:
+- row 6 `[x: 0-4, y: 6]`: `0` **note** · `1` **op1 ratio** · `2` **op2 ratio**
+  · `3` **op3 ratio** · `4` **op4 ratio**
+- row 7 `[x: 0-4, y: 7]`: `0` **div / reps** (paired) · `1` **op1 env** · `2` **op2
+  env** · `3` **op3 env** · `4` **op4 env**
 
-- `0` **div / reps** (paired) · `1` **note** · `2` **level** · `3` **attack / decay**
-  (paired) · `4` **modatk / moddec** (paired)
-
-the three paired pages show two A-layer lanes at once (no B layer). `note` and
-`level` show their A layer (left) and B layer (right) — B is an **additive offset**
-summed onto A each burst (its value set adds a literal `0` = no offset). timbre
-(per-op ratio/level) is **not** sequenced — it lives on the OP page.
+`div / reps` is the only paired page (two A-layer lanes, no B). `note`, the four
+op-ratio pages and the four **per-op envelope** pages show their A layer (left) and
+B layer (right). For `note` B is an **additive offset** summed onto A each burst;
+for an op ratio B is an **index offset** that micro-tunes A through the curated
+ratio set; for an op envelope A is a **shape index** and B is an **index offset**
+that walks the curated shapes table. Each operator gets its own envelope (DX-style
+EG): a carrier's env shapes its amplitude, a modulator's its FM-depth contour.
+channel level + per-op levels are **static** scalars on the MIX page, not sequenced.
 
 ### page buttons
 
@@ -126,34 +134,39 @@ summed onto A each burst (its value set adds a literal `0` = no offset). timbre
 - `11` **OP** — per-operator ratios + levels (per channel)
 - `12` **PERF** — perf page (reset / octave / rate / quantize)
 - `13` **PROB** — prob page (probability / alt-trig)
-- `14` **SCALE** — scale & root picker
-- `15` **QNT** — per-channel quantize page
+- `14` **SCALE** — ROOT page: global scale mask + per-channel root (2-octave kb)
+- `15` **PRISM** — per-channel quantize + env mode + geode page
 
 ### channel actions
 
 `[x: 11-15, y: 7]`
 
-armed modes, not instant: press one (it fast-blinks), then tap a channel on row 6
-to apply. press again to disarm.
+armed modes, not instant: press one (it fast-blinks), then tap a channel in the
+launch strip (cols 5-10, row 7) to apply. press again to disarm.
 
-- `11` **CLR** — reset the channel's A sequences to defaults
-- `12` **COPY** — snapshot the A layer
-- `13` **PASTE** — write the snapshot in
+- `11` **COPY** — snapshot the A layer + the MIX-page static scalars
+- `12` **PASTE** — write the snapshot in
+- `13` **CLR** — reset the channel's A sequences to defaults
 - `14` **RANDOMIZE** — scramble to fresh, grid-reachable values
 - `15` **MUTATE** — nudge values ±
 
-> CLR / COPY / PASTE act on the **A** layer only, leaving B to keep variating.
+> CLR resets both layers; COPY / PASTE act on the **A** layer (leaving B to keep
+> variating) and carry the channel's MIX-page voicing scalars along.
 
-### OP page
+### MIX page
 
-rows 0–5, per channel — the voice's static **timbre**, edited as per-operator
-scalars (op1 is the fundamental, default ratio 1.0, but fully editable):
+rows 0–5, per channel — the voice's static **mix + timbre** scalars (op ratios are
+sequenced now, edited on their own row-7 pages, so they're not here):
 
-- per-op **ratio** `[x: 0-3]` — op1..op4 frequency ratios, from a curated set
+- **pan** `[x: 6]` — stereo position, hard-left (-1) … centre … hard-right (+1)
+- channel **level** `[x: 7]` — overall channel volume
 - per-op **level** `[x: 8-11]` — op1..op4 output level (FM depth when the op is a
   modulator, mix gain when it's a carrier)
+- **mod index** `[x: 12]` · **FM feedback** `[x: 13]` · **algorithm** `[x: 15]`
+  (col 14 is dark, separating the scalar strip from the algorithm picker)
 
-tap any cell to open its value picker on rows 6–7.
+tap any cell to open its value picker on rows 6–7. these are all exempt from
+randomize/mutate and travel with copy/paste.
 
 ### PROB page
 
@@ -177,25 +190,38 @@ rows 0–5, per channel:
 - rate: **0.25 / 0.5 / 1 / 2 / 4×** `[x: 11-15]` — scales burst timing without
   changing tempo
 
-### QNT page
+### PRISM page
 
-rows 0–5, per channel — the **quantize** grid each channel's hits snap forward
-onto, `[x: 0-7]` = the curated set **1/3 · 1/4 · 1/6 · 1/8 · 1/12 · 1/16 · 1/24 ·
-1/32** (events per whole note). quantize is **per channel**, so a channel can lock
-to a coarser or finer grid than its neighbours. tempo is never changed, only *when*
-a hit lands.
+rows 0–5, per channel — three selectors sharing one page:
 
-### scale & root picker
+- **quantize** `[x: 0-7]` — the grid each channel's hits snap forward onto, from the
+  curated set **1/3 · 1/4 · 1/6 · 1/8 · 1/12 · 1/16 · 1/24 · 1/32** (events per whole
+  note). quantize is **per channel**, so a channel can lock to a coarser or finer grid
+  than its neighbours. tempo is never changed, only *when* a hit lands.
+- **env mode** `[x: 9-11]` — amp-decay timing: **shape** (gap-relative) · **burst**
+  (locked to the burst length) · **hit** (locked to the per-hit slot).
+- **geode** `[x: 13-15]` — per-hit amplitude contour across a burst: **transient** ·
+  **sustain** · **cycle**. the geode is always on.
 
-opened by **SCALE** (row 6, col 14):
+cols 8 and 12 are dark separators. env mode + geode are also on the screen PERF page.
 
-- scale presets `[x: 0-6, y: 0]` — major · minor · pentatonic · dorian · akebono ·
-  hijaz · rast
-- degree (note-mask) keyboard `[x: 0-6, y: 1-2]` — compact piano (black row above
-  white); toggle scale degrees in/out
-- root keyboard `[x: 0-6, y: 4-5]` — pick the tonic
+### ROOT page (scale mask + per-channel root)
 
-press **SCALE** again to exit.
+opened by **SCALE** (row 6, col 14). scale presets moved to the PARAMETERS menu
+(expanded list), freeing room for three stacked mini-keyboards:
+
+- note-**mask** keyboard `[x: 0-6, y: 0-1]` — compact piano (black row above white);
+  toggle scale degrees in/out. the mask is **global** (shared by all channels).
+- **root** keyboard, two octaves — upper `[x: 0-6, y: 2-3]` = offsets 0..+11 (white
+  pc0 = base tonic, no transpose), lower `[x: 0-6, y: 4-5]` = offsets −12..−1. one
+  press sets the targeted channel(s)' **root** as a signed semitone transpose (±1
+  octave). **root is per-channel.**
+- channel **selectors** `[x: 5-10, y: 7]` — the launch strip becomes channel
+  selectors here: lit = targeted. a root press applies to **all** selected channels.
+  with a **single** target, each press then auto-advances the target to the next
+  channel; with **multiple** targets it applies to all and does not advance.
+
+the per-channel root sums with the PERF-page `octave` (±2). press **SCALE** again to exit.
 
 ## norns UI
 
@@ -214,8 +240,8 @@ a complete secondary surface that stays in sync with the grid. six pages:
 
 **main** edits the six A-layer sequences; **alt** is its clone for the B (additive
 offset) layer. **perf / prob / scale / op** edit the same per-channel fields as the
-grid's matching pages (the screen folds per-channel **quantize** onto its perf page,
-which the grid keeps on its own QNT page), and the grid's mode buttons switch the
+grid's matching pages (the screen folds per-channel **quantize**, **env mode** and
+**geode** onto its perf page, which the grid keeps on its own PRISM page), and the grid's mode buttons switch the
 screen tab to match. screen edits go through the same code path as grid edits, so
 both surfaces stay in sync and screen-entered values remain grid-reachable.
 
@@ -264,11 +290,13 @@ the current algorithm.
 the entire instrument is norns params (`lib/params_sync.lua`), so everything saves
 to PSETs and is MIDI-mappable:
 
-- **globals** — `scale`, `root`
-- **VOICE** — engine-wide FM macros: `algorithm`, `env mode`, `geode`, `mod index`,
-  `amp punch`, `fm feedback`, `fm drive`
+- **globals** — `scale` (the shared mask; expanded preset list). `root` is
+  per-channel now, and there is no VOICE group anymore — `env mode` and `geode` are
+  per-channel too.
 - **OUTPUTS** — per-channel destination (see [outputs](#outputs))
-- **ch1–ch6 groups** — run, rate, quantize, prob, alt-trig, reset, octave, the
+- **ch1–ch6 groups** — run, rate, quantize, `root` (−12..+11 transpose), `env mode`,
+  `geode`, prob, alt-trig, reset, octave, the
+  per-channel voice scalars (`mod index`, `fm feedback`, `algorithm`), the
   per-op ratios/levels, the randomize/mutate/clear/copy/paste triggers, and every
   sequence × layer as a text param (the whole sequence as a string) plus step/value
   cursor params
