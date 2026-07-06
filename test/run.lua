@@ -27,23 +27,15 @@ check('snaps forward to next 1/16 (q=16 -> step .25)', approx(q.snap_beat(0.3, 1
 -- ---- scales ------------------------------------------------------------
 local scales = require 'scales'
 print('scales:')
-local major = scales.by_name.major
-check('major intervals from musicutil', #major == 7 and major[1] == 0 and major[7] == 11)
-check('octave (12) stripped from musicutil intervals', major[#major] ~= 12)
+-- scale content lives in chords.lua now; scales.lua is pure pitch math.
+local major = {0, 2, 4, 5, 7, 9, 11}
 check('degree 0 in major = C1 = 32.7032 Hz', approx(scales.degree_to_freq(0, major), 32.7032))
 check('degree 7 in major wraps to next octave root (x2 freq)',
   approx(scales.degree_to_freq(7, major), 2 * scales.degree_to_freq(0, major)))
 check('degree -1 in major = previous B (floor-mod)',
   scales.degree_to_semitones(-1, major) == -1)
-check('custom scale hijaz preserved literally', #scales.by_name.hijaz == 7
-  and scales.by_name.hijaz[2] == 1)
-check('expanded scale list, every name resolves to intervals',
-  #scales.names >= 12 and scales.names[1] == 'chromatic'
-  and scales.by_name[scales.names[#scales.names]] ~= nil)
-check('scale list gained the extra modes', scales.by_name.lydian ~= nil
-  and scales.by_name.blues ~= nil and scales.by_name.wholeTone ~= nil)
-check('no grid preset list anymore (presets moved to params menu)',
-  scales.picker_names == nil)
+-- (v0.3's scale-mask tests dropped: the modal system replaces scales.by_name;
+--  the 14 modes are tested in the chords section below.)
 check('root transposes tonic up by semitones',
   approx(scales.degree_to_freq(0, major, 2),
     require('musicutil').note_num_to_freq(26)))
@@ -52,8 +44,10 @@ check('negative root transposes tonic DOWN (per-channel -1 octave)',
     require('musicutil').note_num_to_freq(12)))
 check('root defaults to 0 (no transposition)',
   approx(scales.degree_to_freq(0, major, 0), scales.degree_to_freq(0, major)))
--- JUST INTONATION: the in-between intervals are pure ratios, not 12-TET. The
--- tonic (degree 0) and octaves stay exact; degrees in between ring as rationals.
+-- JUST INTONATION (default tuning): the in-between intervals are pure ratios,
+-- not 12-TET. The tonic (degree 0) and octaves stay exact; degrees in between
+-- ring as rationals.
+local chromatic = {0,1,2,3,4,5,6,7,8,9,10,11}
 local tonic = scales.degree_to_freq(0, major)
 check('JI table is one octave [1,2)', scales.JI_RATIOS[0] == 1
   and scales.JI_RATIOS[7] == 3/2 and scales.JI_RATIOS[11] == 15/8)
@@ -64,10 +58,112 @@ check('perfect 5th (degree 4) = pure 3/2 above tonic',
 check('JI fifth is sharper than the 12-TET fifth',
   scales.degree_to_freq(4, major) > tonic * 2^(7/12))
 check('chromatic degree 4 = pure major third (5/4)',
-  approx(scales.degree_to_freq(4, scales.by_name.chromatic), tonic * 5/4))
+  approx(scales.degree_to_freq(4, chromatic), tonic * 5/4))
 check('octave of any degree is exact 2:1',
   approx(scales.degree_to_freq(2 + #major, major),
          2 * scales.degree_to_freq(2, major)))
+check('semitone_to_freq places absolute offsets above C1 (JI)',
+  approx(scales.semitone_to_freq(0), 32.7032)
+  and approx(scales.semitone_to_freq(12), 2 * 32.7032))
+
+-- TUNING SWITCH: flipping scales.tuning to 2 (12-TET) makes the in-between
+-- intervals equal-tempered; JI ratios no longer apply. Restore just after.
+scales.tuning = 2
+check('12-TET degree 2 = equal-tempered major third (not 5/4)',
+  approx(scales.degree_to_freq(2, major),
+    require('musicutil').note_num_to_freq(28)))
+check('12-TET semitone_to_freq = plain note_num_to_freq',
+  approx(scales.semitone_to_freq(7),
+    require('musicutil').note_num_to_freq(31)))
+check('octave still exact 2:1 under 12-TET',
+  approx(scales.degree_to_freq(7, major), 2 * scales.degree_to_freq(0, major)))
+scales.tuning = 1
+check('tuning restored to just', scales.tuning == 1)
+
+-- ---- chords ------------------------------------------------------------
+local chords = require 'chords'
+print('chords:')
+local function ivals_eq(a, b)
+  if #a ~= #b then return false end
+  for i = 1, #a do if a[i] ~= b[i] then return false end end
+  return true
+end
+check('14 modes with names and abbrs', #chords.MODES == 14
+  and #chords.MODE_NAMES == 14 and #chords.MODE_ABBRS == 14)
+local abbr_ok = true
+for _, m in ipairs(chords.MODES) do if #m.abbr > 4 then abbr_ok = false end end
+check('mode abbrs fit the grid/screen (<=4 chars)', abbr_ok)
+check('mode 1 = ionian (major)', ivals_eq(chords.MODES[1].intervals, {0,2,4,5,7,9,11}))
+check('mode 2 = dorian rotation', ivals_eq(chords.MODES[2].intervals, {0,2,3,5,7,9,10}))
+check('mode 6 = aeolian (natural minor)', ivals_eq(chords.MODES[6].intervals, {0,2,3,5,7,8,10}))
+check('mode 8 = aeolian #7 (harmonic minor)', ivals_eq(chords.MODES[8].intervals, {0,2,3,5,7,8,11}))
+check('mode 9 = locrian #6 rotation', ivals_eq(chords.MODES[9].intervals, {0,1,3,5,6,9,10}))
+-- 7th rotation of HARMONIC minor (bb7) — not the melodic-minor altered scale
+check('mode 14 = super locrian rotation', ivals_eq(chords.MODES[14].intervals, {0,1,3,4,6,8,9}))
+
+-- manual qualities: each triple lands exactly on the harmonàig chord tones
+local ionian = chords.MODES[1].intervals
+local function manual_tones(qi, opts)
+  local ctx = { intervals = ionian, root = 0, degree = 1, diatonic = false,
+                quality = qi, inversion = 0, voicing = 1 }
+  for k, v in pairs(opts or {}) do ctx[k] = v end
+  return chords.chord_tones(ctx)
+end
+local QUAL_EXPECT = {
+  {0,3,7,11}, {0,3,6,9}, {0,3,6,10}, {0,3,7,10},
+  {0,4,7,10}, {0,4,7,11}, {0,4,8,11}, {0,4,8,10},
+}
+local qual_ok = true
+for qi, exp in ipairs(QUAL_EXPECT) do
+  if not ivals_eq(manual_tones(qi), exp) then qual_ok = false end
+end
+check('all 8 quality triples produce their chord tones', qual_ok)
+
+-- diatonic harmonization tables (classified quality index per degree)
+local function harmonization(mode_i)
+  local out = {}
+  for d = 1, 7 do out[d] = chords.diatonic_quality(chords.MODES[mode_i].intervals, d) end
+  return out
+end
+-- quality indices: 1 mM7, 2 o7, 3 m7b5, 4 m7, 5 dom7, 6 M7, 7 +M7, 8 +7
+check('ionian harmonizes M7 m7 m7 M7 7 m7 m7b5',
+  ivals_eq(harmonization(1), {6, 4, 4, 6, 5, 4, 3}))
+check('dorian harmonizes m7 m7 M7 7 m7 m7b5 M7',
+  ivals_eq(harmonization(2), {4, 4, 6, 5, 4, 3, 6}))
+check('harmonic minor harmonizes mM7 m7b5 +M7 m7 7 M7 o7',
+  ivals_eq(harmonization(8), {1, 3, 7, 4, 5, 6, 2}))
+
+-- diatonic stack wraps the octave past degree VII
+check('diatonic stack at ionian degree VII = {11,14,17,21}',
+  ivals_eq(chords.chord_tones{ intervals = ionian, root = 0, degree = 7,
+    diatonic = true, inversion = 0, voicing = 1 }, {11, 14, 17, 21}))
+
+-- inversion: member identity preserved, lowest tone hops up an octave each step
+check('1st inversion lifts the chord root an octave',
+  ivals_eq(manual_tones(6, {inversion = 1}), {12, 4, 7, 11}))
+check('3rd inversion leaves only the 7th in place',
+  ivals_eq(manual_tones(6, {inversion = 3}), {12, 16, 19, 11}))
+
+-- voicings on root-position maj7 {0,4,7,11}
+check('close voicing is the raw stack', ivals_eq(manual_tones(6), {0, 4, 7, 11}))
+check('drop2 lowers the 2nd-highest (the 5th)',
+  ivals_eq(manual_tones(6, {voicing = 2}), {0, 4, -5, 11}))
+check('drop3 lowers the 3rd-highest (the 3rd)',
+  ivals_eq(manual_tones(6, {voicing = 3}), {0, -8, 7, 11}))
+check('spread = drop2 + highest up an octave',
+  ivals_eq(manual_tones(6, {voicing = 4}), {0, 4, -5, 23}))
+
+-- root + degree transposition: root=2, degree V in ionian -> chord root 9
+local v_of_d = chords.chord_tones{ intervals = ionian, root = 2, degree = 5,
+  diatonic = true, inversion = 0, voicing = 1 }
+check('root transposes the chord root (2 + 7 = 9)', v_of_d[1] == 9)
+
+check('classify folds octaves (mod 12)', chords.classify(16, 19, 22) == 5)
+check('chord_symbol: ionian degree V diatonic = V7',
+  chords.chord_symbol{ intervals = ionian, root = 0, degree = 5, diatonic = true } == 'V7')
+check('chord_symbol: manual quality overrides (I+7)',
+  chords.chord_symbol{ intervals = ionian, root = 0, degree = 1, diatonic = false,
+    quality = 8 } == 'I+7')
 
 -- ---- seqx / sequins ----------------------------------------------------
 local seqx = require 'seqx'
@@ -203,7 +299,7 @@ engR.channels[1].note = seqx.new{0}
 engR.channels[1].root = 2      -- +2 semitones (per-channel tonic transpose)
 engR:launch(1)
 check('per-channel root transposes fired freq (degree 0, root +2)',
-  #firesR == 1 and approx(firesR[1].freq, scales.degree_to_freq(0, scales.by_name.major, 2)))
+  #firesR == 1 and approx(firesR[1].freq, scales.degree_to_freq(0, major, 2)))
 
 -- octave scalar: applied per hit in fire, so external outputs and the ghost
 -- note see the shifted freq
@@ -314,6 +410,68 @@ local sh_step = env_step_decays(1)
 check('op-env step arpeggiates the shape per hit',
   #sh_step == 3 and not approx(sh_step[1], sh_step[2])
   and not approx(sh_step[2], sh_step[3]) and not approx(sh_step[1], sh_step[3]))
+
+-- chord-tone roles: a role channel takes its pitch from the harmonic context's
+-- resolved chord tone instead of its note lane; per-hit re-resolution means a
+-- degree change re-harmonizes the very next hit; octave still applies; and the
+-- note lane keeps advancing underneath (so flipping back to free resumes).
+local function role_fire(setup)
+  clock._reset()
+  local e = Burst.new()
+  set_quant(e, 0)
+  local f = {}
+  e:on(function(ev) if ev.type == 'fire' then f[#f + 1] = ev.freq end end)
+  e.channels[1].div  = seqx.new{4}
+  e.channels[1].reps = seqx.new{1}
+  e.channels[1].note = seqx.new{3}  -- would be degree 3 if the lane were used
+  setup(e)
+  e:launch(1)
+  clock._run_until(4)
+  return f, e
+end
+local rf = role_fire(function(e) e.channels[1].role = 1; e.degree = 5 end)
+-- ionian degree V root = semitone 7
+check('role R fires the chord root of degree V',
+  #rf == 1 and approx(rf[1], scales.semitone_to_freq(7)))
+rf = role_fire(function(e) e.channels[1].role = 4; e.degree = 1 end)
+check('role 7th fires the seventh (Imaj7 -> 11 st)',
+  approx(rf[1], scales.semitone_to_freq(11)))
+rf = role_fire(function(e)
+  e.channels[1].role = 2; e.degree = 1; e.diatonic = false; e.quality = 8
+end)
+check('manual quality feeds role tones (+7 third = 4 st)',
+  approx(rf[1], scales.semitone_to_freq(4)))
+rf = role_fire(function(e) e.channels[1].role = 1; e.channels[1].octave = 1 end)
+check('octave still doubles a role channel', approx(rf[1], 2 * scales.semitone_to_freq(0)))
+
+-- mid-burst re-harmonization: 3 hits, change degree after the first fire.
+clock._reset()
+local erh = Burst.new()
+set_quant(erh, 0)
+local rhf = {}
+erh:on(function(ev)
+  if ev.type == 'fire' then
+    rhf[#rhf + 1] = ev.freq
+    if #rhf == 1 then erh.degree = 4 end  -- I -> IV between hits
+  end
+end)
+erh.channels[1].div  = seqx.new{4}
+erh.channels[1].reps = seqx.new{3}
+erh.channels[1].role = 1
+erh:launch(1)
+clock._run_until(4)
+check('degree change re-harmonizes mid-burst on the next hit',
+  #rhf == 3 and approx(rhf[1], scales.semitone_to_freq(0))
+  and approx(rhf[2], scales.semitone_to_freq(5))
+  and approx(rhf[3], scales.semitone_to_freq(5)))
+
+-- the note lane still advances while a role is active
+local _, elane = role_fire(function(e)
+  e.channels[1].note = seqx.new{0, 5}
+  e.channels[1].role = 3
+end)
+check('role channel note lane still advances underneath',
+  seqx.playhead(elane.channels[1].note) == 0)
 
 -- all four op ratios are sequenced (A value + B offset, drawn per burst). The drawn
 -- op2/3/4 values pass straight to trig args 4/5/6 (r2/r3/r4); op1's drawn value rides
@@ -990,47 +1148,39 @@ check('idle launch button settles to a static dim', mg.leds[7 * 16 + 6] == 4)
 check('running launch button is solid full-bright', mg.leds[7 * 16 + 5] == 15)
 geng:stop(1)
 
--- ROOT/scale page (row6 col 14): mask kb rows 0-1, root kb rows 2-5 (upper 2-3,
--- lower 4-5), channel selectors on row 7 cols 5-10. root is per-channel now.
-ctl.focusCh = 0
-ctl:close_picker()
+-- harmony picker (row6 SCALE col 14): mode/degree/quality/root/inv/voi/roles
 ctl:press(14, 6)
-check('SCALE col opens ROOT page', ctl.picker ~= nil and ctl.picker.kind == 'scale')
-check('root page seeds target = focused channel 0', ctl.rootTargets[0] == true)
--- global mask keyboard (rows 0-1): white row col 0 = pitch class 0 (in major -> removes)
-local m0 = #geng.scale
-ctl:press(0, 1)
-check('mask keyboard edits the global scale', #geng.scale ~= m0)
-ctl:press(0, 1)
-check('mask keyboard toggles back', #geng.scale == m0)
--- root UPPER octave (rows 2-3): white row col 0 = pitch class 0 -> offset 0 (base tonic)
-ctl:press(0, 3)
-check('root sets targeted channel 0 to offset 0', geng.channels[1].root == 0)
-check('single target auto-advances to channel 1',
-  ctl.rootTargets[1] == true and ctl.rootTargets[0] == nil)
--- root LOWER octave (rows 4-5): white col 1 = pc 2 -> offset 2-12 = -10 (down an octave)
-ctl:press(1, 5)
-check('root lower octave sets channel 1 to -10', geng.channels[2].root == -10)
--- single applies auto-advanced twice, so the target is channel 2 now. Add ch0 (col5)
--- and ch3 (col8) via the row-7 channel selectors for a multi-target edit.
-check('auto-advance reached channel 2', ctl.rootTargets[2] == true)
-ctl:press(5, 7)
-ctl:press(8, 7)
-check('multi-select adds channels', ctl.rootTargets[2] and ctl.rootTargets[0] and ctl.rootTargets[3])
--- apply root to all selected: upper white col 2 = pc 4 -> offset 4
-ctl:press(2, 3)
-check('root applies to all selected channels', geng.channels[1].root == 4
-  and geng.channels[3].root == 4 and geng.channels[4].root == 4)
-check('multi target does NOT auto-advance',
-  ctl.rootTargets[0] and ctl.rootTargets[2] and ctl.rootTargets[3])
--- selectors refuse to empty the target set
-ctl:press(5, 7)   -- ch0 off -> {2,3}
-ctl:press(7, 7)   -- ch2 off -> {3}
-ctl:press(8, 7)   -- try ch3 off -> refused
-check('selector refuses to empty the target set',
-  ctl.rootTargets[3] == true)
-ctl:press(14, 6)  -- close
-check('ROOT page closed via SCALE col', ctl.picker == nil)
+check('SCALE opens harmony picker', ctl.picker ~= nil and ctl.picker.kind == 'scale')
+ctl:press(1, 0)  -- mode row A col 1 = dorian
+check('mode row A selects dorian', geng.mode == 2)
+ctl:press(0, 1)  -- mode row B col 0 = aeolian #7 (harmonic minor)
+check('mode row B selects harmonic minor', geng.mode == 8)
+ctl:press(0, 0)  -- back to ionian
+check('mode row A selects ionian', geng.mode == 1)
+ctl:press(4, 2)  -- degree row col 4 = V
+check('degree row selects V', geng.degree == 5)
+ctl:press(0, 5)  -- root keyboard white row, col 0 = semitone 0 (C)
+check('root keyboard sets engine.root to C', geng.root == 0)
+ctl:press(1, 5)  -- col 1 white = semitone 2 (D)
+check('root keyboard sets engine.root to D', geng.root == 2)
+ctl:press(6, 3)  -- quality col 6 = QUALITY_COL0 + 4 -> dom7 (index 5)
+check('quality press goes manual', geng.quality == 5 and geng.diatonic == false)
+ctl:press(0, 3)  -- DIA toggle
+check('DIA press restores diatonic', geng.diatonic == true)
+ctl:press(9, 4)   -- inversion col 9 = 1st
+check('inversion cell sets 1st inversion', geng.inversion == 1)
+ctl:press(10, 5)  -- voicing col 10 = drop3
+check('voicing cell sets drop3', geng.voicing == 3)
+ctl:press(12, 0)  -- ch1 role = R
+check('role cell assigns R to ch1', geng.channels[1].role == 1)
+ctl:press(15, 1)  -- ch2 role = 7th
+check('role cell assigns 7th to ch2', geng.channels[2].role == 4)
+ctl:press(12, 0)  -- re-press the lit role
+check('role re-press frees the channel', geng.channels[1].role == 0)
+-- restore defaults so later sections start from known harmonic state
+ctl:press(15, 1); ctl:press(0, 2); ctl:press(8, 4); ctl:press(8, 5)
+ctl:press(14, 6)  -- close harmony picker
+check('harmony picker closed via SCALE', ctl.picker == nil)
 
 -- entering the scale page is exclusive with the other row-6 latch modes, so
 -- only the active page's button stays lit (regression: a prior PERF/PROB/SND
@@ -1045,12 +1195,6 @@ check('switching to PROB clears scale picker', ctl.picker == nil)
 check('PROB mode active after leaving scale', ctl.probMode == true)
 ctl:press(13, 6)  -- PROB off, back to channels
 check('PROB mode off', ctl.probMode == false)
-
--- set_mask: replace the whole mask at once (the keymask param edit path)
-ctl:set_mask({7, 0, 4, 7, 13})  -- dup 7 + out-of-range 13 dropped, then sorted
-check('set_mask dedups, drops out-of-range, sorts', vals_eq(geng.scale, {0, 4, 7}))
-ctl:set_mask({})
-check('set_mask refuses to empty the scale', vals_eq(geng.scale, {0, 4, 7}))
 
 -- prob mode (row6 col 13)
 ctl:press(13, 6)
@@ -1350,22 +1494,44 @@ sui.sel_line[P_PERF] = 4   -- rate
 sui:enc(3, 1)
 check('rate E3 lands in RATE_VALUES', in_set(seng.channels[1].rate, GridUI.RATE_VALUES))
 
--- scale page: E2 walks root -> 12 keys; E3 edits the SELECTED channel's root
--- (per-channel now, -12..+11 signed transpose, no wrap; mask stays global)
+-- harmony page: E2 walks mode/root/degree/dia/qual/inv/voice + 6 roles;
+-- E3 edits each through the controller's setters
 sui:set_page(P_SCALE)
-local sch = sui.sel_ch + 1
-seng.channels[sch].root = 0
-sui.sel_line[P_SCALE] = 1            -- root
-sui:enc(3, 2)
-check('scale E3 raises the selected channel root by semitones', seng.channels[sch].root == 2)
-sui:enc(3, -5)                 -- goes negative (down-octave transpose), no wrap
-check('scale root goes negative, clamped not wrapped', seng.channels[sch].root == -3)
-seng.scale = {0, 4, 7}
-sui.sel_line[P_SCALE] = 2 + 2        -- key for pitch class 2 (D)
+seng.root = 0
+sui.sel_line[P_SCALE] = 1            -- mode
 sui:enc(3, 1)
-check('scale E3 right adds a key to the mask', in_set(2, seng.scale) and #seng.scale == 4)
+check('harmony E3 steps the mode', seng.mode == 2)
 sui:enc(3, -1)
-check('scale E3 left removes the key', not in_set(2, seng.scale) and #seng.scale == 3)
+sui.sel_line[P_SCALE] = 2            -- root
+sui:enc(3, 2)
+check('harmony E3 raises root by semitones', seng.root == 2)
+sui:enc(3, -3)                 -- wraps below 0
+check('harmony root wraps mod 12', seng.root == 11)
+sui.sel_line[P_SCALE] = 3            -- degree
+sui:enc(3, 4)
+check('harmony E3 steps the chord degree', seng.degree == 5)
+sui.sel_line[P_SCALE] = 5            -- quality: editing goes manual
+sui:enc(3, 1)
+check('harmony quality edit turns diatonic off',
+  seng.diatonic == false and in_set(seng.quality, {1,2,3,4,5,6,7,8}))
+sui.sel_line[P_SCALE] = 4            -- dia line: right = back on
+sui:enc(3, 1)
+check('harmony dia line restores diatonic', seng.diatonic == true)
+sui.sel_line[P_SCALE] = 6            -- inversion
+sui:enc(3, 2)
+check('harmony E3 steps inversion', seng.inversion == 2)
+sui:enc(3, -2)
+sui.sel_line[P_SCALE] = 7            -- voicing
+sui:enc(3, 3)
+check('harmony E3 steps voicing', seng.voicing == 4)
+sui:enc(3, -3)
+sui.sel_line[P_SCALE] = 9            -- ch2 role
+sui:enc(3, 2)
+check('harmony role line edits channel 2', seng.channels[2].role == 2)
+sui:enc(3, -4)
+check('harmony role line clamps at free', seng.channels[2].role == 0)
+check('harmony page_lines labels', sui:page_lines()[1][1] == 'mode'
+  and sui:page_lines()[8][1] == 'ch1')
 
 -- perf page: per-channel quantize on line 5 (after run/reset/oct/rate), curated set
 sui:set_page(P_PERF)
@@ -1375,9 +1541,11 @@ sui:enc(3, 1)
 check('perf E3 steps quantize up the curated set', seng.channels[1].quantize == 12)
 check('perf quantize lands in QUANTIZE_VALUES', in_set(seng.channels[1].quantize, GridUI.QUANTIZE_VALUES))
 
--- restore musical state the fire tests below assume (unshifted c1, major)
-seng.channels[1].root = 0     -- root is per-channel now
-seng.scale = scales.by_name.major
+-- restore musical state the fire tests below assume (unshifted c1, ionian, I)
+seng.root = 0
+seng.mode = 1
+seng.degree = 1
+seng.channels[1].root = 0     -- per-channel transpose also neutral
 set_quant(seng, 32)
 
 -- fire reactivity: ghost note recorded, dirty set, tick repaints + clears
@@ -1598,7 +1766,7 @@ peng.channels[1].noteB = seqx.new{3}
 local pctl = GridUI.new(peng, mock_grid())
 local pui = ScreenUI.new(peng, pctl)
 local fake = Paramset.new()
-local psync = ParamsSync.new{engine = peng, controller = pctl, params = fake, scales = scales}
+local psync = ParamsSync.new{engine = peng, controller = pctl, params = fake}
 psync:add_params()
 psync:attach()
 
@@ -1838,21 +2006,50 @@ check('grid quantize edit reflects to chN_quantize param',
   fake:get('ch1_quantize') == GridUI.nearest_index(GridUI.QUANTIZE_VALUES, 16))
 pctl:press(15, 6)  -- leave the QNT page
 
--- keymask: the note mask is viewed/edited/stored like a sequence string
-check('mask_to_text renders pitch-class names',
-  ParamsSync.mask_to_text({0, 2, 4, 5, 7, 9, 11}) == 'C D E F G A B')
-check('mask_from_text parses names + numbers, dedups, keeps order',
-  vals_eq(ParamsSync.mask_from_text('c e g 7 bb'), {0, 4, 7, 10}))
-fake:set('keymask', 'g c e')  -- commits through controller:set_mask (sorts)
-check('keymask param installs sorted mask on engine', vals_eq(peng.scale, {0, 4, 7}))
-check('keymask text reflected back canonical (sorted names)', fake:get('keymask') == 'C E G')
-fake:set('keymask', '')       -- refuse to empty the scale; restore the display
-check('empty keymask refused, display restored',
-  vals_eq(peng.scale, {0, 4, 7}) and fake:get('keymask') == 'C E G')
--- picking a scale preset keeps the keymask text in step
-fake:set('scale', 2)  -- scales.names[2] = 'major'
-check('scale preset updates keymask text',
-  fake:get('keymask') == ParamsSync.mask_to_text(scales.by_name.major))
+-- harmonic-context params: actions route through the controller's setters
+fake:set('mode', 2)
+check('mode param sets engine mode', peng.mode == 2)
+fake:set('chord_degree', 5)
+check('chord_degree param sets engine degree', peng.degree == 5)
+fake:set('inversion', 3)  -- option index 3 = 2nd inversion (value 2)
+check('inversion param sets engine value', peng.inversion == 2)
+fake:set('voicing', 2)
+check('voicing param sets drop2', peng.voicing == 2)
+fake:set('chord_quality', 5)
+check('chord_quality param sets quality WITHOUT clearing diatonic',
+  peng.quality == 5 and peng.diatonic == true)
+fake:set('diatonic', 0)
+check('diatonic param goes manual', peng.diatonic == false)
+fake:set('diatonic', 1)
+check('diatonic param restores auto', peng.diatonic == true)
+
+-- grid harmony edits reflect silently into the params
+local fh = fake.fires
+pctl:press(14, 6)  -- open the harmony picker
+pctl:press(2, 2)   -- degree row col 2 = III
+check('grid degree press reflects into chord_degree', fake:get('chord_degree') == 3)
+pctl:press(4, 3)   -- quality col 4 -> index 3 (m7b5): the grid gesture goes manual
+check('grid quality press reflects quality + diatonic',
+  fake:get('chord_quality') == 3 and fake:get('diatonic') == 0)
+pctl:press(0, 3)   -- DIA back on
+check('grid DIA press reflects diatonic on', fake:get('diatonic') == 1)
+pctl:press(12, 2)  -- ch3 role = R
+check('grid role press reflects into ch3_role', fake:get('ch3_role') == 2)
+check('grid harmony edits fired zero param actions', fake.fires == fh)
+pctl:press(12, 2)  -- free ch3 again
+pctl:press(14, 6)  -- close the picker
+
+-- role param round-trip
+fake:set('ch1_role', 4)  -- option 4 = '5th' (value 3)
+check('role param sets channel role', peng.channels[1].role == 3)
+fake:set('ch1_role', 1)
+check('role param frees the channel', peng.channels[1].role == 0)
+
+-- bang keeps the harmonic context intact (the chord_quality action must not
+-- clobber diatonic during a replay of every action)
+fake:bang()
+check('params:bang() preserves diatonic', peng.diatonic == true)
+check('params:bang() preserves quality/degree', peng.quality == 3 and peng.degree == 3)
 
 -- render coalescing: actions raise the flag, flush repaints once
 psync.render_pending = false

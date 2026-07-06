@@ -22,9 +22,10 @@
 --   row 6     = 0 note · 1 op1 ratio · 2 op2 ratio · 3 op3 ratio · 4 op4 ratio
 --             · 5..10 dark
 --             · 11 MIX · 12 PERF · 13 PROB · 14 SCALE · 15 PRISM
---               (SCALE opens the scale picker; PRISM is the per-channel quantize +
---               amp-dynamics page. KB page disabled; FM algorithm is a per-channel
---               MIX scalar, not a grid page -- the old SND page was reclaimed)
+--               (SCALE opens the HARM harmony picker; PRISM is the per-channel
+--               quantize + amp-dynamics page. KB page disabled; FM algorithm is a
+--               per-channel MIX scalar, not a grid page -- the old SND page was
+--               reclaimed. TUNING (just vs 12-TET) is a PARAMETERS-menu global.)
 --   row 7     = 0 div/reps · 1 opEnv1 · 2 opEnv2 · 3 opEnv3 · 4 opEnv4
 --             · 5..10 launch ch0..5 (channels 1..6)
 --             · 11 COPY · 12 PASTE · 13 CLR · 14 RANDOMIZE · 15 MUTATE
@@ -58,16 +59,20 @@
 --          {3,4,6,8,12,16,24,32} = 1/3..1/32 events per whole note) · env mode
 --          (shape/burst/hit) on cols 9-11 · geode (transient/sustain/cycle) on cols
 --          13-15. Cols 8 and 12 are dark separators.
---   ROOT/scale page: three stacked mini-keyboards (cols 0-6). Scale presets moved to
---                 the PARAMETERS menu, so no preset row here.
---                 rows 0-1 = global note-MASK keyboard: black row 0 / white row 1
---                 rows 2-3 = root UPPER octave (offset 0..+11; white pc0 = base tonic)
---                 rows 4-5 = root LOWER octave (offset -12..-1)
---                 row 7 cols 5-10 = channel SELECTORS (which channel(s) root edits
---                 target); a root press applies to all selected, single target
---                 auto-advances to the next channel. root is per-channel.
---                 keyboards are a compact piano: white keys packed at cols 0-6,
---                 black keys offset above the white key they follow
+--   HARM (SCALE button): the modal harmonic context {mode, root, degree, quality,
+--                 inversion, voicing} + per-channel chord-tone roles (lib/chords.lua).
+--                 This REPLACES v0.3's global note-MASK / per-channel-root keyboard
+--                 page — per-channel root (c.root) is now a PARAMETERS-menu scalar
+--                 (chN_root), and the mode system supersedes the scale mask.
+--                 row 0 cols 0-6 = ionian modes 1-7; row 1 cols 0-6 = harmonic-
+--                 minor modes 8-14; row 2 cols 0-6 = chord degree I..VII (unsel-
+--                 ected cells brightness-encode the diatonic quality); row 3 =
+--                 DIA toggle (col 0) + 8 qualities (cols 2-9, picking one goes
+--                 manual); rows 4-5 cols 0-6 GLOBAL root keyboard (compact piano:
+--                 white keys packed at cols 0-6, black keys offset above); row 4
+--                 cols 8-11 inversion root/1st/2nd/3rd; row 5 cols 8-11 voicing
+--                 close/drop2/drop3/spread; cols 12-15 on rows 0-5 = per-channel
+--                 role R/3/5/7 (re-press the lit role to free the channel)
 --   step picker:  value grid on rows 6-7 (the control rows, borrowed while
 --                 picking) so all six channel rows stay visible. Press the
 --                 lit/current value to remove the step; press any other value
@@ -80,7 +85,7 @@
 --            place and can be restored by un-commenting the entry points.
 
 local seqx   = require 'seqx'
-local scales = require 'scales'
+local chords = require 'chords'
 
 local GRID_W = 16
 -- Each channel row shows both A/B layers side by side: A on cols 0..SEQ_LEN-1,
@@ -130,7 +135,7 @@ local MUTATE_BUTTON_COL = 15
 local ROW6_MIX_COL = 11   -- per-channel MIX page (took the old ALG slot; channel level + op level statics)
 local ROW6_PERF_COL = 12
 local ROW6_PROB_COL = 13
-local ROW6_SCALE_COL = 14 -- opens the ROOT/scale page (global mask + per-channel root)
+local ROW6_SCALE_COL = 14 -- opens the HARM harmony picker (mode/degree/quality/root/inv/voi/roles)
 local ROW6_PRISM_COL = 15   -- per-channel PRISM page (quantize + env mode + geode)
 -- Channel launch/stop (and action-target) buttons: a single contiguous 1x6 strip on
 -- ROW 7 at cols 5..10 (channel ch -> col 5 + ch, so ch0..5 = channels 1..6). Sits
@@ -175,15 +180,19 @@ local WHITE_KEYS = {0, 2, 4, 5, 7, 9, 11}
 -- no black key, matching a real keyboard's E-F and B-C gaps).
 local KB_WHITE_COL = {[0] = 0, [1] = 2, [2] = 4, [3] = 5, [4] = 7, [5] = 9, [6] = 11}
 local KB_BLACK_COL = {[0] = 1, [1] = 3, [3] = 6, [4] = 8, [5] = 10}
--- ROOT/scale-page row assignments — three stacked mini-keyboards (each = a black
--- key row over a white key row). The scale-preset row was removed (presets live in
--- the PARAMETERS menu now), freeing room for a two-octave per-channel root keyboard:
---   rows 0-1 = global scale MASK (membership)
---   rows 2-3 = root UPPER octave (offset 0..+11; white pc0 = base tonic, offset 0)
---   rows 4-5 = root LOWER octave (offset -12..-1)
-local MASK_BLACK_ROW,   MASK_WHITE_ROW   = 0, 1
-local ROOTHI_BLACK_ROW, ROOTHI_WHITE_ROW = 2, 3
-local ROOTLO_BLACK_ROW, ROOTLO_WHITE_ROW = 4, 5
+-- Harmony-picker (HARM page) row/col assignments — the modal harmonic context,
+-- harmonàig-style (see lib/chords.lua and the layout reference above). This
+-- REPLACES v0.3's global-mask / per-channel-root keyboard page; per-channel root
+-- (c.root) is a PARAMETERS-menu scalar now, and modes supersede the scale mask.
+local MODE_ROW_A, MODE_ROW_B = 0, 1  -- modes 1..7 / 8..14 on cols 0..6
+local DEGREE_ROW = 2                 -- chord degree I..VII on cols 0..6
+local QUALITY_ROW = 3                -- DIA toggle + the 8 chord qualities
+local DIA_COL = 0                    -- diatonic auto-quality toggle
+local QUALITY_COL0 = 2               -- qualities 1..8 on cols 2..9
+local ROOT_BLACK_ROW, ROOT_WHITE_ROW = 4, 5  -- compact piano (global root), cols 0..6
+local INV_ROW, INV_COL0 = 4, 8       -- inversion 0..3 on cols 8..11
+local VOI_ROW, VOI_COL0 = 5, 8       -- voicing 1..4 on cols 8..11
+local ROLE_COL0 = 12                 -- rows 0..5 = ch1..6, cols 12..15 = R/3/5/7
 local RESET_INTERVALS = {0, 1, 2, 4}
 local RESET_COLS      = {0, 1, 2, 3}
 local OCTAVE_VALUES = {-2, -1, 0, 1, 2}
@@ -424,10 +433,6 @@ local function filter_label(p)
 end
 local function eq(a, b) return math.abs(a - b) < 1e-6 end
 
-local function contains(t, v)
-  for _, x in ipairs(t) do if x == v then return true end end
-  return false
-end
 local function index_of(t, v)
   for i, x in ipairs(t) do if x == v then return i - 1 end end  -- 0-based, -1 if absent
   return -1
@@ -573,10 +578,6 @@ function GridUI.new(engine, grid, opts)
   -- then settle to a static dim. Latches true on the first launch (session-scoped;
   -- resets on script reload, which is a fresh start anyway).
   self.hasLaunched = false
-
-  self.customMask = {}
-  for _, v in ipairs(scales.by_name.major) do self.customMask[#self.customMask + 1] = v end
-  self.selectedScaleName = 'major'
 
   self.kbMode = false
   self.kbPage = 1
@@ -752,10 +753,8 @@ function GridUI:handle_picker_press(x, y)
   if p.kind == 'scale' then
     if y < 6 then self:apply_picker_value(p, x, y); return end
     if y == 6 and x == ROW6_SCALE_COL then self:close_picker(); return end
-    -- row 7 cols 5..10: channel selectors for root editing (not launch on this page)
-    if y == LAUNCH_ROW and x >= LAUNCH_COL0 and x < LAUNCH_COL0 + NUM_CHANNELS then
-      self:toggle_root_target(x - LAUNCH_COL0); return
-    end
+    -- any other control-row press exits the harmony page, then acts normally
+    -- (e.g. the launch strip launches/stops its channel).
     self:close_picker()
     self:handle_normal_press(x, y)
     return
@@ -807,112 +806,81 @@ function GridUI:apply_picker_value(p, x, y)
     self:set_scalar(p.ch, p.field, v)  -- single edit path: fires on_edit{scalar}
     self:close_picker()
   elseif p.kind == 'scale' then
-    if y == MASK_BLACK_ROW or y == MASK_WHITE_ROW then
-      -- global scale mask keyboard (rows 0-1)
-      local semitone = (y == MASK_BLACK_ROW) and KB_BLACK_COL[x] or KB_WHITE_COL[x]
-      if semitone == nil then return end
-      self:toggle_mask_note(semitone)
-      self.on_edit{ type = 'global' }   -- mask stays global
-      self:render_all()
-    else
-      -- root keyboard rows 2-5. upper pair (2-3) = offset pc (0..+11); lower pair
-      -- (4-5) = pc-12. apply_root reflects per targeted channel + renders.
-      local black = (y == ROOTHI_BLACK_ROW or y == ROOTLO_BLACK_ROW)
-      local semitone = black and KB_BLACK_COL[x] or KB_WHITE_COL[x]
-      if semitone == nil then return end
-      local lower = (y == ROOTLO_BLACK_ROW or y == ROOTLO_WHITE_ROW)
-      self:apply_root(lower and (semitone - 12) or semitone)
+    -- every setter below is a single mutation path that fires its own on_edit,
+    -- so this branch only routes the press and repaints.
+    -- role matrix first — it spans all six rows (rows 0..5 = ch1..6).
+    if x >= ROLE_COL0 then
+      local rk = x - ROLE_COL0 + 1
+      local cur = self:chan(y).role or 0
+      self:_focus(y)
+      -- re-pressing the lit role releases the channel back to free (the same
+      -- re-press idiom as the launch buttons), so no fifth column is needed.
+      self:set_scalar(y, 'role', (cur == rk) and 0 or rk)
+    elseif (y == MODE_ROW_A or y == MODE_ROW_B) and x <= 6 then
+      self:set_mode((y == MODE_ROW_B and 7 or 0) + x + 1)
+    elseif y == DEGREE_ROW and x <= 6 then
+      self:set_degree(x + 1)
+    elseif y == QUALITY_ROW and x == DIA_COL then
+      self:set_diatonic(not self.engine.diatonic)
+    elseif y == QUALITY_ROW and x >= QUALITY_COL0 and x < QUALITY_COL0 + 8 then
+      self:set_quality(x - QUALITY_COL0 + 1)
+    elseif y == ROOT_BLACK_ROW and x <= 6 and KB_BLACK_COL[x] then
+      self:set_root(KB_BLACK_COL[x])
+    elseif y == ROOT_WHITE_ROW and x <= 6 and KB_WHITE_COL[x] then
+      self:set_root(KB_WHITE_COL[x])
+    elseif y == INV_ROW and x >= INV_COL0 and x < INV_COL0 + 4 then
+      self:set_inversion(x - INV_COL0)
+    elseif y == VOI_ROW and x >= VOI_COL0 and x < VOI_COL0 + 4 then
+      self:set_voicing(x - VOI_COL0 + 1)
     end
+    self:render_all()
   end
 end
 
--- Toggle a semitone in the custom note mask. Refuses to empty the mask (a scale
--- needs at least one degree). Keeps customMask sorted and re-points engine.scale.
-function GridUI:toggle_mask_note(semitone)
-  local at = nil
-  for i, s in ipairs(self.customMask) do if s == semitone then at = i break end end
-  if at then
-    if #self.customMask > 1 then table.remove(self.customMask, at) end
-  else
-    self.customMask[#self.customMask + 1] = semitone
-    table.sort(self.customMask)
-  end
-  local copy = {}
-  for _, s in ipairs(self.customMask) do copy[#copy + 1] = s end
-  self.engine.scale = copy
-end
-
--- preset scale name whose intervals match `mask` exactly, or nil (custom mask).
--- Keeps selectedScaleName in step so the PARAMETERS-menu `scale` option reflects a
--- whole-mask edit (the grid no longer shows presets).
-function GridUI:_mask_preset_name(mask)
-  for _, name in ipairs(scales.names) do
-    local ref = scales.by_name[name]
-    if #ref == #mask then
-      local same = true
-      for k = 1, #ref do if ref[k] ~= mask[k] then same = false break end end
-      if same then return name end
-    end
-  end
-  return nil
-end
-
--- Replace the whole custom note mask at once (the params keymask edit path).
--- Shares toggle_mask_note's invariants: dedup + sort, refuse to empty the scale,
--- re-point engine.scale, and emit on_edit{global} so params/screen reflect.
--- Semitones outside 0..11 are dropped; this is the only set-the-mask path so
--- the keymask param stays grid-reachable just like the sequence text params.
-function GridUI:set_mask(semitones)
-  local seen, mask = {}, {}
-  for _, s in ipairs(semitones) do
-    s = math.floor(s)
-    if s >= 0 and s <= 11 and not seen[s] then seen[s] = true; mask[#mask + 1] = s end
-  end
-  if #mask == 0 then return end
-  table.sort(mask)
-  self.customMask = mask
-  local copy = {}
-  for _, s in ipairs(mask) do copy[#copy + 1] = s end
-  self.engine.scale = copy
-  local name = self:_mask_preset_name(mask)
-  if name then self.selectedScaleName = name end
+-- Global harmonic-context scalars (harmonàig model, lib/chords.lua). Each is
+-- THE single mutation path for its field — grid, screen, and param actions all
+-- write through here so on_edit{global} fires and every surface reflects.
+-- (quantize is per-channel now — edited via set_scalar on the QNT page /
+-- chN_quantize param, not here.)
+function GridUI:set_root(semitone)
+  self.engine.root = semitone % 12
   self.on_edit{ type = 'global' }
 end
 
--- Per-channel tonic (root) is a signed semitone transpose (-12..+11), edited via
--- set_scalar so on_edit{scalar} reflects into params/screen like any other channel
--- scalar. ch is 0-based. Used by the screen scale page and the grid root keyboard.
-function GridUI:set_root(ch, offset)
-  self:set_scalar(ch, 'root', clamp(offset, -12, 11))
+function GridUI:set_mode(i)
+  self.engine.mode = clamp(i, 1, #chords.MODES)
+  self.on_edit{ type = 'global' }
 end
 
--- Toggle a channel in the root-edit target set (ROOT-page channel selectors, row 7
--- cols 5..10). Refuses to empty the set — at least one channel stays targeted.
-function GridUI:toggle_root_target(ch)
-  self.rootTargets = self.rootTargets or {}
-  if self.rootTargets[ch] then
-    local n = 0
-    for _ in pairs(self.rootTargets) do n = n + 1 end
-    if n > 1 then self.rootTargets[ch] = nil end
-  else
-    self.rootTargets[ch] = true
-  end
-  self:render_all()
+function GridUI:set_degree(d)
+  self.engine.degree = clamp(d, 1, 7)
+  self.on_edit{ type = 'global' }
 end
 
--- Apply a root offset to every targeted channel. Single target => cycle to the next
--- channel after applying (auto-advance); multiple => apply to all, no advance.
-function GridUI:apply_root(offset)
-  local targets = {}
-  for ch in pairs(self.rootTargets or {}) do targets[#targets + 1] = ch end
-  table.sort(targets)
-  for _, ch in ipairs(targets) do self:set_root(ch, offset) end
-  if #targets == 1 then
-    local nextch = (targets[1] + 1) % NUM_CHANNELS
-    self.rootTargets = { [nextch] = true }
-    self:_focus(nextch)
-  end
-  self:render_all()
+function GridUI:set_diatonic(on)
+  self.engine.diatonic = on and true or false
+  self.on_edit{ type = 'global' }
+end
+
+-- Picking a quality takes manual control (the harmonàig gesture: touching the
+-- quality knob overrides the modal harmonization; the DIA button hands it back).
+-- keep_diatonic skips that takeover: the chord_quality PARAM action uses it so
+-- params:bang() / params:default() replay never clobbers the diatonic state
+-- (params users have the explicit `diatonic` toggle instead).
+function GridUI:set_quality(i, keep_diatonic)
+  self.engine.quality = clamp(i, 1, #chords.QUALITIES)
+  if not keep_diatonic then self.engine.diatonic = false end
+  self.on_edit{ type = 'global' }
+end
+
+function GridUI:set_inversion(v)
+  self.engine.inversion = clamp(v, 0, 3)
+  self.on_edit{ type = 'global' }
+end
+
+function GridUI:set_voicing(v)
+  self.engine.voicing = clamp(v, 1, 4)
+  self.on_edit{ type = 'global' }
 end
 
 -- ---- picker enter/exit -------------------------------------------------
@@ -947,13 +915,9 @@ function GridUI:open_scalar_picker(ch, field, layout, valkind)
 end
 
 function GridUI:open_scale_picker()
-  -- entering the scale page is exclusive with the other row-6 latch modes, so
+  -- entering the harmony page is exclusive with the other row-6 latch modes, so
   -- only one row-6 button stays lit (see handle_row6's latch handlers)
   self:_clear_latches()
-  self.customMask = {}
-  for _, v in ipairs(self.engine.scale) do self.customMask[#self.customMask + 1] = v end
-  -- seed root-edit target with the currently focused channel (auto-advance single).
-  self.rootTargets = { [self.focusCh or 0] = true }
   self.picker = {kind = 'scale'}
   self:render_all()
 end
@@ -1220,35 +1184,76 @@ function GridUI:render_scalar_picker(p)
 end
 
 function GridUI:render_scale_picker()
+  local eng = self.engine
   -- clear the whole picker area first (rows 0..5)
-  for y = 0, 5 do for x = 0, GRID_W - 1 do self.g:set_led(x, y, 0) end end
+  for y = 0, 5 do
+    for x = 0, GRID_W - 1 do self.g:set_led(x, y, 0); self.g:set_strobe(x, y, 'off') end
+  end
 
-  -- rows 0-1: global scale MASK keyboard (membership), black row above white row
+  -- mode rows: ionian family on row 0, harmonic-minor family on row 1
+  for x = 0, 6 do
+    self.g:set_led(x, MODE_ROW_A, eng.mode == x + 1 and 15 or 4)
+    self.g:set_led(x, MODE_ROW_B, eng.mode == x + 8 and 15 or 4)
+  end
+
+  -- degree row: selected degree full-bright; the others brightness-encode
+  -- their diatonic quality (major-type bright / minor-type mid / diminished
+  -- dark), so the mode's harmonization table reads at a glance.
+  local ivals = chords.MODES[eng.mode].intervals
+  for d = 1, 7 do
+    local b = 15
+    if eng.degree ~= d then
+      local q = chords.QUALITIES[chords.diatonic_quality(ivals, d)]
+      if q.fifth == 6 then b = 3        -- dim7 / m7b5
+      elseif q.third == 3 then b = 6    -- m7 / mM7
+      else b = 8 end                    -- dom7 / M7 / +M7 / +7
+    end
+    self.g:set_led(d - 1, DEGREE_ROW, b)
+  end
+
+  -- quality row: with diatonic ON the derived quality glows as an indicator
+  -- and the DIA cell strobes; with it OFF the manual pick is full-bright.
+  if eng.diatonic then
+    local qi = chords.diatonic_quality(ivals, eng.degree)
+    for i = 1, 8 do
+      self.g:set_led(QUALITY_COL0 + i - 1, QUALITY_ROW, i == qi and 10 or 2)
+    end
+    self.g:set_led(DIA_COL, QUALITY_ROW, 15)
+    self.g:set_strobe(DIA_COL, QUALITY_ROW, 'slow')
+  else
+    for i = 1, 8 do
+      self.g:set_led(QUALITY_COL0 + i - 1, QUALITY_ROW, i == eng.quality and 15 or 4)
+    end
+    self.g:set_led(DIA_COL, QUALITY_ROW, 4)
+  end
+
+  -- root keyboard: highlights the single selected (global) tonic
+  local root = eng.root or 0
   for x, semi in pairs(KB_BLACK_COL) do
-    self.g:set_led(x, MASK_BLACK_ROW, contains(self.customMask, semi) and 12 or 3)
+    self.g:set_led(x, ROOT_BLACK_ROW, semi == root and 15 or 3)
   end
   for x, semi in pairs(KB_WHITE_COL) do
-    self.g:set_led(x, MASK_WHITE_ROW, contains(self.customMask, semi) and 12 or 3)
+    self.g:set_led(x, ROOT_WHITE_ROW, semi == root and 15 or 3)
   end
 
-  -- rows 2-5: two-octave root keyboard. Highlight the key for every targeted
-  -- channel's root: offset >= 0 -> upper octave (pitch class = offset); offset < 0
-  -- -> lower octave (pitch class = offset + 12).
-  local hiPc, loPc = {}, {}
-  for ch in pairs(self.rootTargets or {}) do
-    local r = self:chan(ch).root or 0
-    if r >= 0 then hiPc[r] = true else loPc[r + 12] = true end
+  -- inversion / voicing selectors
+  for i = 0, 3 do
+    self.g:set_led(INV_COL0 + i, INV_ROW, eng.inversion == i and 15 or 4)
+    self.g:set_led(VOI_COL0 + i, VOI_ROW, eng.voicing == i + 1 and 15 or 4)
   end
-  local function draw_oct(blackRow, whiteRow, sel)
-    for x, semi in pairs(KB_BLACK_COL) do
-      self.g:set_led(x, blackRow, sel[semi] and 15 or 3)
-    end
-    for x, semi in pairs(KB_WHITE_COL) do
-      self.g:set_led(x, whiteRow, sel[semi] and 15 or 3)
+
+  -- role matrix: rows 0..5 = ch1..6, cols 12..15 = R/3/5/7. The assigned role
+  -- strobes while its channel is running (the running-channel idiom).
+  for ch = 0, NUM_CHANNELS - 1 do
+    local role = self:chan(ch).role or 0
+    local running = eng:is_running(ch + 1)
+    for rk = 1, 4 do
+      self.g:set_led(ROLE_COL0 + rk - 1, ch, role == rk and 15 or 3)
+      if role == rk and running then
+        self.g:set_strobe(ROLE_COL0 + rk - 1, ch, 'slow')
+      end
     end
   end
-  draw_oct(ROOTHI_BLACK_ROW, ROOTHI_WHITE_ROW, hiPc)
-  draw_oct(ROOTLO_BLACK_ROW, ROOTLO_WHITE_ROW, loPc)
 end
 
 function GridUI:render_channel_row(ch)
@@ -1392,16 +1397,6 @@ end
 -- it gently 'pulse'-oscillates (smooth sine fade, driven by the strobe metro) as
 -- an onboarding cue inviting a first press.
 function GridUI:render_launch_block()
-  -- ROOT/scale page: the launch strip becomes channel selectors (which channel(s)
-  -- root edits target). Lit = targeted.
-  if self.picker and self.picker.kind == 'scale' then
-    for ch = 0, NUM_CHANNELS - 1 do
-      local x = LAUNCH_COL0 + ch
-      self.g:set_strobe(x, LAUNCH_ROW, 'off')
-      self.g:set_led(x, LAUNCH_ROW, (self.rootTargets and self.rootTargets[ch]) and 15 or 4)
-    end
-    return
-  end
   local action = self.actionMode
   local mark_running = action == 'randomize' or action == 'mutate'
   local onboarding = not self.hasLaunched
@@ -1630,7 +1625,7 @@ end
 
 function GridUI:current_page()
   if self.kbMode then return 'KB' end
-  if self.picker and self.picker.kind == 'scale' then return 'ROOT' end
+  if self.picker and self.picker.kind == 'scale' then return 'HARM' end
   if self.picker and self.picker.kind == 'step' then return 'PICK' end
   if self.picker and self.picker.kind == 'scalar' then
     -- the prob picker opens from the PROB page; every other scalar is a MIX cell
@@ -1686,7 +1681,9 @@ function GridUI:_status()
     s = 'edit ch' .. (self.picker.ch + 1) .. ' step ' .. self.picker.col .. ' ' ..
         pp .. (self.picker.layer == 'B' and 'B' or '') .. '=' .. tostring(v)
   elseif self.picker and self.picker.kind == 'scale' then
-    s = 'ROOT: 0-1 mask, 2-5 root oct, r7 ch-select'
+    local sym = chords.chord_symbol(self.engine:chord_ctx())
+    s = 'HARM ' .. chords.MODE_ABBRS[self.engine.mode] .. ' ' .. sym ..
+        ' — r0-1 mode r2 deg r3 qual r4-5 root/inv/voi c12-15 roles'
   else
     local pr = PAIR_OF[self.selectedParam]
     s = pr and ('edit ' .. pr[1] .. ' | ' .. pr[2])

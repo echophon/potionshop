@@ -3,12 +3,13 @@
 -- PSETs, MIDI mapping) and keeps them bidirectionally in sync with the grid
 -- and screen surfaces.
 --
--- Layout: a global block (scale mask — root is per-channel now),
+-- Layout: a global block (tuning + the harmonic context — mode / root / chord
+-- degree / chord quality / diatonic / inversion / voicing, see lib/chords.lua),
 -- the OUTPUTS group (lib/outputs.lua), plus one group per
 -- channel ("CHANNEL 1".."CHANNEL 6"). Each group holds the channel scalars
 -- (run, rate, quantize, root, env mode, geode, prob, alt trig, op seq trig, op env trig,
--- reset, channel level + per-op levels, clear/copy/paste + action triggers) and, per sequence
--- parameter x layer (div/reps/note/opEnv1..4/opRatio1..4 x A/B, where div/reps is
+-- chord role, reset, channel level + per-op levels, clear/copy/paste + action triggers) and,
+-- per sequence parameter x layer (div/reps/note/opEnv1..4/opRatio1..4 x A/B, where div/reps is
 -- A-only and the op envelopes + op ratios carry an A value + B index-offset layer),
 -- a 3-param block:
 --   chN_<p>_<a|b>        text — the whole sequence as a space-separated string
@@ -41,6 +42,8 @@
 
 local seqx   = require 'seqx'
 local GridUI = require 'grid_ui'
+local chords = require 'chords'
+local scales = require 'scales'  -- for the global tuning switch (scales.tuning)
 
 local SEQ_PARAMS = GridUI.PARAMS  -- div/reps/note/opEnv1..4/opRatio1..4
 local SPV        = GridUI.STEP_PICKER_VALUES
@@ -72,10 +75,6 @@ for i, v in ipairs(GridUI.PROB_VALUES) do
 end
 local ALT_TRIG_NAMES = GridUI.ALT_TRIG_MODE_NAMES
 local NOTE_NAMES = {'C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'}
--- pitch-class name -> semitone, accepting sharps, flats, case-insensitively.
-local NAME_TO_PC = {}
-for i, nm in ipairs(NOTE_NAMES) do NAME_TO_PC[string.lower(nm)] = i - 1 end
-for nm, pc in pairs({db = 1, eb = 3, gb = 6, ab = 8, bb = 10}) do NAME_TO_PC[nm] = pc end
 
 local function round(x) return math.floor(x + 0.5) end
 local function clamp(v, lo, hi) return math.max(lo, math.min(hi, v)) end
@@ -153,30 +152,6 @@ function M.parse_token(p, layer, tok)
   return SPV[p][GridUI.nearest_index(SPV[p], n)]
 end
 
--- keymask <-> text. The note mask is viewed/edited/stored like a sequence
--- string: a space-separated list of pitch-class names (c, c#, ...). Tokens
--- accept note names (sharp or flat) or bare semitone numbers; everything maps
--- to a pitch class 0..11, the same discrete set the grid's note-mask keyboard
--- reaches. mask_from_text dedups but preserves order; the controller's set_mask
--- sorts on commit (so the reflected text comes back canonical).
-function M.mask_to_text(mask)
-  local toks = {}
-  for _, s in ipairs(mask) do toks[#toks + 1] = NOTE_NAMES[(s % 12) + 1] end
-  return table.concat(toks, ' ')
-end
-
-function M.mask_from_text(str)
-  local out, seen = {}, {}
-  for tok in tostring(str or ''):gmatch('%S+') do
-    local pc
-    local n = tonumber(tok)
-    if n ~= nil then pc = math.floor(n) % 12
-    else pc = NAME_TO_PC[string.lower(tok)] end
-    if pc ~= nil and not seen[pc] then seen[pc] = true; out[#out + 1] = pc end
-  end
-  return out
-end
-
 function M.to_text(p, layer, vals)
   local toks = {}
   for i = 1, #vals do
@@ -204,29 +179,15 @@ end
 
 -- ---- construction --------------------------------------------------------
 
--- opts: {engine=Burst, controller=GridUI, params=<paramset>, scales=<scales>}
+-- opts: {engine=Burst, controller=GridUI, params=<paramset>}
 function M.new(opts)
   local self = setmetatable({}, M)
   self.engine = opts.engine
   self.controller = opts.controller
   self.params = opts.params
-  self.scales = opts.scales
   self.triggers_enabled = false  -- armed after the post-init params:bang()
   self.render_pending = false
   return self
-end
-
--- preset index whose intervals match `intervals` exactly, or nil (custom mask)
-function M:_scale_index(intervals)
-  for i, name in ipairs(self.scales.names) do
-    local ref = self.scales.by_name[name]
-    if #ref == #intervals then
-      local same = true
-      for k = 1, #ref do if ref[k] ~= intervals[k] then same = false; break end end
-      if same then return i end
-    end
-  end
-  return nil
 end
 
 -- ---- param definitions ----------------------------------------------------
@@ -246,33 +207,45 @@ function M:add_globals()
 
   params:add_separator('potionshop', 'POTIONSHOP')
 
-  params:add_option('scale', 'scale', self.scales.names, self:_scale_index(eng.scale) or 2)
-  params:set_action('scale', function(i)
-    local name = self.scales.names[i]
-    eng.scale = self.scales.by_name[name]
-    local controller = self.controller
-    controller.selectedScaleName = name
-    controller.customMask = {}
-    for _, v in ipairs(self.scales.by_name[name]) do
-      controller.customMask[#controller.customMask + 1] = v
-    end
-    self:reflect_globals()  -- keep the keymask text in step with the chosen scale
-    self:request_render()
-  end)
+  -- Tuning: just intonation (default) vs 12-TET. Drives scales.tuning, which the
+  -- note-lane and chord-tone frequency paths both funnel through (lib/scales.lua).
+  params:add_option('tuning', 'tuning', scales.TUNING_NAMES, scales.tuning)
+  params:set_action('tuning', function(i) scales.tuning = i; self:request_render() end)
 
-  -- (root is per-channel now — chN_root, added in the channel groups below.)
+  -- The global harmonic context (harmonàig model, lib/chords.lua): mode + root
+  -- place the scale; degree/quality/inversion/voicing resolve the chord that
+  -- role channels play. Every action routes through the controller's global
+  -- setters — the same single mutation paths the grid/screen use — so on_edit
+  -- reflection keeps all surfaces in step. All are MIDI-mappable, so a chord
+  -- progression can be driven externally (chord_degree especially).
+  local ctl = self.controller
 
-  -- the note mask, edited/stored as a sequence-like string of pitch-class names.
-  -- Commits through the controller's set_mask (the one set-the-whole-mask path),
-  -- so it behaves exactly like a grid note-mask edit; an empty/invalid string is
-  -- refused (a scale needs a degree) and the display restored.
-  params:add_text('keymask', 'key mask', M.mask_to_text(eng.scale))
-  params:set_action('keymask', function(str)
-    local mask = M.mask_from_text(str)
-    if #mask > 0 then self.controller:set_mask(mask)
-    else self:reflect_globals() end
-    self:request_render()
-  end)
+  params:add_option('mode', 'mode', chords.MODE_NAMES, eng.mode)
+  params:set_action('mode', function(i) ctl:set_mode(i); self:request_render() end)
+
+  -- Global harmonic root (harmonàig context). Per-channel tonic transpose is a
+  -- separate chN_root added in the channel groups below; the two compose.
+  params:add_option('root', 'root', NOTE_NAMES, (eng.root or 0) + 1)
+  params:set_action('root', function(i) ctl:set_root(i - 1); self:request_render() end)
+
+  params:add_option('chord_degree', 'chord degree', chords.DEGREE_NAMES, eng.degree)
+  params:set_action('chord_degree', function(i) ctl:set_degree(i); self:request_render() end)
+
+  -- keep_diatonic = true: unlike the grid/screen quality gesture, the param
+  -- action must not flip `diatonic` — params:bang()/params:default() replay
+  -- every action, and a side effect on another param's state would clobber it
+  -- (the `diatonic` toggle below is the params-surface way to go manual).
+  params:add_option('chord_quality', 'chord quality', chords.QUALITY_NAMES, eng.quality)
+  params:set_action('chord_quality', function(i) ctl:set_quality(i, true); self:request_render() end)
+
+  params:add_binary('diatonic', 'diatonic', 'toggle', eng.diatonic and 1 or 0)
+  params:set_action('diatonic', function(v) ctl:set_diatonic(v > 0); self:request_render() end)
+
+  params:add_option('inversion', 'inversion', chords.INVERSION_NAMES, eng.inversion + 1)
+  params:set_action('inversion', function(i) ctl:set_inversion(i - 1); self:request_render() end)
+
+  params:add_option('voicing', 'voicing', chords.VOICING_NAMES, eng.voicing)
+  params:set_action('voicing', function(i) ctl:set_voicing(i); self:request_render() end)
 
   -- quantize is per-channel now (chN_quantize, added in the channel loop below) —
   -- the old global 'quantize' param is gone.
@@ -371,6 +344,15 @@ function M:_add_channel_params(n)
     params:add_option(id('op_trig'), 'op seq trig', ALT_TRIG_NAMES, c.opSeqTrig + 1)
     params:set_action(id('op_trig'), function(i)
       c.opSeqTrig = i - 1
+      self:request_render()
+    end)
+  end)
+  -- chord-tone role: free = pitch from the note lane; root/3rd/5th/7th = pitch
+  -- from the global harmonic context's resolved chord (see lib/chords.lua)
+  def(1, function()
+    params:add_option(id('role'), 'chord role', chords.ROLE_NAMES, (c.role or 0) + 1)
+    params:set_action(id('role'), function(i)
+      ctl:set_scalar(n - 1, 'role', i - 1)
       self:request_render()
     end)
   end)
@@ -624,6 +606,7 @@ function M:reflect_scalars(n)
   params:set(id('alt_trig'), c.altTrig + 1, true)
   params:set(id('op_trig'), c.opSeqTrig + 1, true)
   params:set(id('openv_trig'), c.opEnvTrig + 1, true)
+  params:set(id('role'), (c.role or 0) + 1, true)
   params:set(id('reset'), GridUI.nearest_index(GridUI.RESET_INTERVALS, c.resetInterval), true)
   params:set(id('octave'), c.octave, true)
   params:set(id('level'), round(c.level * 31), true)
@@ -645,12 +628,24 @@ end
 
 function M:reflect_globals()
   local params = self.params
-  if params:lookup_param('keymask') then
-    params:set('keymask', M.mask_to_text(self.engine.scale), true)
+  local eng = self.engine
+  -- global harmonic root + tuning (guarded: tests build partial param sets).
+  -- algo/env_mode/geode are per-channel now — reflected in reflect_scalars.
+  if params:lookup_param('root') then
+    params:set('root', clamp((eng.root or 0) + 1, 1, 12), true)
   end
-  -- a custom note mask has no preset index; leave the option untouched then
-  local si = self:_scale_index(self.engine.scale)
-  if si then params:set('scale', si, true) end
+  if params:lookup_param('tuning') then
+    params:set('tuning', scales.tuning, true)
+  end
+  -- the harmonic context (harmonàig model, lib/chords.lua)
+  if params:lookup_param('mode') then
+    params:set('mode', clamp(eng.mode, 1, #chords.MODE_NAMES), true)
+    params:set('chord_degree', clamp(eng.degree, 1, 7), true)
+    params:set('chord_quality', clamp(eng.quality, 1, #chords.QUALITY_NAMES), true)
+    params:set('diatonic', eng.diatonic and 1 or 0, true)
+    params:set('inversion', clamp(eng.inversion + 1, 1, 4), true)
+    params:set('voicing', clamp(eng.voicing, 1, 4), true)
+  end
 end
 
 function M:reflect_all()

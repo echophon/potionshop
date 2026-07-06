@@ -26,6 +26,7 @@
 
 local quantize = require 'quantize'
 local scales   = require 'scales'
+local chords   = require 'chords'
 local seqx     = require 'seqx'
 
 local NUM_CHANNELS = 6
@@ -466,9 +467,10 @@ local function default_channel()
     -- macros; now per channel, edited on the PRISM page alongside quantize.
     envMode = 0,
     geodeMode = 1,
-    -- per-channel tonic transposition (ROOT/scale page), signed semitones -12..+11
+    -- per-channel tonic transposition (ROOT page), signed semitones -12..+11
     -- (0 = base tonic C1, no transpose). Spans the two-octave root keyboard; sums with
-    -- `octave` below at fire time. The scale MASK stays global (self.scale).
+    -- `octave` below at fire time and composes with the GLOBAL harmonic root
+    -- (self.root) as a tonic shift. The mode/harmonic context is global.
     root = 0,
     octave = 0,     -- -2..2, whole-octave pitch shift (perf page)
     altTrig = 0,    -- alt(B) note layering: 0=hold (add&hold) 1=step (per-hit)
@@ -484,6 +486,12 @@ local function default_channel()
     -- so the envelope shapes arpeggiate within a burst). Identical mechanism to
     -- opSeqTrig (walks B). (Was four per-op fields opEnv1..4Trig; collapsed.)
     opEnvTrig = 0,
+    -- chord-tone role: 0 = free (pitch from the note lane, today's behavior);
+    -- 1..4 = Root/3rd/5th/7th of the global harmonic context (chords.ROLE_NAMES).
+    -- While a role is active the note lane is unused but keeps advancing, so
+    -- flipping back to free resumes the melody where it would be. The per-channel
+    -- `root` above still applies as an additional tonic transpose either way.
+    role = 0,
   }
 end
 
@@ -491,8 +499,19 @@ function Burst.new()
   local self = setmetatable({}, Burst)
   self.launchGrid = 4   -- launches snap to the next quarter-note boundary
   -- (event snap grid is per-channel now: channels[ch].quantize, from QUANTIZE_VALUES)
-  self.scale = scales.by_name.major   -- GLOBAL scale mask (shared by all channels)
-  -- (root is per-channel now: channels[ch].root, a signed semitone transpose)
+  -- Harmonic context (harmonàig model, lib/chords.lua): mode + root place the
+  -- scale; degree/quality/inversion/voicing resolve the four-tone chord that
+  -- role channels (channels[ch].role > 0) draw their pitch from. Free channels
+  -- only use mode + root (their note lanes index mode degrees). The modal system
+  -- REPLACES the old global scale mask (scales.by_name) — modes live in chords.lua.
+  -- self.root is the GLOBAL harmonic root; each channel's c.root adds on top.
+  self.mode = 1         -- index into chords.MODES (1 = ionian)
+  self.root = 0         -- global tonic transposition in semitones (0..11; 0 = C)
+  self.degree = 1       -- chord degree I..VII
+  self.diatonic = true  -- quality derived from mode+degree (vs manual pick)
+  self.quality = 6      -- manual quality index (maj7), used when diatonic = false
+  self.inversion = 0    -- 0..3 = root/1st/2nd/3rd
+  self.voicing = 1      -- 1..4 = close/drop2/drop3/spread
   self.channels = {}
   self.running = {}
   self.clocks = {}      -- per-channel clock.run id (or nil)
@@ -517,6 +536,26 @@ end
 
 -- Kept for call-site compatibility; the clock model needs no setup.
 function Burst:setup() end
+
+-- ---- harmonic context ----------------------------------------------------
+
+function Burst:mode_intervals()
+  return chords.MODES[self.mode].intervals
+end
+
+function Burst:chord_ctx()
+  return { intervals = self:mode_intervals(), root = self.root,
+           degree = self.degree, diatonic = self.diatonic,
+           quality = self.quality, inversion = self.inversion,
+           voicing = self.voicing }
+end
+
+-- Chord-tone role (1..4 = R/3/5/7) -> Hz, pre-octave (fire applies 2^c.octave).
+-- `root` is the channel's additional tonic transpose (c.root), layered on the
+-- global harmonic root already baked into the chord tones (self.root, via ctx).
+function Burst:chord_freq(role, root)
+  return scales.semitone_to_freq(chords.chord_tones(self:chord_ctx())[role], root)
+end
 
 -- ---- event listeners ---------------------------------------------------
 
@@ -731,7 +770,16 @@ function Burst:run_burst(ch, token, target_in)
     local env2 = op_env(env2A, env2B)
     local env3 = op_env(env3A, env3B)
     local env4 = op_env(env4A, env4B)
-    local freq = scales.degree_to_freq(degreeA + degreeB, self.scale, c.root)
+    -- Role channels take their pitch from the harmonic context's chord tone; the
+    -- note lane was still drawn above so it keeps advancing. Free channels index
+    -- mode degrees. self.root (global harmonic root) + c.root (per-channel
+    -- transpose) compose as tonic shifts under the active tuning.
+    local freq
+    if c.role > 0 then
+      freq = self:chord_freq(c.role, c.root)
+    else
+      freq = scales.degree_to_freq(degreeA + degreeB, self:mode_intervals(), self.root + c.root)
+    end
 
     -- REST: reps <= 0 fires nothing but still consumes (1 - reps) div-steps of
     -- time so the rhythm holds. We drew all the sequins above (so they advance
@@ -768,14 +816,22 @@ function Burst:run_burst(ch, token, target_in)
       self:wait_until_beat(target, c.quantize)
       if self.tokens[ch] ~= token then return nil end
 
-      -- ALT-TRIG STEP MODE: when c.altTrig == 1 the alt (B) pitch layer
-      -- arpeggiates — advance the captured B note sequins per hit and re-sum
-      -- with the held degreeA. i == 0 already consumed the burst-start draw.
-      -- Advancing here (above the probHit skip) keeps the arpeggio locked to the
-      -- beat grid: a skipped hit still consumes a B value.
-      if c.altTrig == 1 and i > 0 then
+      -- ROLE CHANNELS re-resolve the chord tone EVERY hit: a degree/quality/
+      -- mode/inversion/voicing edit re-harmonizes on the very next hit even
+      -- mid-burst (harmonàig behavior), with no extra plumbing. Deliberately
+      -- an elseif: a role channel does not advance noteB per hit — its lane
+      -- data stays untouched-and-unused while the role is active.
+      --
+      -- ALT-TRIG STEP MODE (free channels): when c.altTrig == 1 the alt (B)
+      -- pitch layer arpeggiates — advance the captured B note sequins per hit
+      -- and re-sum with the held degreeA. i == 0 already consumed the
+      -- burst-start draw. Advancing here (above the probHit skip) keeps the
+      -- arpeggio locked to the beat grid: a skipped hit still consumes a B value.
+      if c.role > 0 then
+        freq = self:chord_freq(c.role, c.root)
+      elseif c.altTrig == 1 and i > 0 then
         degreeB = note_seqB()
-        freq = scales.degree_to_freq(degreeA + degreeB, self.scale, c.root)
+        freq = scales.degree_to_freq(degreeA + degreeB, self:mode_intervals(), self.root + c.root)
       end
 
       -- OP-RATIO STEP MODE: when opSeqTrig == 1 every op's B (offset) lane

@@ -33,12 +33,13 @@
 -- channel's mode fields — the same fields the grid's perfMode/probMode presses set,
 -- picking only from GridUI's shared value tables; `perf` line 1 is the channel's
 -- launch/stop (`run`), and the page also carries the per-channel quantize + env mode +
--- geode (the grid keeps those on its own PRISM page). `scale` edits the focused
--- channel's root (per-channel) plus the global key mask that the grid's ROOT/scale page
--- drives — its E2 cursor walks root and the twelve chromatic keys, and E3 sets/toggles
--- via the controller's set_root (per-channel) / set_mask (global).
+-- geode (the grid keeps those on its own PRISM page). `scale` is the HARMONY page:
+-- the global harmonic context the grid's harmony picker drives (mode, root, chord
+-- degree, diatonic/quality, inversion, voicing — lib/chords.lua) plus the six channel
+-- roles; its E2 cursor walks those 13 lines and E3 edits via the controller's global
+-- setters / set_scalar('role'). (Tuning — just vs 12-TET — is a PARAMETERS-menu global.)
 -- The grid's PERF/PROB/SCALE/PRISM buttons switch the matching pages (SCALE opens the
--- shared scale picker; the grid PRISM page maps to the screen's perf tab), and a grid
+-- shared harmony picker; the grid PRISM page maps to the screen's perf tab), and a grid
 -- param-page button (note/opRatio/div/opEnv) switches the matching screen sequence page
 -- — the two surfaces always agree on which param is showing (via selectedParam).
 --
@@ -48,6 +49,7 @@
 
 local seqx   = require 'seqx'
 local GridUI = require 'grid_ui'
+local chords = require 'chords'
 
 local SEQ_LEN = GridUI.SEQ_LEN  -- max steps per sequence (shared cap with the grid)
 -- One SEQUENCE page per grid param page, in the grid's row-6-then-row-7 reading order
@@ -73,9 +75,9 @@ local PAGE_PERF, PAGE_PROB, PAGE_SCALE, PAGE_MIX =
 -- PERF = run + reset/oct/rate/quantize/env mode/geode = 7 (the grid splits
 -- quantize+env+geode onto its PRISM page). prob = prob/mode + note/op-seq/op-env
 -- trig = 5 (the op trigs are ONE switch each for all four B lanes).
--- scale = root + 12 chromatic keys = 13. mix = algo + mod
--- index + 4 op levels + fm fb + filter + pan + channel level = 10 (all four
--- op ratios are sequenced, edited on the seq pages).
+-- scale = the HARMONY page: mode/root/degree/diatonic/quality/inversion/voicing +
+-- 6 channel roles = 13. mix = algo + mod index + 4 op levels + fm fb + filter +
+-- pan + channel level = 10 (all four op ratios are sequenced, edited on seq pages).
 local LINES_PER_PAGE = {}
 for i = 1, NUM_SEQ do LINES_PER_PAGE[i] = 6 end  -- unused for seq pages; kept for clamps
 LINES_PER_PAGE[PAGE_PERF]  = 7
@@ -306,7 +308,7 @@ function Screen:set_page(p)
   c.probMode  = (self.page == PAGE_PROB)
   c.mixMode   = (self.page == PAGE_MIX)
   -- the scale page shares the grid's scale picker, so the grid follows the
-  -- screen onto it (and the keymask/root/quantize stay one source of truth)
+  -- screen onto it (so the harmonic context stays one source of truth)
   if self.page == PAGE_SCALE then
     if not (c.picker and c.picker.kind == 'scale') then c:open_scale_picker() end
   else
@@ -389,33 +391,38 @@ function Screen:_edit_value(d)
   self.ctl:render_all()
 end
 
--- Scale page cursor: line 1 = root (the selected channel's tonic transpose,
--- -12..+11 semitones), lines 2..13 = the twelve chromatic keys (pitch class =
--- line - 2). E3 raises/lowers the root of the selected channel; on a key, right adds
--- it to the (global) mask, left removes it. Root routes through the controller's
--- per-channel set_root; the mask through set_mask (global). (quantize is on the perf
--- page, not here.)
+-- Harmony page cursor: lines 1..7 = mode/root/degree/diatonic/quality/
+-- inversion/voicing, lines 8..13 = ch1..ch6 chord-tone role. All edits route
+-- through the controller's global setters (or set_scalar for roles) so on_edit
+-- reflects them into the params. The quality line steps FROM the currently
+-- sounding quality (the diatonic one when DIA is on) and, via set_quality,
+-- takes manual control — the harmonàig knob-touch gesture; the dia line's
+-- right=on / left=off restores the modal harmonization.
 function Screen:_edit_scale(d)
   local c = self.ctl
+  local eng = self.engine
   local line = self.sel_line[PAGE_SCALE]
   if line == 1 then
-    local cur = self.engine.channels[self.sel_ch + 1].root or 0
-    c:set_root(self.sel_ch, clamp(cur + d, -12, 11))
+    c:set_mode(clamp(eng.mode + d, 1, #chords.MODES))
+  elseif line == 2 then
+    c:set_root(((eng.root or 0) + d) % 12)
+  elseif line == 3 then
+    c:set_degree(clamp(eng.degree + d, 1, 7))
+  elseif line == 4 then
+    c:set_diatonic(d > 0)
+  elseif line == 5 then
+    local cur = eng.diatonic
+      and chords.diatonic_quality(chords.MODES[eng.mode].intervals, eng.degree)
+      or eng.quality
+    c:set_quality(clamp(cur + d, 1, #chords.QUALITIES))
+  elseif line == 6 then
+    c:set_inversion(clamp(eng.inversion + d, 0, 3))
+  elseif line == 7 then
+    c:set_voicing(clamp(eng.voicing + d, 1, 4))
   else
-    local pc = line - 2
-    local cur, has = {}, false
-    for _, s in ipairs(self.engine.scale) do
-      cur[#cur + 1] = s % 12
-      if s % 12 == pc then has = true end
-    end
-    if d > 0 and not has then
-      cur[#cur + 1] = pc
-      c:set_mask(cur)
-    elseif d < 0 and has then
-      local nxt = {}
-      for _, s in ipairs(cur) do if s ~= pc then nxt[#nxt + 1] = s end end
-      c:set_mask(nxt)  -- set_mask refuses to empty the scale (keeps the last degree)
-    end
+    local ch = line - 8  -- 0-based channel
+    local role = eng.channels[ch + 1].role or 0
+    c:set_scalar(ch, 'role', clamp(role + d, 0, #chords.ROLE_NAMES - 1))
   end
 end
 
@@ -686,7 +693,24 @@ function Screen:page_lines()
     return lines
   end
   local lines
-  if self.page == PAGE_MIX then
+  if self.page == PAGE_SCALE then
+    local eng = self.engine
+    local qi = eng.diatonic
+      and chords.diatonic_quality(chords.MODES[eng.mode].intervals, eng.degree)
+      or eng.quality
+    lines = {
+      {'mode',  chords.MODES[eng.mode].name},
+      {'root',  NOTE_NAMES[(eng.root or 0) % 12 + 1]},
+      {'deg',   chords.DEGREE_NAMES[eng.degree]},
+      {'dia',   eng.diatonic and 'on' or 'off'},
+      {'qual',  chords.QUALITIES[qi].short},
+      {'inv',   chords.INVERSION_NAMES[eng.inversion + 1]},
+      {'voice', chords.VOICING_NAMES[eng.voicing]},
+    }
+    for ch = 1, 6 do
+      lines[7 + ch] = {'ch' .. ch, chords.ROLE_NAMES[(eng.channels[ch].role or 0) + 1]}
+    end
+  elseif self.page == PAGE_MIX then
     -- signal-flow order: FM algorithm + mod index, the four static op levels, FM
     -- feedback, then the output stage: DJ filter, pan + channel level/volume. All
     -- four op ratios are sequenced (shown/edited on the per-param seq pages),
@@ -826,36 +850,31 @@ function Screen:_draw_mini_kb(yb, lit, cursor_pc)
   end
 end
 
--- Scale page: shown while the grid's ROOT/scale page is open. Displays — and, via
--- E2/E3, edits — the SELECTED channel's root (per-channel tonic, pitch class on the
--- keyboard + octave in the label) and the global key mask (a membership keyboard).
--- The E2 cursor ticks above the focused key dot, or underlines the root label.
--- (quantize moved to the per-channel perf page.)
-function Screen:draw_scale_lines()
-  local rootOffset = self.engine.channels[self.sel_ch + 1].root or 0  -- -12..+11
-  local root = rootOffset % 12                                        -- pitch class
-  local rootOct = math.floor(rootOffset / 12)                         -- -1 / 0
+-- Harmony page left column: shown while the grid's harmony picker is open.
+-- A root keyboard (single selection, cursor tick when the root line is
+-- focused) above a live chord readout — the symbol (e.g. 'V7') and the four
+-- voiced tones as note names, i.e. exactly what the role channels will play.
+-- The 13 context lines render on the right via the shared draw_lines window.
+function Screen:draw_harmony_left()
+  local eng = self.engine
+  local root = (eng.root or 0) % 12
   local cursor = self.sel_line[PAGE_SCALE]
-  local on = {}
-  for _, s in ipairs(self.engine.scale) do on[s % 12] = true end
 
-  local LABEL_X = KB_X0 + 7 * KB_PITCH + 6   -- to the right of the keyboards
-  local function label(y, focus, str)
-    screen.level(focus and 15 or 4)
-    screen.move(LABEL_X, y)
-    screen.text(str)
-    if focus then screen.rect(LABEL_X, y + 2, screen.text_extents(str), 1); screen.fill() end
+  self:_draw_mini_kb(15, function(pc) return pc == root end, (cursor == 2) and root or nil)
+
+  local ctx = eng:chord_ctx()
+  local tones = chords.chord_tones(ctx)
+  screen.level(15)
+  screen.move(KB_X0, 31)
+  screen.text(chords.chord_symbol(ctx))
+  local names = {}
+  for _, t in ipairs(tones) do
+    local n = 24 + t  -- MIDI note (chords tones are semitones above C1 = 24)
+    names[#names + 1] = NOTE_NAMES[(n % 12) + 1] .. (math.floor(n / 12) - 1)
   end
-
-  -- root keyboard (per-channel tonic, pitch class shown; octave in the label) +
-  -- key-mask keyboard (global membership)
-  self:_draw_mini_kb(15, function(pc) return pc == root end, (cursor == 1) and root or nil)
-  local octLabel = (rootOct == 0) and '' or ('' .. rootOct)   -- '' or '-1'
-  label(19, cursor == 1, 'root ' .. NOTE_NAMES[root + 1] .. octLabel)
-
-  self:_draw_mini_kb(31, function(pc) return on[pc] end,
-    (cursor >= 2 and cursor <= 13) and (cursor - 2) or nil)
-  label(35, false, 'keys')
+  screen.level(4)
+  screen.move(KB_X0, 39)
+  screen.text(table.concat(names, ' '))
 end
 
 function Screen:draw_status()
@@ -876,9 +895,11 @@ function Screen:redraw()
   self:draw_header()
   local c = self.ctl
   if c.picker and c.picker.kind == 'scale' then
-    -- scale picker open: the grid owns a global-musical gesture, so the screen
-    -- shows the scale page (root/keymask/quantize) instead of the stale seq page
-    self:draw_scale_lines()
+    -- harmony picker open: the grid owns a global-musical gesture, so the
+    -- screen shows the harmony page (context lines + chord readout) instead of
+    -- the stale seq page
+    self:draw_harmony_left()
+    self:draw_lines()
     self:draw_status()
   else
     self:draw_channel_column()

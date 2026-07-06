@@ -22,7 +22,7 @@ package.path = _dir .. 'lib/?.lua;' .. package.path
 -- require() caches in package.loaded, and a norns script RELOAD does not clear
 -- it (only a full matron restart does). Drop our own modules from the cache so
 -- editing a lib/ file and reloading the script actually picks up the change.
-for _, m in ipairs({'burst', 'grid_ui', 'screen_ui', 'scales', 'seqx', 'quantize', 'params_sync', 'outputs'}) do
+for _, m in ipairs({'burst', 'grid_ui', 'screen_ui', 'scales', 'chords', 'seqx', 'quantize', 'params_sync', 'outputs'}) do
   package.loaded[m] = nil
 end
 
@@ -31,7 +31,6 @@ local GridUI     = require 'grid_ui'
 local ScreenUI   = require 'screen_ui'
 local ParamsSync = require 'params_sync'
 local Outputs    = require 'outputs'
-local scales     = require 'scales'
 
 local eng        -- Burst engine
 local controller -- GridUI
@@ -114,7 +113,7 @@ function init()
   -- kept bidirectionally in sync with the grid/screen. Defaults are captured
   -- from the engine state seeded above, so the bang re-applies the boot
   -- randomization rather than clobbering it; triggers arm only after the bang.
-  psync = ParamsSync.new{engine = eng, controller = controller, params = params, scales = scales}
+  psync = ParamsSync.new{engine = eng, controller = controller, params = params}
 
   -- output routing (lib/outputs.lua): per-channel midi / crow / i2c
   -- destinations, params-only (OUTPUTS group, placed between the globals
