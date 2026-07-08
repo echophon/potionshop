@@ -869,12 +869,16 @@ function Screen:draw_harmony_left()
   screen.text(chords.chord_symbol(ctx))
   local names = {}
   for _, t in ipairs(tones) do
-    local n = 24 + t  -- MIDI note (chords tones are semitones above C1 = 24)
+    local n = 24 + 12 * chords.CHORD_OCTAVE + t  -- MIDI note: C1 (24) + register lift + tone
     names[#names + 1] = NOTE_NAMES[(n % 12) + 1] .. (math.floor(n / 12) - 1)
   end
+  -- Four voiced tones over two lines (R/3rd, then 5th/7th) so the names don't
+  -- run into the right-hand context column.
   screen.level(4)
   screen.move(KB_X0, 39)
-  screen.text(table.concat(names, ' '))
+  screen.text(names[1] .. ' ' .. names[2])
+  screen.move(KB_X0, 47)
+  screen.text(names[3] .. ' ' .. names[4])
 end
 
 function Screen:draw_status()

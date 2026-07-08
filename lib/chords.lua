@@ -17,6 +17,14 @@ local scales = require 'scales'
 
 local chords = {}
 
+-- Register lift for voiced chords. `chord_tones` stays pure (semitones above C1,
+-- as the tests pin it), but the harmonàig outputs sit an octave floor that low
+-- lands chord (role) channels in sub-bass. Consumers that actually SOUND a chord
+-- (Burst:chord_freq for audio, the screen note-name readout) add this whole-octave
+-- lift so role channels sit in the same mid register the free note-lane reaches.
+-- 0 = raw C1 base (old behavior), 1 = low-mid, 2 = mid. Tune to taste.
+chords.CHORD_OCTAVE = 2
+
 -- ---- modal scales --------------------------------------------------------
 -- 14 modes: the 7 rotations of the major (Ionian) scale plus the 7 rotations
 -- of the harmonic minor scale, in harmonàig order. Rotation r starts the base

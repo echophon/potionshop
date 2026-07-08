@@ -753,8 +753,12 @@ function GridUI:handle_picker_press(x, y)
   if p.kind == 'scale' then
     if y < 6 then self:apply_picker_value(p, x, y); return end
     if y == 6 and x == ROW6_SCALE_COL then self:close_picker(); return end
-    -- any other control-row press exits the harmony page, then acts normally
-    -- (e.g. the launch strip launches/stops its channel).
+    -- the launch strip (row 7) stays drawn under the harmony page: launching or
+    -- stopping a channel acts in place without leaving the page, so you can audition
+    -- channels while dialing the chord.
+    local lc = launch_channel_at(x, y)
+    if lc ~= nil then self:handle_channel_button(lc); return end
+    -- any other control-row press exits the harmony page, then acts normally.
     self:close_picker()
     self:handle_normal_press(x, y)
     return

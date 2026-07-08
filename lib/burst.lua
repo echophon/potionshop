@@ -554,7 +554,10 @@ end
 -- `root` is the channel's additional tonic transpose (c.root), layered on the
 -- global harmonic root already baked into the chord tones (self.root, via ctx).
 function Burst:chord_freq(role, root)
-  return scales.semitone_to_freq(chords.chord_tones(self:chord_ctx())[role], root)
+  -- chords.CHORD_OCTAVE lifts the C1-anchored chord tones into a mid register
+  -- (see chords.lua). Kept out of chord_tones so the pure-math contract holds.
+  local tone = chords.chord_tones(self:chord_ctx())[role] + 12 * chords.CHORD_OCTAVE
+  return scales.semitone_to_freq(tone, root)
 end
 
 -- ---- event listeners ---------------------------------------------------

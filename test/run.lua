@@ -429,20 +429,23 @@ local function role_fire(setup)
   clock._run_until(4)
   return f, e
 end
+-- role channels sound at the CHORD_OCTAVE register lift (chords.lua) above the
+-- C1-anchored chord tone; fold that lift into every expected role frequency.
+local LIFT = 12 * chords.CHORD_OCTAVE
 local rf = role_fire(function(e) e.channels[1].role = 1; e.degree = 5 end)
 -- ionian degree V root = semitone 7
 check('role R fires the chord root of degree V',
-  #rf == 1 and approx(rf[1], scales.semitone_to_freq(7)))
+  #rf == 1 and approx(rf[1], scales.semitone_to_freq(7 + LIFT)))
 rf = role_fire(function(e) e.channels[1].role = 4; e.degree = 1 end)
 check('role 7th fires the seventh (Imaj7 -> 11 st)',
-  approx(rf[1], scales.semitone_to_freq(11)))
+  approx(rf[1], scales.semitone_to_freq(11 + LIFT)))
 rf = role_fire(function(e)
   e.channels[1].role = 2; e.degree = 1; e.diatonic = false; e.quality = 8
 end)
 check('manual quality feeds role tones (+7 third = 4 st)',
-  approx(rf[1], scales.semitone_to_freq(4)))
+  approx(rf[1], scales.semitone_to_freq(4 + LIFT)))
 rf = role_fire(function(e) e.channels[1].role = 1; e.channels[1].octave = 1 end)
-check('octave still doubles a role channel', approx(rf[1], 2 * scales.semitone_to_freq(0)))
+check('octave still doubles a role channel', approx(rf[1], 2 * scales.semitone_to_freq(LIFT)))
 
 -- mid-burst re-harmonization: 3 hits, change degree after the first fire.
 clock._reset()
@@ -461,9 +464,9 @@ erh.channels[1].role = 1
 erh:launch(1)
 clock._run_until(4)
 check('degree change re-harmonizes mid-burst on the next hit',
-  #rhf == 3 and approx(rhf[1], scales.semitone_to_freq(0))
-  and approx(rhf[2], scales.semitone_to_freq(5))
-  and approx(rhf[3], scales.semitone_to_freq(5)))
+  #rhf == 3 and approx(rhf[1], scales.semitone_to_freq(0 + LIFT))
+  and approx(rhf[2], scales.semitone_to_freq(5 + LIFT))
+  and approx(rhf[3], scales.semitone_to_freq(5 + LIFT)))
 
 -- the note lane still advances while a role is active
 local _, elane = role_fire(function(e)
