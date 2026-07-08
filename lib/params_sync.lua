@@ -92,6 +92,28 @@ local SHAPE_INDEX = {}
 for i, nm in ipairs(SHAPE_NAMES) do SHAPE_INDEX[string.lower(nm)] = i end
 local function is_shape(p) return p:match('^opEnv') ~= nil end
 
+-- chord PROGRESSION text <-> value list. Degrees display as roman numerals
+-- (chords.DEGREE_NAMES, matching the harmony surface) and parse from either
+-- roman (case-insensitive) or arabic 1..7; out-of-range/garbage tokens drop.
+local DEGREE_INDEX = {}
+for i, nm in ipairs(chords.DEGREE_NAMES) do DEGREE_INDEX[string.upper(nm)] = i end
+local function prog_to_text(vals)
+  local toks = {}
+  for i = 1, #vals do toks[i] = chords.DEGREE_NAMES[vals[i]] or tostring(vals[i]) end
+  return table.concat(toks, ' ')
+end
+local function prog_from_text(str)
+  local out = {}
+  for tok in str:gmatch('%S+') do
+    local d = DEGREE_INDEX[string.upper(tok)] or tonumber(tok)
+    if d and d >= 1 and d <= 7 then out[#out + 1] = math.floor(d) end
+  end
+  return out
+end
+-- bars-per-chord-step option (mirrors the HARM strip's musical intent)
+local PROG_BARS_VALUES = {1, 2, 4}
+local PROG_BARS_NAMES  = {'1 bar', '2 bars', '4 bars'}
+
 local M = {}
 M.__index = M
 M.MAX_STEPS = MAX_STEPS
@@ -246,6 +268,23 @@ function M:add_globals()
 
   params:add_option('voicing', 'voicing', chords.VOICING_NAMES, eng.voicing)
   params:set_action('voicing', function(i) ctl:set_voicing(i); self:request_render() end)
+
+  -- Bar-clocked chord PROGRESSION (lib/burst.lua): a list of degrees stepped
+  -- once every prog_bars bars while running, each step writing chord_degree.
+  -- All three route through the controller's single mutation paths so on_edit
+  -- reflection keeps the grid strip + screen in step, and all are MIDI-mappable
+  -- (prog run especially — a footswitch that starts the changes).
+  params:add_text('prog', 'progression', prog_to_text(seqx.values(eng.prog)))
+  params:set_action('prog', function(str) ctl:set_prog(prog_from_text(str)); self:request_render() end)
+
+  params:add_binary('prog_run', 'progression run', 'toggle', eng.progOn and 1 or 0)
+  params:set_action('prog_run', function(v) ctl:set_prog_on(v > 0); self:request_render() end)
+
+  params:add_option('prog_bars', 'prog bars/step', PROG_BARS_NAMES,
+    GridUI.nearest_index(PROG_BARS_VALUES, eng.progBars))
+  params:set_action('prog_bars', function(i)
+    ctl:set_prog_bars(PROG_BARS_VALUES[i]); self:request_render()
+  end)
 
   -- quantize is per-channel now (chN_quantize, added in the channel loop below) —
   -- the old global 'quantize' param is gone.
@@ -648,6 +687,13 @@ function M:reflect_globals()
     params:set('diatonic', eng.diatonic and 1 or 0, true)
     params:set('inversion', clamp(eng.inversion + 1, 1, 4), true)
     params:set('voicing', clamp(eng.voicing, 1, 4), true)
+  end
+  -- chord progression (bar clock). set silently so the reflection never re-fires
+  -- the action (which would restart the clock).
+  if params:lookup_param('prog') then
+    params:set('prog', prog_to_text(seqx.values(eng.prog)), true)
+    params:set('prog_run', eng.progOn and 1 or 0, true)
+    params:set('prog_bars', GridUI.nearest_index(PROG_BARS_VALUES, eng.progBars), true)
   end
 end
 

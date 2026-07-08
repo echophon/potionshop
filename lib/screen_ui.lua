@@ -82,7 +82,7 @@ local LINES_PER_PAGE = {}
 for i = 1, NUM_SEQ do LINES_PER_PAGE[i] = 6 end  -- unused for seq pages; kept for clamps
 LINES_PER_PAGE[PAGE_PERF]  = 7
 LINES_PER_PAGE[PAGE_PROB]  = 5
-LINES_PER_PAGE[PAGE_SCALE] = 13
+LINES_PER_PAGE[PAGE_SCALE] = 15  -- 7 context + prog run + bars + 6 channel roles
 LINES_PER_PAGE[PAGE_MIX]   = 10
 
 local NOTE_NAMES = {'c','c#','d','d#','e','f','f#','g','g#','a','a#','b'}
@@ -161,7 +161,7 @@ function Screen.new(engine, controller)
       h[#h + 1] = { t = now(), a = ev.level or 0 }
       if #h > HIST_CAP then table.remove(h, 1) end
       self.dirty = true
-    elseif ev.type == 'launch' or ev.type == 'stop' then
+    elseif ev.type == 'launch' or ev.type == 'stop' or ev.type == 'prog' then
       self.dirty = true
     end
   end)
@@ -426,8 +426,14 @@ function Screen:_edit_scale(d)
     c:set_inversion(clamp(eng.inversion + d, 0, 3))
   elseif line == 7 then
     c:set_voicing(clamp(eng.voicing + d, 1, 4))
+  elseif line == 8 then
+    c:set_prog_on(d > 0)  -- right = run, left = stop
+  elseif line == 9 then
+    local bars = {1, 2, 4}  -- step the discrete set (mirrors PROG_BARS_VALUES)
+    local idx = nearest_index(bars, eng.progBars) + (d > 0 and 1 or -1)
+    c:set_prog_bars(bars[clamp(idx, 1, #bars)])
   else
-    local ch = line - 8  -- 0-based channel
+    local ch = line - 10  -- 0-based channel (roles shifted below prog run + bars)
     local role = eng.channels[ch + 1].role or 0
     c:set_scalar(ch, 'role', clamp(role + d, 0, #chords.ROLE_NAMES - 1))
   end
@@ -716,9 +722,13 @@ function Screen:page_lines()
       {'qual',  chords.QUALITIES[qi].short},
       {'inv',   chords.INVERSION_NAMES[eng.inversion + 1]},
       {'voice', chords.VOICING_NAMES[eng.voicing]},
+      -- bar-clocked progression: run toggle + bars-per-step (the degree list is
+      -- read/edited on the grid HARM strip; shown in the left column readout)
+      {'prog',  eng.progOn and 'run' or 'off'},
+      {'bars',  tostring(eng.progBars)},
     }
     for ch = 1, 6 do
-      lines[7 + ch] = {'ch' .. ch, chords.ROLE_NAMES[(eng.channels[ch].role or 0) + 1]}
+      lines[9 + ch] = {'ch' .. ch, chords.ROLE_NAMES[(eng.channels[ch].role or 0) + 1]}
     end
   elseif self.page == PAGE_MIX then
     -- signal-flow order: FM algorithm + mod index, the four static op levels, FM
@@ -889,6 +899,23 @@ function Screen:draw_harmony_left()
   screen.text(names[1] .. ' ' .. names[2])
   screen.move(KB_X0, 47)
   screen.text(names[3] .. ' ' .. names[4])
+
+  -- progression readout: the degree list (roman), current step bracketed while
+  -- the bar clock runs — a one-string draw (the bracket marks position without
+  -- per-token brightness juggling). Dim when stopped, brighter while running.
+  local pvals = seqx.values(eng.prog)
+  if #pvals > 0 then
+    local ph = seqx.playhead(eng.prog)
+    local parts = {}
+    for i = 1, math.min(#pvals, 8) do
+      local r = chords.DEGREE_NAMES[pvals[i]] or '?'
+      if eng.progOn and (i - 1) == ph then r = '[' .. r .. ']' end
+      parts[#parts + 1] = r
+    end
+    screen.level(eng.progOn and 8 or 3)
+    screen.move(KB_X0, 55)
+    screen.text(table.concat(parts, ' '))
+  end
 end
 
 function Screen:draw_status()

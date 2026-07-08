@@ -71,7 +71,11 @@
 --                 manual); rows 4-5 cols 0-6 GLOBAL root keyboard (compact piano:
 --                 white keys packed at cols 0-6, black keys offset above); row 4
 --                 cols 8-11 inversion root/1st/2nd/3rd; row 5 cols 8-11 voicing
---                 close/drop2/drop3/spread; cols 12-15 on rows 0-5 = per-channel
+--                 close/drop2/drop3/spread; col 7 rows 0/1 = progression ON /
+--                 REC toggles, rows 0-1 cols 8-11 = the 8-step bar-clocked chord
+--                 PROGRESSION strip (2x4; ON runs the bar clock, REC retypes it
+--                 via the degree row, a step press jumps the walk there);
+--                 cols 12-15 on rows 0-5 = per-channel
 --                 role R/3/5/7 (re-press the lit role to free the channel).
 --                 A role channel's NOTE page edits its OWN 'stack' sequences —
 --                 signed CHORD-STACK offsets from its role tone (0 = the tone;
@@ -205,6 +209,15 @@ local ROOT_BLACK_ROW, ROOT_WHITE_ROW = 4, 5  -- compact piano (global root), col
 local INV_ROW, INV_COL0 = 4, 8       -- inversion 0..3 on cols 8..11
 local VOI_ROW, VOI_COL0 = 5, 8       -- voicing 1..4 on cols 8..11
 local ROLE_COL0 = 12                 -- rows 0..5 = ch1..6, cols 12..15 = R/3/5/7
+-- Bar-clocked chord PROGRESSION strip: an 8-step degree sequence laid out 2x4
+-- on the HARM page's free block (rows 0-1, cols 8-11; reads as two bars of 4),
+-- with a run toggle + a record toggle on col 7. ON runs the bar clock
+-- (Burst:set_prog_on); REC retypes the progression by tapping the degree row
+-- (row 2), auto-committing at PROG_LEN. A strip step press jumps the walk there.
+local PROG_LEN = 8                   -- mirrors Burst.PROG_LEN — keep in sync
+local PROG_ROW0, PROG_COL0, PROG_W = 0, 8, 4
+local PROG_ON_COL,  PROG_ON_ROW  = 7, 0
+local PROG_REC_COL, PROG_REC_ROW = 7, 1
 local RESET_INTERVALS = {0, 1, 2, 4}
 local RESET_COLS      = {0, 1, 2, 3}
 local OCTAVE_VALUES = {-2, -1, 0, 1, 2}
@@ -590,6 +603,8 @@ function GridUI.new(engine, grid, opts)
   self.prismMode = false         -- PRISM page: per-channel quantize + env mode + geode
   self.mixMode = false          -- MIX page: per-channel channel level + op level statics
   self.actionMode = nil        -- 'randomize'|'mutate'|'clear'|'copy'|'paste'|nil
+  self.progRec = false         -- HARM progression strip: retyping degrees into a buffer
+  self.progRecBuffer = {}      -- degrees collected while progRec (committed via set_prog)
   self.clipboard = nil         -- {param = {vals...}} snapshot of a channel's A layer
   self.status = ''
   -- onboarding: idle launch buttons breathe until the FIRST channel ever starts,
@@ -846,10 +861,24 @@ function GridUI:apply_picker_value(p, x, y)
       -- re-pressing the lit role releases the channel back to free (the same
       -- re-press idiom as the launch buttons), so no fifth column is needed.
       self:set_scalar(y, 'role', (cur == rk) and 0 or rk)
+    elseif x == PROG_ON_COL and y == PROG_ON_ROW then
+      self:set_prog_on(not self.engine.progOn)
+    elseif x == PROG_REC_COL and y == PROG_REC_ROW then
+      self:toggle_prog_rec()
+    elseif y <= PROG_ROW0 + 1 and x >= PROG_COL0 and x < PROG_COL0 + PROG_W then
+      -- strip step press: jump the walk there (audition when stopped). Ignored
+      -- while recording — the strip is showing the buffer being retyped.
+      if not self.progRec then
+        self.engine:prog_jump((y - PROG_ROW0) * PROG_W + (x - PROG_COL0))
+        self.on_edit{ type = 'global' }
+      end
     elseif (y == MODE_ROW_A or y == MODE_ROW_B) and x <= 6 then
       self:set_mode((y == MODE_ROW_B and 7 or 0) + x + 1)
     elseif y == DEGREE_ROW and x <= 6 then
-      self:set_degree(x + 1)
+      -- while recording, the degree row RETYPES the progression; else it's the
+      -- single-degree selector.
+      if self.progRec then self:prog_rec_tap(x + 1)
+      else self:set_degree(x + 1) end
     elseif y == QUALITY_ROW and x == DIA_COL then
       self:set_diatonic(not self.engine.diatonic)
     elseif y == QUALITY_ROW and x >= QUALITY_COL0 and x < QUALITY_COL0 + 8 then
@@ -913,6 +942,51 @@ function GridUI:set_voicing(v)
   self.on_edit{ type = 'global' }
 end
 
+-- ---- chord progression (HARM strip) ------------------------------------
+-- The single mutation paths for the progression, mirroring the harmonic-context
+-- setters: grid, screen, and param actions all route through here so on_edit
+-- {global} reflection keeps the params + screen in step (see params_sync).
+
+function GridUI:set_prog(list)
+  self.engine:set_prog(list)
+  self.on_edit{ type = 'global' }
+end
+
+function GridUI:set_prog_on(on)
+  self.engine:set_prog_on(on)
+  self.on_edit{ type = 'global' }
+end
+
+function GridUI:set_prog_bars(bars)
+  self.engine.progBars = clamp(round(bars), 1, 4)
+  self.on_edit{ type = 'global' }
+end
+
+-- REC toggle: arm to retype the progression by tapping the degree row; disarm
+-- commits the buffer (empty = cancel, leave the progression as it was).
+function GridUI:toggle_prog_rec()
+  if self.progRec then
+    if #self.progRecBuffer > 0 then self.engine:set_prog(self.progRecBuffer) end
+    self.progRec = false
+    self.progRecBuffer = {}
+    self.on_edit{ type = 'global' }
+  else
+    self.progRec = true
+    self.progRecBuffer = {}
+  end
+end
+
+-- Append a degree while recording; auto-commit + disarm when the strip fills.
+function GridUI:prog_rec_tap(degree)
+  self.progRecBuffer[#self.progRecBuffer + 1] = degree
+  if #self.progRecBuffer >= PROG_LEN then
+    self.engine:set_prog(self.progRecBuffer)
+    self.progRec = false
+    self.progRecBuffer = {}
+    self.on_edit{ type = 'global' }
+  end
+end
+
 -- ---- picker enter/exit -------------------------------------------------
 
 -- col is the 0-based step index within the lane's half (decode_col already
@@ -954,6 +1028,11 @@ end
 
 function GridUI:close_picker()
   self.picker = nil
+  -- an in-progress progression recording is only meaningful while the HARM page
+  -- is open, so leaving it cancels the (uncommitted) buffer rather than stranding
+  -- the REC arm.
+  self.progRec = false
+  self.progRecBuffer = {}
   self:render_all()
 end
 
@@ -1283,6 +1362,34 @@ function GridUI:render_scale_picker()
         self.g:set_strobe(ROLE_COL0 + rk - 1, ch, 'slow')
       end
     end
+  end
+
+  -- progression: ON toggle (strobes while running) + REC toggle (strobes while
+  -- armed) on col 7, then the 8-step strip on rows 0-1 cols 8-11.
+  self.g:set_led(PROG_ON_COL, PROG_ON_ROW, eng.progOn and 15 or 3)
+  if eng.progOn then self.g:set_strobe(PROG_ON_COL, PROG_ON_ROW, 'slow') end
+  self.g:set_led(PROG_REC_COL, PROG_REC_ROW, self.progRec and 15 or 3)
+  if self.progRec then self.g:set_strobe(PROG_REC_COL, PROG_REC_ROW, 'fast') end
+  -- while recording the strip shows the buffer being retyped; else the live
+  -- progression, with the current step full-bright while the clock runs. Empty
+  -- slots dim; filled slots brightness-encode the degree's diatonic quality
+  -- (same major/minor/dim ramp as the degree row), so the shape reads at a glance.
+  local steps = self.progRec and self.progRecBuffer or seqx.values(eng.prog)
+  local ph = seqx.playhead(eng.prog)
+  for i = 0, PROG_LEN - 1 do
+    local x = PROG_COL0 + (i % PROG_W)
+    local y = PROG_ROW0 + math.floor(i / PROG_W)
+    local deg = steps[i + 1]
+    local b
+    if deg == nil then b = 1
+    elseif (not self.progRec) and eng.progOn and i == ph then b = 15
+    else
+      local q = chords.QUALITIES[chords.diatonic_quality(ivals, deg)]
+      if q.fifth == 6 then b = 3
+      elseif q.third == 3 then b = 6
+      else b = 9 end
+    end
+    self.g:set_led(x, y, b)
   end
 end
 
@@ -1711,9 +1818,14 @@ function GridUI:_status()
     s = 'edit ch' .. (self.picker.ch + 1) .. ' step ' .. self.picker.col .. ' ' ..
         pp .. (self.picker.layer == 'B' and 'B' or '') .. '=' .. tostring(v)
   elseif self.picker and self.picker.kind == 'scale' then
-    local sym = chords.chord_symbol(self.engine:chord_ctx())
-    s = 'HARM ' .. chords.MODE_ABBRS[self.engine.mode] .. ' ' .. sym ..
-        ' — r0-1 mode r2 deg r3 qual r4-5 root/inv/voi c12-15 roles'
+    if self.progRec then
+      s = 'HARM REC — tap the degree row to retype the progression (' ..
+          #self.progRecBuffer .. '/' .. PROG_LEN .. '), REC again to commit'
+    else
+      local sym = chords.chord_symbol(self.engine:chord_ctx())
+      s = 'HARM ' .. chords.MODE_ABBRS[self.engine.mode] .. ' ' .. sym ..
+          ' — mode/deg/qual/root/inv/voi · c7 prog on/rec · c12-15 roles'
+    end
   else
     local pr = PAIR_OF[self.selectedParam]
     s = pr and ('edit ' .. pr[1] .. ' | ' .. pr[2])

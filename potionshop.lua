@@ -132,6 +132,8 @@ function init()
   -- sequencers back to bar 1). outs gates the whole thing on `midi clock out`.
   eng:on(function(ev)
     if ev.type == 'stop' then outs:notes_off(ev.ch) end
+    -- a bar-clock chord advance repaints the HARM strip playhead + screen readout
+    if ev.type == 'prog' then controller:refresh() end
     if ev.type == 'launch' or ev.type == 'stop' then
       local any = false
       for i = 1, Burst.NUM_CHANNELS do if eng:is_running(i) then any = true; break end end
@@ -206,4 +208,5 @@ function cleanup()
   if strobe_metro then strobe_metro:stop() end
   if screen_metro then screen_metro:stop() end
   if reset_clock then clock.cancel(reset_clock) end
+  if eng and eng.prog_clock then clock.cancel(eng.prog_clock); eng.prog_clock = nil end
 end

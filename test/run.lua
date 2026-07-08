@@ -612,6 +612,67 @@ end)
 check('role channel: stack lane draws, free note lane freezes',
   elane.channels[1].stack.qix == nil and elane.channels[1].note.qix == 1)
 
+-- bar-clocked chord progression: enabling applies step 1 immediately, then one
+-- advance per progBars bars (clock.sync on the shared 4-beat bar grid);
+-- disabling freezes the harmony where it stands.
+clock._reset()
+local ep = Burst.new()
+ep:set_prog{1, 4, 5}
+ep.degree = 3
+ep:set_prog_on(true)
+check('prog on applies step 1 immediately', ep.degree == 1 and ep.progOn)
+clock._run_until(4.5)
+check('prog advances to step 2 at bar 1', ep.degree == 4)
+clock._run_until(8.5)
+check('prog advances to step 3 at bar 2', ep.degree == 5)
+clock._run_until(12.5)
+check('prog wraps back to step 1', ep.degree == 1)
+ep:set_prog_on(false)
+clock._run_until(30)
+check('prog off freezes the degree and cancels the clock',
+  ep.degree == 1 and ep.progOn == false and ep.prog_clock == nil)
+
+-- progBars stretches the advance interval; prog_jump applies a step now
+clock._reset()
+local ep2 = Burst.new()
+ep2.progBars = 2
+ep2:set_prog{2, 6}
+ep2:set_prog_on(true)
+clock._run_until(4.5)
+check('progBars 2: no advance after one bar', ep2.degree == 2)
+clock._run_until(8.5)
+check('progBars 2 advances after two bars', ep2.degree == 6)
+ep2:prog_jump(0)
+check('prog_jump applies the chosen step immediately', ep2.degree == 2)
+
+-- set_prog hygiene: clamp to 1..7 ints, cap at PROG_LEN, empty -> single I
+local ep3 = Burst.new()
+ep3:set_prog{0, 9, 3.4}
+check('set_prog clamps degrees to integer 1..7',
+  ivals_eq(seqx.values(ep3.prog), {1, 7, 3}))
+ep3:set_prog{}
+check('set_prog empty falls back to a single I', ivals_eq(seqx.values(ep3.prog), {1}))
+ep3:set_prog{1, 2, 3, 4, 5, 6, 7, 1, 2, 3}
+check('set_prog caps at PROG_LEN steps', seqx.len(ep3.prog) == Burst.PROG_LEN)
+
+-- role channels follow the progression: a running Root channel re-harmonizes
+-- on its next hit after each bar advance (degree edits are all it takes)
+clock._reset()
+local epr = Burst.new()
+set_quant(epr, 0)
+local prf = {}
+epr:on(function(ev) if ev.type == 'fire' then prf[#prf + 1] = ev.freq end end)
+epr.channels[1].div  = seqx.new{1}   -- one hit per 4 beats = one per bar
+epr.channels[1].reps = seqx.new{2}
+epr.channels[1].role = 1
+epr:set_prog{1, 5}
+epr:set_prog_on(true)
+epr:launch(1)
+clock._run_until(7.9)  -- two bars: hit at beat 0 (I) and beat 4 (V)
+check('running role channel follows the bar progression (I then V)',
+  #prf >= 2 and approx(prf[1], scales.semitone_to_freq(0 + LIFT))
+  and approx(prf[2], scales.semitone_to_freq(7 + LIFT)))
+
 -- all four op ratios are sequenced (A value + B offset, drawn per burst). The drawn
 -- op2/3/4 values pass straight to trig args 4/5/6 (r2/r3/r4); op1's drawn value rides
 -- as r1 at arg 14; the per-channel pan rides at arg 15.
@@ -1335,6 +1396,36 @@ ctl:press(15, 1)  -- ch2 role = 7th
 check('role cell assigns 7th to ch2', geng.channels[2].role == 4)
 ctl:press(12, 0)  -- re-press the lit role
 check('role re-press frees the channel', geng.channels[1].role == 0)
+
+-- progression strip: REC retypes via the degree row, ON runs the bar clock, a
+-- strip step press jumps the walk. Picker stays open throughout.
+local deg_before = geng.degree
+ctl:press(7, 1)  -- REC arm
+check('REC arms the progression recorder', ctl.progRec == true and #ctl.progRecBuffer == 0)
+ctl:press(0, 2); ctl:press(3, 2); ctl:press(4, 2)  -- degree row: I, IV, V into the buffer
+check('degree-row taps append to the buffer, not the live degree',
+  #ctl.progRecBuffer == 3 and geng.degree == deg_before)
+ctl:press(7, 1)  -- REC commit
+check('REC commit installs the progression + disarms',
+  ctl.progRec == false and ivals_eq(seqx.values(geng.prog), {1, 4, 5}))
+ctl:press(9, 0)  -- strip step index 1 (row0 col8+1) = the IV
+check('strip step press jumps the walk to that chord', geng.degree == 4)
+ctl:press(7, 0)  -- ON
+check('ON starts the progression bar clock', geng.progOn == true and geng.prog_clock ~= nil)
+ctl:press(7, 0)  -- ON off
+check('ON again stops the clock', geng.progOn == false and geng.prog_clock == nil)
+ctl:press(7, 1)  -- REC arm again
+for _ = 1, 8 do ctl:press(0, 2) end  -- eight taps of degree I
+check('REC auto-commits + disarms at PROG_LEN steps',
+  ctl.progRec == false and seqx.len(geng.prog) == 8)
+-- an uncommitted recording cancels when the harmony page closes
+geng.prog = seqx.new{1, 4, 5}
+ctl:press(7, 1); ctl:press(2, 2)  -- arm + one tap (uncommitted)
+ctl:press(14, 6)  -- close the harmony picker
+check('closing HARM cancels an uncommitted recording',
+  ctl.progRec == false and ivals_eq(seqx.values(geng.prog), {1, 4, 5}))
+ctl:press(14, 6)  -- reopen for the restore section below
+
 -- restore defaults so later sections start from known harmonic state
 ctl:press(15, 1); ctl:press(0, 2); ctl:press(8, 4); ctl:press(8, 5)
 ctl:press(14, 6)  -- close harmony picker
@@ -1683,13 +1774,25 @@ sui.sel_line[P_SCALE] = 7            -- voicing
 sui:enc(3, 3)
 check('harmony E3 steps voicing', seng.voicing == 4)
 sui:enc(3, -3)
-sui.sel_line[P_SCALE] = 9            -- ch2 role
+-- prog run (line 8) + bars/step (line 9), then roles shift to lines 10..15
+sui.sel_line[P_SCALE] = 8            -- prog run toggle
+sui:enc(3, 1)
+check('harmony prog line starts the bar clock', seng.progOn == true)
+sui:enc(3, -1)
+check('harmony prog line stops the bar clock', seng.progOn == false)
+sui.sel_line[P_SCALE] = 9            -- bars/step, stepping the {1,2,4} set
+seng.progBars = 1
+sui:enc(3, 1)
+check('harmony bars line steps 1 -> 2', seng.progBars == 2)
+sui:enc(3, 1)
+check('harmony bars line steps 2 -> 4', seng.progBars == 4)
+sui.sel_line[P_SCALE] = 11           -- ch2 role (roles now at 10..15)
 sui:enc(3, 2)
 check('harmony role line edits channel 2', seng.channels[2].role == 2)
 sui:enc(3, -4)
 check('harmony role line clamps at free', seng.channels[2].role == 0)
 check('harmony page_lines labels', sui:page_lines()[1][1] == 'mode'
-  and sui:page_lines()[8][1] == 'ch1')
+  and sui:page_lines()[8][1] == 'prog' and sui:page_lines()[10][1] == 'ch1')
 
 -- perf page: per-channel quantize on line 5 (after run/reset/oct/rate), curated set
 sui:set_page(P_PERF)
@@ -2211,6 +2314,24 @@ fake:set('diatonic', 0)
 check('diatonic param goes manual', peng.diatonic == false)
 fake:set('diatonic', 1)
 check('diatonic param restores auto', peng.diatonic == true)
+
+-- progression params: text (roman or arabic degrees), run toggle, bars/step
+fake:set('prog', 'I IV V vi')  -- roman, mixed case
+check('prog param installs the degree list from roman text',
+  ivals_eq(seqx.values(peng.prog), {1, 4, 5, 6}))
+check('prog param normalizes to roman on read', fake:get('prog') == 'I IV V VI')
+fake:set('prog', '2 5 1')  -- arabic also accepted
+check('prog param accepts arabic degrees', ivals_eq(seqx.values(peng.prog), {2, 5, 1}))
+fake:set('prog_bars', 3)  -- option index 3 = 4 bars
+check('prog_bars option sets bars-per-step', peng.progBars == 4)
+fake:set('prog_run', 1)
+check('prog_run starts the bar clock', peng.progOn == true and peng.prog_clock ~= nil)
+fake:set('prog_run', 0)
+check('prog_run stops the bar clock', peng.progOn == false and peng.prog_clock == nil)
+-- reflection: an engine-side progression edit shows up silently in the params
+peng:set_prog{1, 5}
+psync:reflect_globals()
+check('engine prog reflects back into the text param', fake:get('prog') == 'I V')
 
 -- grid harmony edits reflect silently into the params
 local fh = fake.fires

@@ -516,6 +516,13 @@ function Burst.new()
   -- REPLACES the old global scale mask (scales.by_name) — modes live in chords.lua.
   -- self.root is the GLOBAL harmonic root; each channel's c.root adds on top.
   self.mode = 1         -- index into chords.MODES (1 = ionian)
+  -- Bar-clocked chord progression (see the progression section below): a list
+  -- of chord degrees stepped once every progBars bars while progOn, each
+  -- advance writing self.degree (role channels re-resolve on their next hit).
+  self.prog = seqx.new{1}
+  self.progOn = false
+  self.progBars = 1     -- bars per chord step (1/2/4 on the params surface)
+  self.prog_clock = nil -- clock.run id while progOn
   self.root = 0         -- global tonic transposition in semitones (0..11; 0 = C)
   self.degree = 1       -- chord degree I..VII
   self.diatonic = true  -- quality derived from mode+degree (vs manual pick)
@@ -578,6 +585,70 @@ function Burst:chord_freq(role, root, off)
   -- chords.CHORD_OCTAVE lifts the C1-anchored chord tones into a mid register
   -- (see chords.lua). Kept out of chord_tones so the pure-math contract holds.
   return scales.semitone_to_freq(tone + 12 * chords.CHORD_OCTAVE, root)
+end
+
+-- ---- chord progression (bar-clocked) -------------------------------------
+-- A global list of chord degrees (1..7, up to PROG_LEN steps) stepped once
+-- every progBars bars while progOn. Each advance simply writes self.degree —
+-- role channels re-resolve their chord tone per hit, so a progression is just
+-- scheduled degree edits with no extra plumbing. The coroutine rides
+-- clock.sync on the same bar grid as the per-bar reset scheduler
+-- (potionshop.lua), so chord changes land exactly on channel-reset downbeats.
+
+Burst.PROG_LEN = 8  -- mirrored by the grid HARM strip (lib/grid_ui.lua)
+
+-- Install a progression: degrees clamped to 1..7 (ints), capped at PROG_LEN;
+-- empty falls back to a single I. Takes effect at the next advance (the new
+-- sequins starts at its own step 1).
+function Burst:set_prog(list)
+  local vals = {}
+  for i = 1, math.min(#(list or {}), Burst.PROG_LEN) do
+    vals[i] = clamp(round(list[i]), 1, 7)
+  end
+  if #vals == 0 then vals = {1} end
+  self.prog = seqx.new(vals)
+end
+
+-- Apply the next progression step now: draw a degree and make it THE degree.
+-- Emits 'prog' so the surfaces can repaint (grid strip playhead, chord symbol).
+function Burst:prog_advance()
+  self.degree = clamp(self.prog(), 1, 7)
+  self:emit{ type = 'prog', degree = self.degree, step = seqx.playhead(self.prog) }
+end
+
+-- Jump to step i (0-based) and apply it immediately — the grid strip press.
+-- While the clock runs the walk continues from there; while off the strip is a
+-- chord palette (tap a step to hear that chord).
+function Burst:prog_jump(i)
+  local n = seqx.len(self.prog)
+  if n == 0 then return end
+  self.prog:select(clamp(i, 0, n - 1) + 1)
+  self:prog_advance()
+end
+
+-- Start/stop the bar clock. Enabling rewinds to step 1 and applies it
+-- IMMEDIATELY (you hear the progression begin), then advances every progBars
+-- bars on the shared bar grid; disabling freezes the harmony where it stands.
+-- A progBars edit applies at the next advance (the sync interval is re-read
+-- each loop). The coroutine double-checks progOn after every sync so a stop
+-- racing a bar boundary never applies a stale advance.
+function Burst:set_prog_on(on)
+  on = on and true or false
+  if on == self.progOn then return end
+  self.progOn = on
+  if not on then
+    if self.prog_clock then clock.cancel(self.prog_clock); self.prog_clock = nil end
+    return
+  end
+  self.prog:reset()
+  self:prog_advance()
+  self.prog_clock = clock.run(function()
+    while self.progOn do
+      clock.sync(4 * self.progBars)
+      if not self.progOn then return end
+      self:prog_advance()
+    end
+  end)
 end
 
 -- ---- event listeners ---------------------------------------------------
