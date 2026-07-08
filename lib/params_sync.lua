@@ -347,8 +347,11 @@ function M:_add_channel_params(n)
       self:request_render()
     end)
   end)
-  -- chord-tone role: free = pitch from the note lane; root/3rd/5th/7th = pitch
-  -- from the global harmonic context's resolved chord (see lib/chords.lua)
+  -- chord-tone role: free = pitch from the note lanes (mode degrees);
+  -- root/3rd/5th/7th = pitch from the global harmonic context's resolved chord,
+  -- walked by the channel's SEPARATE stack lanes (chN_stack_a/b, signed offsets
+  -- from that tone; see lib/chords.lua stack_tone / Burst:chord_freq). Flipping
+  -- the role swaps materials — both lane sets persist.
   def(1, function()
     params:add_option(id('role'), 'chord role', chords.ROLE_NAMES, (c.role or 0) + 1)
     params:set_action(id('role'), function(i)

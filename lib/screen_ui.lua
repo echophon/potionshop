@@ -189,13 +189,16 @@ function Screen:_seq_page() return self.page <= NUM_SEQ end
 function Screen:_page_key() return SEQ_PAGES[self.page] end
 -- the two lanes this page shows, straight from the grid's row_lanes (A|B, or div|reps).
 -- Relies on ctl.selectedParam == _page_key(), the invariant set_page/_sync maintain.
-function Screen:_lanes() return self.ctl:row_lanes() end
+-- lanes resolve against the FOCUSED channel: a chord-role channel's note page
+-- is backed by its 'stack' (offset) sequences — see GridUI.row_lanes.
+function Screen:_lanes() return self.ctl:row_lanes(self.sel_ch) end
 function Screen:_cur_lane() return self:_lanes()[self.sel_lane] end
 -- layer of the lane the cursor is currently in (drives _layout snapping + paramLayer).
 function Screen:layer() return self:_cur_lane().layer end
 
 -- header label for the current page: the visible lane's param on a sequence page
--- ('note', 'note b' on the B lane, 'reps' on div's second lane), else the page name.
+-- ('note', 'note b' on the B lane, 'reps' on div's second lane, 'stack' when the
+-- focused channel holds a chord role), else the page name.
 function Screen:_page_display()
   if not self:_seq_page() then return PAGES[self.page] end
   local li = self:_cur_lane()
@@ -224,6 +227,10 @@ function Screen:_layout(param)
     local algo = (self.ctl:chan(self.sel_ch) or {}).algo or 1
     return GridUI.op_ratio_set(algo, op)
   end
+  -- stack (a role channel's note page): one signed offset grid for both lanes —
+  -- it already contains 0 (= the role tone / no B offset), so it must skip the
+  -- generic literal-0 prepend below (its first value is -15, not 0).
+  if param == 'stack' then return self.SPV.stack end
   local layout = self.SPV[param]
   if self:layer() == 'B' and layout[1] ~= 0 then
     local t = {0}
@@ -666,10 +673,13 @@ function Screen:page_lines()
   local c = self.engine.channels[self.sel_ch + 1]
   if self:_seq_page() then
     -- six channel rows of the visible lane's param; the focused channel gets the
-    -- windowed cursor + `_` add slot, the rest just show their sequence.
-    local li = self:_cur_lane()
+    -- windowed cursor + `_` add slot, the rest just show their sequence. Each
+    -- row resolves its OWN lane (row_lanes(ch)): on the note page a chord-role
+    -- channel's row shows its stack (offset) sequence, its neighbours their
+    -- note (degree) sequences.
     local lines = {}
     for ch = 0, 5 do
+      local li = self.ctl:row_lanes(ch)[self.sel_lane]
       local vals = seqx.values(self.ctl:seq_ref(ch, li.param, li.layer))
       local focused = (ch == self.sel_ch)
       -- slide a 4-value window so the cursor's step is always visible
@@ -789,7 +799,7 @@ end
 -- params, div/reps for the paired page), brightness from the same
 -- value_brightness mapping the grid LEDs use.
 function Screen:draw_steps()
-  local lanes = self.ctl:row_lanes()
+  local lanes = self.ctl:row_lanes(self.sel_ch)
   local running = self.engine:is_running(self.sel_ch + 1)
   for li, lane in ipairs(lanes) do
     local y = (li == 1) and 52 or 58

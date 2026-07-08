@@ -155,6 +155,36 @@ function chords.chord_tones(ctx)
   return tones
 end
 
+-- Semitone of the k-th member of the chord's TONE STACK — the infinite ladder
+-- of alternating mode degrees the four-tone chord is a window into. k ∈ ℤ,
+-- 1 = chord Root, 2 = 3rd, 3 = 5th, 4 = 7th, 5 = 9th, 6 = 11th, 7 = 13th,
+-- 8 = Root two octaves up, 0 = the 7th below, and so on both directions.
+-- Pre-inversion/voicing (those act on the four-tone window, not the stack).
+--
+-- The fold gives BOTH quality modes the same periodicity — 7 members per two
+-- octaves — so a lane of stack offsets keeps its register and contour when the
+-- DIA toggle flips. Diatonic: pure alternate-degree stacking (the same formula
+-- chord_tones uses, so members 1..4 agree exactly). Manual: the quality
+-- overrides members 2..4 (3rd/5th/7th); the Root and the extensions (9/11/13)
+-- stay diatonic — a manual chord with mode-derived tensions, jazz-style.
+--
+-- Strictly ascending in k for every mode x degree x quality: quality thirds
+-- (3-4) < fifths (6-8) < sevenths (9-11) < any diatonic 9th (>= 13), so an
+-- offset of +/-1 always moves audibly and never crosses a neighbour.
+function chords.stack_tone(ctx, k)
+  local m = (k - 1) % 7 + 1          -- member within one stack cycle, 1..7
+  local w = math.floor((k - 1) / 7)  -- whole cycles; each spans two octaves
+  local semis
+  if ctx.diatonic or m == 1 or m > 4 then
+    semis = ctx.root + scales.degree_to_semitones(ctx.degree - 1 + 2 * (m - 1), ctx.intervals)
+  else
+    local q = chords.QUALITIES[ctx.quality]
+    local cr = ctx.root + scales.degree_to_semitones(ctx.degree - 1, ctx.intervals)
+    semis = cr + ({q.third, q.fifth, q.seventh})[m - 1]
+  end
+  return semis + 24 * w
+end
+
 -- {third, fifth, seventh} semitones above the chord root (any octave; folded
 -- mod 12) -> quality index 1..8, or nil if outside the harmonàig set.
 function chords.classify(third, fifth, seventh)

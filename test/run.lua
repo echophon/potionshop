@@ -165,6 +165,72 @@ check('chord_symbol: manual quality overrides (I+7)',
   chords.chord_symbol{ intervals = ionian, root = 0, degree = 1, diatonic = false,
     quality = 8 } == 'I+7')
 
+-- stack_tone: the infinite alternating-degree ladder behind the chord.
+local function stack_ctx(opts)
+  local ctx = { intervals = ionian, root = 0, degree = 1, diatonic = true,
+                quality = 6, inversion = 0, voicing = 1 }
+  for k, v in pairs(opts or {}) do ctx[k] = v end
+  return ctx
+end
+-- members 1..4 agree exactly with the raw (pre-inversion, close) chord_tones
+local stack_agree = true
+for _, dia in ipairs{true, false} do
+  for qi = 1, 8 do
+    for d = 1, 7 do
+      local ctx = stack_ctx{degree = d, diatonic = dia, quality = qi}
+      local tones = chords.chord_tones(ctx)
+      for k = 1, 4 do
+        if chords.stack_tone(ctx, k) ~= tones[k] then stack_agree = false end
+      end
+    end
+  end
+end
+check('stack_tone members 1..4 = raw chord_tones (dia + all 8 qualities)', stack_agree)
+
+-- extensions and wraps: ionian I -> 9th/11th/13th = 14/17/21; member 8 = root
+-- two octaves up; one step BELOW the root (k = 0) is the 13th of the cycle
+-- below (descending walks 13/11/9/7.. before the octave-down root at k = -6).
+local sc1 = stack_ctx{}
+check('ionian I extensions 9/11/13 = 14/17/21',
+  chords.stack_tone(sc1, 5) == 14 and chords.stack_tone(sc1, 6) == 17
+  and chords.stack_tone(sc1, 7) == 21)
+check('stack wraps: member 8 = root + 24, member 0 = 13th - 24',
+  chords.stack_tone(sc1, 8) == 24 and chords.stack_tone(sc1, 0) == 21 - 24)
+
+-- strictly ascending in k across every mode x degree, diatonic + all qualities:
+-- an offset of +/-1 always moves, never crosses a neighbour.
+local stack_mono = true
+for mi = 1, #chords.MODES do
+  for d = 1, 7 do
+    local ctxs = { stack_ctx{intervals = chords.MODES[mi].intervals, degree = d} }
+    for qi = 1, 8 do
+      ctxs[#ctxs + 1] = stack_ctx{intervals = chords.MODES[mi].intervals, degree = d,
+                                  diatonic = false, quality = qi}
+    end
+    for _, ctx in ipairs(ctxs) do
+      local prev = chords.stack_tone(ctx, -7)
+      for k = -6, 14 do
+        local t = chords.stack_tone(ctx, k)
+        if t <= prev then stack_mono = false end
+        prev = t
+      end
+    end
+  end
+end
+check('stack_tone strictly ascends (modes x degrees x qualities, k -7..14)', stack_mono)
+
+-- DIA-toggle register stability: the root and the diatonic extensions stay put
+-- when a manual quality takes over (it only overrides members 2..4).
+local stack_dia = true
+for d = 1, 7 do
+  local cd = stack_ctx{degree = d}
+  local cm = stack_ctx{degree = d, diatonic = false, quality = 3}
+  for _, k in ipairs{1, 5, 6, 7, 8} do
+    if chords.stack_tone(cd, k) ~= chords.stack_tone(cm, k) then stack_dia = false end
+  end
+end
+check('DIA toggle keeps root + 9/11/13 members in place', stack_dia)
+
 -- ---- seqx / sequins ----------------------------------------------------
 local seqx = require 'seqx'
 print('seqx:')
@@ -260,6 +326,36 @@ check('carrier+mod randomize shapes land in the upper short bank (16..32)', ok_a
 check('randomize leaves channel level at the fixed init constant', ok_level_const)
 check('lengths: div/reps/note 2..4', ok_len)
 check('shapes + op2/3/4 randomize to a single held step', ok_single)
+
+-- ROLE channels: pitch material is the SEPARATE stack lanes. randomize/mutate
+-- touch only the ACTIVE material — a role channel's stack draws small offsets
+-- around home and stays inside the stack picker grid (-15..16), while the
+-- stashed free note lane survives untouched (and vice versa when free).
+local engr = Burst.new()
+engr.channels[1].role = 2
+engr.channels[1].note = seqx.new{3, 5}  -- stashed free melody
+local ok_role_rand, ok_role_mut, ok_note_kept = true, true, true
+for _ = 1, 200 do
+  engr:randomize(1)
+  for _, v in ipairs(seqx.values(engr.channels[1].stack)) do
+    if not (v == math.floor(v) and v >= -3 and v <= 4) then ok_role_rand = false end
+  end
+end
+for _ = 1, 50 do engr:mutate(1) end
+for _, v in ipairs(seqx.values(engr.channels[1].stack)) do
+  if not (v == math.floor(v) and v >= -15 and v <= 16) then ok_role_mut = false end
+end
+if not ivals_eq(seqx.values(engr.channels[1].note), {3, 5}) then ok_note_kept = false end
+check('role-channel randomize scrambles stack with small offsets (-3..4)', ok_role_rand)
+check('role-channel mutate keeps stack in the picker window (-15..16)', ok_role_mut)
+check('role-channel randomize/mutate leave the free note melody stashed', ok_note_kept)
+-- and symmetrically: a FREE channel's randomize/mutate never touch the stack
+local engf = Burst.new()
+engf.channels[1].stack = seqx.new{0, 2, -1}
+engf:randomize(1)
+for _ = 1, 20 do engf:mutate(1) end
+check('free-channel randomize/mutate leave the stack material stashed',
+  ivals_eq(seqx.values(engf.channels[1].stack), {0, 2, -1}))
 
 -- mutate must also leave the channel level untouched (a static scalar), even with a
 -- custom value, and keep per-op ratios on the curated set.
@@ -412,9 +508,10 @@ check('op-env step arpeggiates the shape per hit',
   and not approx(sh_step[2], sh_step[3]) and not approx(sh_step[1], sh_step[3]))
 
 -- chord-tone roles: a role channel takes its pitch from the harmonic context's
--- resolved chord tone instead of its note lane; per-hit re-resolution means a
--- degree change re-harmonizes the very next hit; octave still applies; and the
--- note lane keeps advancing underneath (so flipping back to free resumes).
+-- resolved chord tone, walked by its SEPARATE stack lanes (signed offsets,
+-- default 0 = the role tone itself); the free note lanes are a different
+-- material that freezes while the role is held. Per-hit re-resolution means a
+-- degree change re-harmonizes the very next hit; octave still applies.
 local function role_fire(setup)
   clock._reset()
   local e = Burst.new()
@@ -423,7 +520,7 @@ local function role_fire(setup)
   e:on(function(ev) if ev.type == 'fire' then f[#f + 1] = ev.freq end end)
   e.channels[1].div  = seqx.new{4}
   e.channels[1].reps = seqx.new{1}
-  e.channels[1].note = seqx.new{3}  -- would be degree 3 if the lane were used
+  e.channels[1].note = seqx.new{3}  -- free-lane degree: IGNORED while a role is active
   setup(e)
   e:launch(1)
   clock._run_until(4)
@@ -447,6 +544,41 @@ check('manual quality feeds role tones (+7 third = 4 st)',
 rf = role_fire(function(e) e.channels[1].role = 1; e.channels[1].octave = 1 end)
 check('octave still doubles a role channel', approx(rf[1], 2 * scales.semitone_to_freq(LIFT)))
 
+-- the stack lanes walk the chord's tone stack while a role is active: the value
+-- is a signed member offset from the role's (voiced) tone. Ionian Imaj7.
+rf = role_fire(function(e) e.channels[1].role = 1; e.channels[1].stack = seqx.new{2} end)
+check('role R + stack offset 2 fires the fifth (member 3, 7 st)',
+  approx(rf[1], scales.semitone_to_freq(7 + LIFT)))
+rf = role_fire(function(e) e.channels[1].role = 1; e.channels[1].stack = seqx.new{-1} end)
+check('role R + stack offset -1 descends to the 13th below (-3 st)',
+  approx(rf[1], scales.semitone_to_freq(-3 + LIFT)))
+-- offsets walk from the VOICED tone: 1st inversion lifts the root anchor an
+-- octave (12 st) and the +1 step adds the pure root->3rd interval (4 st) on top.
+rf = role_fire(function(e)
+  e.channels[1].role = 1; e.inversion = 1; e.channels[1].stack = seqx.new{1}
+end)
+check('offset walks from the voiced anchor (inverted R + 1 -> 16 st)',
+  approx(rf[1], scales.semitone_to_freq(16 + LIFT)))
+
+-- alt-trig step mode arpeggiates the stack offset (stackB lane) per hit on a
+-- role channel, exactly like the free-channel note arpeggio: R, 5th, 9th.
+clock._reset()
+local ear = Burst.new()
+set_quant(ear, 0)
+local arf = {}
+ear:on(function(ev) if ev.type == 'fire' then arf[#arf + 1] = ev.freq end end)
+ear.channels[1].div  = seqx.new{4}
+ear.channels[1].reps = seqx.new{3}
+ear.channels[1].stackB = seqx.new{0, 2, 4}
+ear.channels[1].altTrig = 1
+ear.channels[1].role = 1
+ear:launch(1)
+clock._run_until(4)
+check('alt-trig step arpeggiates the stack under a role (R, 5th, 9th)',
+  #arf == 3 and approx(arf[1], scales.semitone_to_freq(0 + LIFT))
+  and approx(arf[2], scales.semitone_to_freq(7 + LIFT))
+  and approx(arf[3], scales.semitone_to_freq(14 + LIFT)))
+
 -- mid-burst re-harmonization: 3 hits, change degree after the first fire.
 clock._reset()
 local erh = Burst.new()
@@ -468,13 +600,17 @@ check('degree change re-harmonizes mid-burst on the next hit',
   and approx(rhf[2], scales.semitone_to_freq(5 + LIFT))
   and approx(rhf[3], scales.semitone_to_freq(5 + LIFT)))
 
--- the note lane still advances while a role is active
+-- material separation: while a role is active the stack lanes are drawn and
+-- the free note lanes FREEZE, so flipping back to free resumes the melody
+-- exactly where it left off. (A fresh sequins has qix == 1; the stub consumes
+-- qix on the first draw, so qix == nil means "has been drawn".)
 local _, elane = role_fire(function(e)
-  e.channels[1].note = seqx.new{0, 5}
+  e.channels[1].note  = seqx.new{0, 5}
+  e.channels[1].stack = seqx.new{0, 2}
   e.channels[1].role = 3
 end)
-check('role channel note lane still advances underneath',
-  seqx.playhead(elane.channels[1].note) == 0)
+check('role channel: stack lane draws, free note lane freezes',
+  elane.channels[1].stack.qix == nil and elane.channels[1].note.qix == 1)
 
 -- all four op ratios are sequenced (A value + B offset, drawn per burst). The drawn
 -- op2/3/4 values pass straight to trig args 4/5/6 (r2/r3/r4); op1's drawn value rides
@@ -1018,6 +1154,25 @@ check('B-layer picker edits noteB', seqx.values(geng.channels[1].noteB)[1] == 4)
 ctl:press(0, 0)  -- open A step 0 again to verify the picker reopened on layer A
 check('A-half press targets the A layer', ctl.picker.layer == 'A' and ctl.picker.col == 0)
 ctl:close_picker()
+
+-- ROLE channels: the note page is backed by the channel's OWN stack lanes, so
+-- a press edits c.stack on the signed offset grid (-15..+16, 0 at cell 16)
+-- while the free note lane persists untouched — and vice versa when freed.
+local note_before = seqx.values(geng.channels[1].note)[1]
+geng.channels[1].role = 1
+ctl:press(0, 0)  -- open the note-page picker on the (now role) channel
+check('role-channel note page opens a stack picker', ctl.picker.param == 'stack')
+ctl:press(0, 6)  -- cell 1 = stack offset -15
+check('role-channel picker commits into the stack lane',
+  seqx.values(geng.channels[1].stack)[1] == -15
+  and seqx.values(geng.channels[1].note)[1] == note_before)
+ctl:press(0, 0); ctl:press(15, 6)  -- cell 16 = offset 0 (the role tone itself)
+check('stack picker cell 16 = offset 0', seqx.values(geng.channels[1].stack)[1] == 0)
+geng.channels[1].role = 0
+ctl:press(0, 0); ctl:press(3, 6)  -- degree 3 (!= current 5, so it sets not removes)
+check('freed channel note picker edits the note (degree) lane again',
+  seqx.values(geng.channels[1].note)[1] == 3
+  and seqx.values(geng.channels[1].stack)[1] == 0)
 
 -- 8-step cap: the add slot stops appearing past SEQ_LEN; commit truncates
 geng.channels[1].note = seqx.new{0, 1, 2, 3, 4, 5, 6, 7}  -- exactly 8 (A half full)
@@ -1710,6 +1865,27 @@ sui:enc(3, 1)
 check('lane-B `_` appends 0', seqx.len(seng.channels[1].noteB) == 2
   and seqx.values(seng.channels[1].noteB)[2] == 0)
 
+-- the note page is chord-role-dependent: a role channel's lanes resolve to its
+-- stack (offset) sequences with the signed offset layout; freed, back to note.
+seng.channels[1].role = 2
+sui.sel_lane = 1
+check('screen note page resolves to the stack lane under a role',
+  sui:main_param() == 'stack'
+  and sui:_layout('stack') == GridUI.STEP_PICKER_VALUES.stack)
+seng.channels[1].role = 0
+check('screen note page resolves to the note lane when free',
+  sui:main_param() == 'note'
+  and sui:_layout('note') == GridUI.STEP_PICKER_VALUES.note)
+
+-- mixed roles: each of the six note-page rows shows its OWN material
+seng.channels[1].role = 1
+seng.channels[1].stack = seqx.new{-2}
+seng.channels[2].note = seqx.new{4}
+local pls = sui:page_lines()
+check('note page rows resolve per channel (ch1 stack, ch2 note)',
+  pls[1][2]:find('-2', 1, true) ~= nil and pls[2][2]:find('4', 1, true) ~= nil)
+seng.channels[1].role = 0
+
 -- div/reps lane 2 is `reps` (a paired A-layer lane), not a B offset
 sui:set_page(P_DIV)
 sui.sel_lane = 2
@@ -1806,11 +1982,21 @@ fake:set('ch1_note_a', '0 3 5')
 check('text edit installs sequence', vals_eq(seqx.values(peng.channels[1].note), {0, 3, 5}))
 check('text normalized after edit', fake:get('ch1_note_a') == '0 3 5')
 
+-- the stack lanes are full sequence params of their own (chN_stack_a/b), so a
+-- role channel's signed offsets survive a params/PSET round-trip exactly and
+-- never collide with the note (degree) params.
+fake:set('ch1_stack_a', '0 -3 2')
+check('stack offsets round-trip through their own text param',
+  vals_eq(seqx.values(peng.channels[1].stack), {0, -3, 2})
+  and fake:get('ch1_stack_a') == '0 -3 2'
+  and fake:get('ch1_note_a') == '0 3 5')
+
 -- cursor pair: step selects, val edits at the cursor (index-based)
 fake:set('ch1_note_a_step', 2)
 check('step cursor refreshes val param',
   fake:get('ch1_note_a_val') == ParamsSync.value_to_index('note', 'A', 3))
-fake:set('ch1_note_a_val', 9)  -- note layout: index 9 -> value 8
+-- note _val indexes the -15..31 union (degrees + role stack offsets)
+fake:set('ch1_note_a_val', ParamsSync.value_to_index('note', 'A', 8))
 check('val edit writes at cursor', seqx.values(peng.channels[1].note)[2] == 8)
 check('text reflects val edit', fake:get('ch1_note_a') == '0 8 5')
 fake:set('ch1_note_a_step', 99)

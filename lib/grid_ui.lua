@@ -72,7 +72,13 @@
 --                 white keys packed at cols 0-6, black keys offset above); row 4
 --                 cols 8-11 inversion root/1st/2nd/3rd; row 5 cols 8-11 voicing
 --                 close/drop2/drop3/spread; cols 12-15 on rows 0-5 = per-channel
---                 role R/3/5/7 (re-press the lit role to free the channel)
+--                 role R/3/5/7 (re-press the lit role to free the channel).
+--                 A role channel's NOTE page edits its OWN 'stack' sequences —
+--                 signed CHORD-STACK offsets from its role tone (0 = the tone;
+--                 chords.stack_tone), picker -15..+16 with 0 at cell 16 — while
+--                 the free note (degree) lanes persist untouched underneath, so
+--                 a role flip swaps materials instead of reinterpreting values.
+--                 The stack lane arpeggiates the chord (alt-trig steps its B)
 --   step picker:  value grid on rows 6-7 (the control rows, borrowed while
 --                 picking) so all six channel rows stay visible. Press the
 --                 lit/current value to remove the step; press any other value
@@ -96,7 +102,13 @@ local NUM_CHANNELS = 6
 -- All sequenced params (the row-7 page buttons are a separate, smaller list —
 -- ROW7_PAGES — one per page). All four op FM ratios are sequenced (A value + B index
 -- offset, like note); channel level + op levels stay static on the MIX page.
-local PARAMS = {'div', 'reps', 'note',
+-- 'stack' is the note page's SECOND backing store: a chord-role channel's note
+-- page edits c.stack/c.stackB (signed chord-stack offsets) instead of c.note
+-- (mode degrees), so the two musical materials never reinterpret each other
+-- across a role flip (see row_lanes). It has no page button of its own — the
+-- note button reaches it — but it is a full sequenced param everywhere else
+-- (params blocks, clear/copy/paste, defaults).
+local PARAMS = {'div', 'reps', 'note', 'stack',
                 'opEnv1', 'opEnv2', 'opEnv3', 'opEnv4',
                 'opRatio1', 'opRatio2', 'opRatio3', 'opRatio4'}
 -- Paired params share one page as two A-layer lanes (left|right) instead of a
@@ -323,11 +335,11 @@ local SHAPE_PICKER_COUNT = 32
 -- defaults mirror Burst.SHAPE_CARRIER_DEFAULT / SHAPE_MOD_DEFAULT ('plop' / 'chip')
 local SHAPE_CARRIER_DEFAULT, SHAPE_MOD_DEFAULT = 16, 6
 
-local DEFAULT_VALUE   = {div = 8, reps = 3, note = 0,
+local DEFAULT_VALUE   = {div = 8, reps = 3, note = 0, stack = 0,
                          opEnv1 = SHAPE_CARRIER_DEFAULT, opEnv2 = SHAPE_MOD_DEFAULT,
                          opEnv3 = SHAPE_MOD_DEFAULT, opEnv4 = SHAPE_MOD_DEFAULT,
                          opRatio1 = 1, opRatio2 = 1, opRatio3 = 1, opRatio4 = 1}  -- op ratio default = unison
-local DEFAULT_VALUE_B = {div = 0, reps = 0, note = 0,
+local DEFAULT_VALUE_B = {div = 0, reps = 0, note = 0, stack = 0,
                          opEnv1 = 0, opEnv2 = 0, opEnv3 = 0, opEnv4 = 0,           -- op env offset default = 0 (none)
                          opRatio1 = 0, opRatio2 = 0, opRatio3 = 0, opRatio4 = 0}  -- op ratio offset default = 0 (none)
 
@@ -347,6 +359,11 @@ local STEP_PICKER_VALUES = {
     return t
   end)(),
   note = range(32, function(i) return i end),
+  -- stack: the role-channel note lane's own store — a signed CHORD-STACK offset
+  -- from the channel's role tone (0 = the tone itself, at cell 16; see
+  -- chords.stack_tone / Burst:chord_freq). Both lanes (A + additive B) use this
+  -- one grid; it contains 0, so the B lane needs no literal-0 prepend.
+  stack = range(32, function(i) return i - 15 end),
   -- (channel level is no longer a sequenced param — it's a MIX-page scalar using
   -- OP_LEVEL_VALUES, the same 0..1 in 1/31 layout the op levels use.)
   -- per-op envelope shapes: a flat 1..#SHAPES index list (the curated shape table).
@@ -470,10 +487,11 @@ local function value_brightness(param, value, layer)
     -- deeper rests dimmer, so a rest never collides with a hit count (min hit = 5).
     if value <= 0 then b = clamp(4 + value, 2, 4)
     else b = math.min(4 + value, VALUE_MAX) end
-  elseif param == 'note' then
-    -- signed ramp centered on 7: a negative degree reads dimmer than zero, a
-    -- positive one brighter, so +n and -n no longer collide (they did under the
-    -- old abs() mapping). Reads like pitch height — higher note, brighter cell.
+  elseif param == 'note' or param == 'stack' then
+    -- signed ramp centered on 7: a negative degree/offset reads dimmer than
+    -- zero, a positive one brighter, so +n and -n never collide. Reads like
+    -- pitch height — higher note, brighter cell (stack offset 0 = the role
+    -- tone sits at the same mid brightness a degree-0 note does).
     b = clamp(round(7 + value), 2, VALUE_MAX)
   elseif param:match('^opRatio') then
     if layer == 'B' then
@@ -637,11 +655,19 @@ end
 
 -- The two step lanes a channel row shows, left ([1]) then right ([2]). Normally
 -- a param's A and B layers; div/reps is special — div (A) left, reps (A) right.
-function GridUI:row_lanes()
+-- `ch` (optional, 0-based) resolves the lane per channel: a chord-role channel's
+-- note page is backed by its OWN 'stack' sequences (signed chord-stack offsets),
+-- so free melody and chord motion are separate materials that both persist
+-- across a role flip. Every surface (grid press/render, screen pages) resolves
+-- through here; the params blocks address 'note' and 'stack' directly instead.
+function GridUI:row_lanes(ch)
   local p = self.selectedParam
   local pr = PAIR_OF[p]
   if pr then
     return {{param = pr[1], layer = 'A'}, {param = pr[2], layer = 'A'}}
+  end
+  if ch ~= nil and p == 'note' and ((self:chan(ch) or {}).role or 0) > 0 then
+    p = 'stack'
   end
   return {{param = p, layer = 'A'}, {param = p, layer = 'B'}}
 end
@@ -739,7 +765,7 @@ function GridUI:handle_normal_press(x, y)
       return
     end
     local li, step = decode_col(x)
-    local lane = self:row_lanes()[li]
+    local lane = self:row_lanes(y)[li]
     self:open_step_picker(y, step, lane.param, lane.layer)
   elseif y == 6 then
     self:handle_row6(x)
@@ -779,7 +805,7 @@ function GridUI:handle_picker_press(x, y)
   -- (either half) hops the picker there. Removal lives on the value grid (tap
   -- the lit value), so it no longer needs the channel row to be reachable.
   local li, step = decode_col(x)
-  local lane = self:row_lanes()[li]
+  local lane = self:row_lanes(y)[li]
   if y == p.ch and lane.param == p.param and lane.layer == p.layer and step == p.col then
     self:close_picker()
   else
@@ -1269,7 +1295,7 @@ function GridUI:render_channel_row(ch)
   -- two lanes side by side: left half (cols 0..SEQ_LEN-1) then right half
   -- (cols B_COL0..15). Normally A/B of the selected param; div/reps shows
   -- div left + reps right (see row_lanes).
-  local lanes = self:row_lanes()
+  local lanes = self:row_lanes(ch)
   for li, lane in ipairs(lanes) do
     local base = (li == 2) and B_COL0 or 0
     local seq = self:seq_ref(ch, lane.param, lane.layer)
