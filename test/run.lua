@@ -1576,35 +1576,58 @@ ctl:press(0, 6)                        -- HOLD grid position 1 (row6 col0), no r
 ctl:press(4, 6)                        -- TAP grid position 5 (row6 col4) while held
 ctl:release(4, 6); ctl:release(0, 6)
 check('gesture arms a ramp on every selected cell',
-  ctl.picker.sel[1].ramp and ctl.picker.sel[1].ramp.idx == 1
-  and ctl.picker.sel[1].ramp.target == 5
-  and ctl.picker.sel[2].ramp and ctl.picker.sel[2].ramp.target == 5)
+  ctl:ramp_for(0, 'opLevel1') and ctl:ramp_for(0, 'opLevel1').idx == 1
+  and ctl:ramp_for(0, 'opLevel1').target == 5
+  and ctl:ramp_for(1, 'opLevel1') and ctl:ramp_for(1, 'opLevel1').target == 5)
 check('ramp snaps each cell to the FROM position immediately',
   approx(geng.channels[1].opLevel1, 0/31) and approx(geng.channels[2].opLevel1, 0/31))
 -- advance_mix_ramps steps one position toward the target per fire on that channel.
 ctl:advance_mix_ramps(0)               -- ch0 fires once -> position 2
 check('a trigger steps that channel one position toward the target',
-  ctl.picker.sel[1].ramp.idx == 2 and approx(geng.channels[1].opLevel1, 1/31))
+  ctl:ramp_for(0, 'opLevel1').idx == 2 and approx(geng.channels[1].opLevel1, 1/31))
 check('other channels are unaffected until they fire',
-  ctl.picker.sel[2].ramp.idx == 1 and approx(geng.channels[2].opLevel1, 0/31))
+  ctl:ramp_for(1, 'opLevel1').idx == 1 and approx(geng.channels[2].opLevel1, 0/31))
 ctl:advance_mix_ramps(0); ctl:advance_mix_ramps(0)  -- -> 3, 4
 ctl:advance_mix_ramps(0)               -- -> 5 (target): ramp clears
 check('the ramp lands on the target and clears',
-  ctl.picker.sel[1].ramp == nil and approx(geng.channels[1].opLevel1, 4/31))
+  ctl:ramp_for(0, 'opLevel1') == nil and approx(geng.channels[1].opLevel1, 4/31))
 ctl:advance_mix_ramps(0)               -- no-op once cleared
 check('a cleared ramp holds its value', approx(geng.channels[1].opLevel1, 4/31))
 -- a plain value tap cancels an in-progress ramp.
 ctl:press(4, 6)                        -- plain tap position 5 (both cells -> 4/31)
 ctl:press(8, 6)                        -- HOLD 5, TAP 9 -> re-arm glide 5 -> 9 on both
 ctl:release(8, 6); ctl:release(4, 6)
-check('re-arm arms a fresh 5->9 ramp', ctl.picker.sel[1].ramp
-  and ctl.picker.sel[1].ramp.idx == 5 and ctl.picker.sel[1].ramp.target == 9)
+check('re-arm arms a fresh 5->9 ramp', ctl:ramp_for(0, 'opLevel1')
+  and ctl:ramp_for(0, 'opLevel1').idx == 5 and ctl:ramp_for(0, 'opLevel1').target == 9)
 tap(0, 7)                              -- plain tap (position 17) cancels + applies
 check('a plain value tap cancels the ramp',
-  ctl.picker.sel[1].ramp == nil and approx(geng.channels[2].opLevel1, 16/31))
+  ctl:ramp_for(0, 'opLevel1') == nil and approx(geng.channels[2].opLevel1, 16/31))
 tap(2, 0)                              -- exit
 ctl:press(11, 6)
 check('MIX mode exited', ctl.mixMode == false)
+
+-- a glide KEEPS RUNNING after the picker closes / the MIX page is left / the cell
+-- loses focus: the ramp lives on the controller, and the fire subscription advances
+-- it regardless of the page showing. Arm on ch0, leave MIX entirely, then drive real
+-- fire events through the engine and watch it march to the target.
+geng.channels[1].opLevel1 = 0
+ctl:press(11, 6)                       -- enter MIX
+ctl:press(3, 0); ctl:release(3, 0)     -- select op1 level ch0
+ctl:press(0, 6)                        -- HOLD position 1
+ctl:press(8, 6)                        -- TAP position 9 -> glide 1 -> 9
+ctl:release(8, 6); ctl:release(0, 6)
+tap(2, 0)                              -- exit the picker
+ctl:press(11, 6)                       -- leave the MIX page entirely
+ctl:press(0, 6)                        -- switch to a sequence page (note) -> new focus
+check('glide survives closing the picker and leaving the page',
+  ctl.picker == nil and ctl.mixMode == false and ctl:ramp_for(0, 'opLevel1') ~= nil)
+geng:emit{ type = 'fire', ch = 1 }     -- a real trigger on ch0 (1-based in events)
+check('a fire off the MIX page still advances the glide',
+  ctl:ramp_for(0, 'opLevel1').idx == 2 and approx(geng.channels[1].opLevel1, 1/31))
+for _ = 1, 7 do geng:emit{ type = 'fire', ch = 1 } end  -- march to position 9
+check('the headless glide reaches its target and clears',
+  ctl:ramp_for(0, 'opLevel1') == nil and approx(geng.channels[1].opLevel1, 8/31))
+geng.channels[1].opLevel1 = 1          -- restore op1 default
 
 -- the channel-strip filter pushes to the SC engine on every set_scalar (unlike
 -- the other MIX scalars, which ride the next trig): Burst:push_filter forwards

@@ -54,7 +54,10 @@
 --          GESTURE: HOLD one value cell and, while holding, tap another — every
 --          selected cell then GLIDES from the held position to the tapped one, one
 --          grid-step per trigger on its OWN channel's clock (advance_mix_ramps, driven
---          off the fire event). A plain value tap cancels an in-progress glide.
+--          off the fire event). Glides live on the controller (self.ramps), not the
+--          picker, so they keep running after the picker closes / the cell loses
+--          focus / the MIX page is left — until they land or a plain value tap on the
+--          cell cancels them.
 --          (All four op ratios are sequenced — edited on their row-7 pages, not here.)
 --   PROB:  rows 0-5 = probability (col 0, tap -> 32-value picker on rows 6-7)
 --          · three hold<->step trig toggles (single button each, off=hold on=step):
@@ -476,6 +479,9 @@ local function mix_cell_at(x)
   end
   return nil
 end
+-- identity of a MIX cell (channel + field) — the key for a running ramp in
+-- self.ramps, so a glide is tracked per cell independent of the picker/selection.
+local function ramp_key(ch, field) return ch .. ':' .. field end
 -- Curated per-channel quantize grids (events per whole note). Mirrors
 -- Burst.QUANTIZE_VALUES — keep in sync. Edited on the per-channel PRISM page.
 local QUANTIZE_VALUES = {3, 4, 6, 8, 12, 16, 24, 32}
@@ -655,6 +661,10 @@ function GridUI.new(engine, grid, opts)
   self.hasLaunched = false
 
   self.downKeys = {}            -- key (y*GRID_W+x) -> true while physically held
+  -- running MIX value glides, keyed by ramp_key(ch, field). Lives on the controller
+  -- (not the picker) so a glide keeps advancing after the picker closes, the cell
+  -- loses focus/selection, or the MIX page is left — until it lands or is cancelled.
+  self.ramps = {}
   self.kbMode = false
   self.kbPage = 1
   self.kbBLayer = false
@@ -664,12 +674,21 @@ function GridUI.new(engine, grid, opts)
 
   engine:on(function(ev)
     if ev.type == 'fire' then
-      -- MIX ramp gesture: step any glide on this channel one position per trigger.
+      -- MIX ramp gesture: advance any glide on this channel one position per
+      -- trigger. Done FIRST and unconditionally so glides keep running whatever
+      -- page/picker is showing (they outlive the mix picker).
+      local ramped = self:advance_mix_ramps(ev.ch - 1)
+      -- the mix picker mirrors the glide live (value grid + selection flashes)
       if self.picker and self.picker.kind == 'mix' then
-        if self:advance_mix_ramps(ev.ch - 1) then self:render_all(); self.g:refresh() end
+        if ramped then self:render_all(); self.g:refresh() end
         return
       end
-      if self.kbMode or self.probMode or self.perfMode or self.prismMode or self.mixMode then return end
+      if self.kbMode or self.probMode or self.perfMode or self.prismMode or self.mixMode then
+        -- these pages have no playhead, but a headless glide still needs its row
+        -- repainted so its brightness tracks (e.g. the MIX-page mix rows).
+        if ramped then self:render_channel_row(ev.ch - 1); self.g:refresh() end
+        return
+      end
       -- the scale picker repurposes the channel rows; a step picker does not
       -- (it lives on rows 6-7), so let its channel-row playheads keep animating
       if self.picker and self.picker.kind == 'scale' then return end
@@ -1114,9 +1133,9 @@ function GridUI:handle_mix_picker_press(x, y)
       self:arm_mix_ramp(from, idx)
     else
       -- plain tap: apply this grid position to every selected cell (cancelling any
-      -- ramp in progress) and keep the picker open.
+      -- ramp on those cells) and keep the picker open.
       for _, e in ipairs(self.picker.sel) do
-        e.ramp = nil
+        self.ramps[ramp_key(e.ch, e.field)] = nil
         local v = e.layout[idx]
         if v ~= nil then self:set_scalar(e.ch, e.field, v) end
       end
@@ -1132,12 +1151,17 @@ function GridUI:handle_mix_picker_press(x, y)
   self:render_all()
 end
 
+function GridUI:ramp_for(ch, field) return self.ramps[ramp_key(ch, field)] end
+
 -- Arm a glide on every selected cell from grid position `from` to `to` (1-based
--- into the 32-cell value grid). The value snaps to `from` immediately, then
--- advance_mix_ramps walks it one step toward `to` on each of that channel's fires.
+-- into the 32-cell value grid). Registers each as a persistent ramp (self.ramps,
+-- keyed by cell) so it survives the picker; the value snaps to `from` immediately,
+-- then advance_mix_ramps walks it one step toward `to` on each of that channel's
+-- fires. Re-arming a cell replaces its ramp.
 function GridUI:arm_mix_ramp(from, to)
   for _, e in ipairs(self.picker.sel) do
-    e.ramp = { idx = from, target = to }
+    self.ramps[ramp_key(e.ch, e.field)] =
+      { ch = e.ch, field = e.field, layout = e.layout, idx = from, target = to }
     local v = e.layout[from]
     if v ~= nil then self:set_scalar(e.ch, e.field, v) end
   end
@@ -1145,19 +1169,17 @@ end
 
 -- Step every ramp on channel `ch0` (0-based) one grid-position toward its target,
 -- writing the new value. Clears a ramp once it lands. Returns true if anything
--- moved (so the caller repaints). Called from the fire subscription.
+-- moved (so the caller repaints). Called from the fire subscription REGARDLESS of
+-- the current page/picker, so glides keep running headless.
 function GridUI:advance_mix_ramps(ch0)
-  local p = self.picker
-  if not (p and p.kind == 'mix') then return false end
   local moved = false
-  for _, e in ipairs(p.sel) do
-    if e.ch == ch0 and e.ramp then
-      local r = e.ramp
+  for k, r in pairs(self.ramps) do
+    if r.ch == ch0 then
       if r.idx < r.target then r.idx = r.idx + 1
       elseif r.idx > r.target then r.idx = r.idx - 1 end
-      local v = e.layout[r.idx]
-      if v ~= nil then self:set_scalar(e.ch, e.field, v) end
-      if r.idx == r.target then e.ramp = nil end
+      local v = r.layout[r.idx]
+      if v ~= nil then self:set_scalar(r.ch, r.field, v) end
+      if r.idx == r.target then self.ramps[k] = nil end
       moved = true
     end
   end
@@ -1456,10 +1478,11 @@ function GridUI:render_mix_picker(p)
     local y = PICKER_ROW0 + math.floor((i - 1) / GRID_W)
     self.g:set_led(x, y, eq(a.layout[i], cur) and 15 or 1)
   end
-  -- while a ramp is gliding, mark its target (a mid-bright strobing cell) so the
-  -- destination reads against the moving full-bright current-value cell.
-  if a.ramp then
-    local t = a.ramp.target
+  -- while the anchor cell has a glide running, mark its target (a mid-bright
+  -- strobing cell) so the destination reads against the moving current-value cell.
+  local r = self:ramp_for(a.ch, a.field)
+  if r then
+    local t = r.target
     local x = (t - 1) % GRID_W
     local y = PICKER_ROW0 + math.floor((t - 1) / GRID_W)
     self.g:set_led(x, y, 8)
