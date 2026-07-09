@@ -675,9 +675,9 @@ check('running role channel follows the bar progression (I then V)',
 
 -- all four op ratios are sequenced (A value + B offset, drawn per burst). The drawn
 -- op2/3/4 values pass straight to trig args 4/5/6 (r2/r3/r4); op1's drawn value rides
--- as r1 at arg 14; the per-channel pan rides at arg 15.
+-- as r1 at arg 14; the per-channel pan rides at arg 15; op1 widen detune at arg 32.
 -- engine.trig(freq, amp, algo, r2, r3, r4, modIndex, feedback, ch,
---             lvl1..4, r1, pan, then per-op env {atk,dec,atkCurve,decCurve} x4 at 16..31).
+--             lvl1..4, r1, pan, per-op env {atk,dec,atkCurve,decCurve} x4 at 16..31, detune).
 local function first_trig()
   clock._reset()
   local saved = engine
@@ -692,6 +692,7 @@ local function first_trig()
   e.channels[1].opRatio3 = seqx.new{3}
   e.channels[1].opRatio4 = seqx.new{7}
   e.channels[1].pan = -0.5
+  e.channels[1].detune = 12
   e:launch(1)
   clock._run_until(2)
   engine = saved
@@ -704,6 +705,8 @@ check('sequenced op2/3/4 ratios pass at trig args 4/5/6',
 -- op1 ratio (sequenced): its drawn value rides as r1 at trig arg 14.
 check('op1 ratio passes at trig arg 14', off and approx(off[14], 0.5))
 check('pan passes at trig arg 15', off and approx(off[15], -0.5))
+-- op1 stereo-widening detune (cents) rides at trig arg 32.
+check('op1 widen detune passes at trig arg 32', off and approx(off[32], 12))
 
 -- op ratio B lane is an INDEX OFFSET: it shifts A's position UP the op's ROLE SET
 -- (never an off-grid sum), reaching the higher upper-32 ratios. Under algo 1 op2 is a
@@ -1476,58 +1479,130 @@ ctl:press(13, 6)
 check('PROB mode exited', ctl.probMode == false)
 
 -- MIX page (row6 col 11) in signal-flow order: algo (col 0) + mod index (col 1) + per-op
--- level (cols 3-6) + FM feedback (col 8) + filter (col 13) + pan (col 14) + channel
--- level/volume (col 15). Chorus was removed; cols 2/7/9-12 are inert.
+-- level (cols 3-6) + FM feedback (col 8) + filter (col 10) + op1 widen/detune (col 12)
+-- + pan (col 13) + channel level/volume (col 15). Cols 2/7/9/11/14 are inert.
+-- Tapping a cell opens the MULTI-SELECT picker seeded with that cell; more cells
+-- toggle in/out; a value tap applies to the WHOLE selection and leaves the picker
+-- open; a dark/empty column exits (the selection is never cleared out from under
+-- an in-progress edit).
+-- tap = press+release, mirroring the hardware key lifecycle. Value-grid taps MUST
+-- release, else the accumulated down-keys would be misread as the hold-then-tap
+-- ramp gesture (which the dedicated gesture test below exercises on purpose).
+local function tap(x, y) ctl:press(x, y); ctl:release(x, y) end
 ctl:press(11, 6)
 check('MIX mode entered', ctl.mixMode == true)
--- col2 is a dark separator now (chorus removed) — inert.
+-- col2 is a dark separator now (chorus removed) — no picker opens, inert.
 ctl:press(2, 0)
 check('MIX col2 is inert (separator)', ctl.picker == nil)
-ctl:press(0, 0)   -- col0 -> algorithm picker
-check('MIX col0 opens the algorithm scalar picker',
-  ctl.picker and ctl.picker.field == 'algo')
-ctl:press(1, 0)   -- col1 -> mod index picker
-check('MIX col1 opens the mod index scalar picker',
-  ctl.picker and ctl.picker.field == 'modIndex')
-ctl:press(14, 0)  -- col14 -> pan picker
-check('MIX col14 opens the pan scalar picker',
-  ctl.picker and ctl.picker.field == 'pan')
-ctl:press(0, 6)   -- value grid row 6 col 0 -> PAN_VALUES[1] = -1 (hard left)
-check('MIX pan picker sets c.pan hard left', approx(geng.channels[1].pan, -1))
-ctl:press(14, 0)  -- reopen pan picker
-ctl:press(0, 7)   -- value grid row 7 col 0 -> PAN_VALUES[17] = 0 (centre, grid-exact)
-check('MIX pan picker can return to dead centre', approx(geng.channels[1].pan, 0))
-ctl:press(15, 0)  -- col15 -> channel level/volume picker
-check('MIX col15 opens the channel level scalar picker',
-  ctl.picker and ctl.picker.field == 'level')
-ctl:press(0, 6)   -- value grid row 6 col 0 -> OP_LEVEL_VALUES[1] = 0
-check('MIX channel level picker sets c.level', approx(geng.channels[1].level, 0))
-ctl:press(3, 0)   -- col3 -> op1 level picker
-check('MIX op level cell opens a scalar picker',
-  ctl.picker and ctl.picker.field == 'opLevel1')
-ctl:press(15, 7)  -- value grid row 7 col 15 -> OP_LEVEL_VALUES[32] = 1.0
-check('MIX op level picker sets opLevel1', approx(geng.channels[1].opLevel1, 1.0))
-ctl:press(8, 0)   -- col8 -> FM feedback picker
-check('MIX col8 opens the FM feedback scalar picker',
-  ctl.picker and ctl.picker.field == 'fmFeedback')
-ctl:close_picker()
--- DJ filter (col 13): one bipolar knob, centre = no filter, left = LP, right = HP.
+
+-- each cell opens the multi-select picker seeded with its field; helper closes it
+-- (empty column) so the next check starts from a single-cell selection.
+local function mix_opens(col, ch, field)
+  ctl:press(col, ch)
+  local ok = ctl.picker and ctl.picker.kind == 'mix' and #ctl.picker.sel == 1
+    and ctl.picker.sel[1].field == field and ctl.picker.sel[1].ch == ch
+  ctl:press(2, ch)  -- dark column -> exit, back to a clean slate
+  return ok
+end
+check('MIX col0 opens the algorithm cell', mix_opens(0, 0, 'algo'))
+check('MIX col1 opens the mod index cell', mix_opens(1, 0, 'modIndex'))
+check('MIX col3 opens the op1 level cell', mix_opens(3, 0, 'opLevel1'))
+check('MIX col8 opens the FM feedback cell', mix_opens(8, 0, 'fmFeedback'))
+check('MIX col10 opens the filter cell', mix_opens(10, 0, 'filterPos'))
+check('MIX col12 opens the op1 widen (detune) cell', mix_opens(12, 0, 'detune'))
+check('MIX col13 opens the pan cell', mix_opens(13, 0, 'pan'))
+check('MIX col15 opens the channel level cell', mix_opens(15, 0, 'level'))
+
+-- a value tap applies AND keeps the picker open (unlike the one-shot prob picker).
+ctl:press(13, 0); ctl:release(13, 0)  -- pan ch0
+tap(0, 6)         -- PAN_VALUES[1] = -1 (hard left)
+check('MIX value tap sets the field and keeps the picker open',
+  approx(geng.channels[1].pan, -1) and ctl.picker ~= nil)
+
+-- tapping another cell ADDS it; one value tap then writes every selected cell.
+ctl:press(13, 1); ctl:release(13, 1)  -- pan ch1 -> selection = {pan ch0, pan ch1}
+check('tapping another cell adds it to the selection', #ctl.picker.sel == 2)
+tap(0, 7)         -- PAN_VALUES[17] = 0 (centre) applied to BOTH channels
+check('a value applies to every selected cell',
+  approx(geng.channels[1].pan, 0) and approx(geng.channels[2].pan, 0))
+
+-- re-tapping a selected cell deselects it (leaving the rest of the set intact).
+ctl:press(13, 0); ctl:release(13, 0)
+check('re-tapping a selected cell deselects it',
+  #ctl.picker.sel == 1 and ctl.picker.sel[1].ch == 1)
+
+-- heterogeneous fields co-select; a grid POSITION resolves through each field's own
+-- 32-value layout, so index 32 -> PAN_VALUES[32] = +1 and OP_LEVEL_VALUES[32] = 1.0.
+ctl:press(3, 0); ctl:release(3, 0)    -- add op1 level ch0 alongside pan ch1
+check('heterogeneous fields can co-select', #ctl.picker.sel == 2)
+tap(15, 7)        -- grid position 32
+check('grid position resolves per field layout',
+  approx(geng.channels[2].pan, 1) and approx(geng.channels[1].opLevel1, 1.0))
+
+-- a dark/empty column exits the picker.
+ctl:press(2, 0); ctl:release(2, 0)
+check('empty column exits the multi-select picker', ctl.picker == nil)
+
+-- value extremes reach through each field's layout (single-cell for clarity).
+ctl:press(12, 0); tap(0, 6)           -- detune DETUNE_VALUES[1] = 0 (off)
+check('MIX detune reaches 0 (off)', geng.channels[1].detune == 0)
+tap(15, 7)                             -- DETUNE_VALUES[32] = 62 (widest)
+check('MIX detune reaches the widest step', geng.channels[1].detune == 62)
+tap(2, 0)                              -- exit
+ctl:press(15, 0); tap(0, 6)           -- channel level OP_LEVEL_VALUES[1] = 0
+check('MIX channel level reaches 0', approx(geng.channels[1].level, 0))
+tap(2, 0)                              -- exit
+
+-- DJ filter (col 10): one bipolar knob, centre = no filter, left = LP, right = HP.
+geng.channels[1].filterPos = 0
 check('filterPos defaults to 0 (no filter)', geng.channels[1].filterPos == 0)
-ctl:press(13, 0)  -- col13 -> filter picker
-check('MIX col13 opens the filter scalar picker',
-  ctl.picker and ctl.picker.field == 'filterPos')
-ctl:press(0, 6)   -- value grid row 6 col 0 -> FILTER_VALUES[1] = -1 (LP closed)
-check('MIX filter picker sets filterPos to the LP extreme',
-  approx(geng.channels[1].filterPos, -1))
-ctl:press(13, 0)  -- reopen filter picker
-ctl:press(0, 7)   -- value grid row 7 col 0 -> FILTER_VALUES[17] = 0 (off, grid-exact)
-check('MIX filter picker can return to off (centre)',
-  approx(geng.channels[1].filterPos, 0))
-ctl:press(13, 0)
-ctl:press(15, 7)  -- value grid row 7 col 15 -> FILTER_VALUES[32] = +1 (HP extreme)
-check('MIX filter picker sets filterPos to the HP extreme',
-  approx(geng.channels[1].filterPos, 1))
-geng.channels[1].filterPos = 0  -- restore the default for later checks
+ctl:press(10, 0); tap(0, 6)           -- FILTER_VALUES[1] = -1 (LP closed)
+check('MIX filter reaches the LP extreme', approx(geng.channels[1].filterPos, -1))
+tap(0, 7)                              -- FILTER_VALUES[17] = 0 (off, grid-exact)
+check('MIX filter can return to off (centre)', approx(geng.channels[1].filterPos, 0))
+tap(15, 7)                             -- FILTER_VALUES[32] = +1 (HP extreme)
+check('MIX filter reaches the HP extreme', approx(geng.channels[1].filterPos, 1))
+tap(2, 0)                              -- exit the picker before leaving the page
+geng.channels[1].filterPos = 0        -- restore the default for later checks
+geng.channels[1].pan, geng.channels[2].pan = 0, 0
+
+-- ---- MIX ramp gesture: HOLD one value cell, tap another -> the value GLIDES from
+-- the held cell to the tapped one, one grid-step per trigger on each selected
+-- channel's own clock. op1 level (col 3) has a clean monotonic layout:
+-- position k -> value (k-1)/31, ideal for reading the ramp. -------------------
+ctl:press(3, 0); ctl:release(3, 0)     -- select op1 level ch0
+ctl:press(3, 1); ctl:release(3, 1)     -- add op1 level ch1
+ctl:press(0, 6)                        -- HOLD grid position 1 (row6 col0), no release
+ctl:press(4, 6)                        -- TAP grid position 5 (row6 col4) while held
+ctl:release(4, 6); ctl:release(0, 6)
+check('gesture arms a ramp on every selected cell',
+  ctl.picker.sel[1].ramp and ctl.picker.sel[1].ramp.idx == 1
+  and ctl.picker.sel[1].ramp.target == 5
+  and ctl.picker.sel[2].ramp and ctl.picker.sel[2].ramp.target == 5)
+check('ramp snaps each cell to the FROM position immediately',
+  approx(geng.channels[1].opLevel1, 0/31) and approx(geng.channels[2].opLevel1, 0/31))
+-- advance_mix_ramps steps one position toward the target per fire on that channel.
+ctl:advance_mix_ramps(0)               -- ch0 fires once -> position 2
+check('a trigger steps that channel one position toward the target',
+  ctl.picker.sel[1].ramp.idx == 2 and approx(geng.channels[1].opLevel1, 1/31))
+check('other channels are unaffected until they fire',
+  ctl.picker.sel[2].ramp.idx == 1 and approx(geng.channels[2].opLevel1, 0/31))
+ctl:advance_mix_ramps(0); ctl:advance_mix_ramps(0)  -- -> 3, 4
+ctl:advance_mix_ramps(0)               -- -> 5 (target): ramp clears
+check('the ramp lands on the target and clears',
+  ctl.picker.sel[1].ramp == nil and approx(geng.channels[1].opLevel1, 4/31))
+ctl:advance_mix_ramps(0)               -- no-op once cleared
+check('a cleared ramp holds its value', approx(geng.channels[1].opLevel1, 4/31))
+-- a plain value tap cancels an in-progress ramp.
+ctl:press(4, 6)                        -- plain tap position 5 (both cells -> 4/31)
+ctl:press(8, 6)                        -- HOLD 5, TAP 9 -> re-arm glide 5 -> 9 on both
+ctl:release(8, 6); ctl:release(4, 6)
+check('re-arm arms a fresh 5->9 ramp', ctl.picker.sel[1].ramp
+  and ctl.picker.sel[1].ramp.idx == 5 and ctl.picker.sel[1].ramp.target == 9)
+tap(0, 7)                              -- plain tap (position 17) cancels + applies
+check('a plain value tap cancels the ramp',
+  ctl.picker.sel[1].ramp == nil and approx(geng.channels[2].opLevel1, 16/31))
+tap(2, 0)                              -- exit
 ctl:press(11, 6)
 check('MIX mode exited', ctl.mixMode == false)
 
@@ -1686,22 +1761,27 @@ sui:set_page(P_MIX)
 check('mix page_lines is signal-flow order (alg, index, op1 l ...)',
   sui:page_lines()[1][1] == 'alg' and sui:page_lines()[2][1] == 'index'
   and sui:page_lines()[3][1] == 'op1 l')
-check('mix page has 10 lines (filter added)', #sui:page_lines() == 10)
-sui.sel_line[P_MIX] = 9   -- pan
+check('mix page has 11 lines (widen added)', #sui:page_lines() == 11)
+sui.sel_line[P_MIX] = 10  -- pan
 seng.channels[1].pan = 0
 sui:enc(3, -1)
 check('mix page pan line steps pan left down the -1..1 grid',
   in_set(seng.channels[1].pan, GridUI.PAN_VALUES) and seng.channels[1].pan < 0)
-sui.sel_line[P_MIX] = 10  -- channel level (volume)
+sui.sel_line[P_MIX] = 11  -- channel level (volume)
 seng.channels[1].level = 1.0
 sui:enc(3, -1)
 check('mix page level line steps channel level down the 0..1 grid',
   in_set(seng.channels[1].level, GridUI.OP_LEVEL_VALUES) and seng.channels[1].level < 1.0)
-sui.sel_line[P_MIX] = 8   -- DJ filter position
+sui.sel_line[P_MIX] = 9   -- DJ filter position
 seng.channels[1].filterPos = 0
 sui:enc(3, -1)
 check('mix page filter line steps toward the low-pass down the -1..1 grid',
   in_set(seng.channels[1].filterPos, GridUI.FILTER_VALUES) and seng.channels[1].filterPos < 0)
+sui.sel_line[P_MIX] = 8   -- op1 widen (detune)
+seng.channels[1].detune = 0
+sui:enc(3, 1)
+check('mix page widen line steps detune up the 0..62¢ grid',
+  in_set(seng.channels[1].detune, GridUI.DETUNE_VALUES) and seng.channels[1].detune > 0)
 sui.sel_line[P_MIX] = 3   -- op1 level
 seng.channels[1].opLevel1 = 1.0
 sui:enc(3, -1)

@@ -89,8 +89,9 @@ defs = [
 		atk2 = 0.001, dec2 = 0.2, atkCurve2 = -4, decCurve2 = -4,
 		atk3 = 0.001, dec3 = 0.2, atkCurve3 = -4, decCurve3 = -4,
 		atk4 = 0.001, dec4 = 0.2, atkCurve4 = -4, decCurve4 = -4,
-		gate = 1, pan = 0;
-		var e1, e2, e3, e4, cut, free, maxTime, o1, o2, o3, o4, sig;
+		gate = 1, pan = 0, detune = 0;
+		var e1, e2, e3, e4, cut, free, maxTime, o2, o3, o4, sig;
+		var o1mod, o1L, o1R, dUp, dDn, o1amA, o1amG, restSig, op1sig, halfW;
 		e1 = EnvGen.kr(Env.new([0, 1, 0], [atk1, max(0.01, dec1)], [atkCurve1, decCurve1]));
 		e2 = EnvGen.kr(Env.new([0, 1, 0], [atk2, max(0.01, dec2)], [atkCurve2, decCurve2]));
 		e3 = EnvGen.kr(Env.new([0, 1, 0], [atk3, max(0.01, dec3)], [atkCurve3, decCurve3]));
@@ -101,16 +102,25 @@ defs = [
 		o4 = SinOscFB.ar(freq * r4, feedback) * lvl4 * e4;
 		o3 = SinOsc.ar(freq * r3, modIndex * (m43 * o4)) * lvl3 * e3;
 		o2 = SinOsc.ar(freq * r2, modIndex * (m42 * o4 + m32 * o3)) * lvl2 * e2;
-		o1 = SinOsc.ar(freq * r1, modIndex * (m41 * o4 + m31 * o3 + m21 * o2)) * lvl1 * e1;
+		// op1 stereo widening: two detuned clones, hard L/R, half gain each.
+		dUp = (detune / 100).midiratio;
+		dDn = (detune.neg / 100).midiratio;
+		o1mod = modIndex * (m41 * o4 + m31 * o3 + m21 * o2);
+		o1L = SinOsc.ar(freq * r1 * dDn, o1mod) * lvl1 * e1;
+		o1R = SinOsc.ar(freq * r1 * dUp, o1mod) * lvl1 * e1;
 		o3 = o3 * (1 + (amDepth * (a43 * o4)));
 		o3 = o3 * (1 + (amDepth * (g43 * (o4 - 1))));
 		o2 = o2 * (1 + (amDepth * (a42 * o4 + a32 * o3)));
 		o2 = o2 * (1 + (amDepth * (g42 * (o4 - 1) + g32 * (o3 - 1))));
-		o1 = o1 * (1 + (amDepth * (a41 * o4 + a31 * o3 + a21 * o2)));
-		o1 = o1 * (1 + (amDepth * (g41 * (o4 - 1) + g31 * (o3 - 1) + g21 * (o2 - 1))));
-		sig = (c1 * o1) + (c2 * o2) + (c3 * o3) + (c4 * o4);
-		sig = sig * cut * amp * 0.5;
-		sig = Pan2.ar(sig, pan);
+		o1amA = 1 + (amDepth * (a41 * o4 + a31 * o3 + a21 * o2));
+		o1amG = 1 + (amDepth * (g41 * (o4 - 1) + g31 * (o3 - 1) + g21 * (o2 - 1)));
+		o1L = o1L * o1amA * o1amG;
+		o1R = o1R * o1amA * o1amG;
+		restSig = Pan2.ar((c2 * o2) + (c3 * o3) + (c4 * o4), pan);
+		halfW = (detune / 62).clip(0, 1);   // op1 clones spread AROUND pan (Option A)
+		op1sig = Pan2.ar(c1 * o1L * 0.5, (pan - halfW).clip(-1, 1))
+		       + Pan2.ar(c1 * o1R * 0.5, (pan + halfW).clip(-1, 1));
+		sig = (restSig + op1sig) * cut * amp * 0.5;
 		Out.ar(out, sig);
 	}),
 	// per-channel strip: DJ filter (non-resonant Butterworth LPF -> HPF in series,

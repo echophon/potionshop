@@ -76,14 +76,14 @@ local PAGE_PERF, PAGE_PROB, PAGE_SCALE, PAGE_MIX =
 -- quantize+env+geode onto its PRISM page). prob = prob/mode + note/op-seq/op-env
 -- trig = 5 (the op trigs are ONE switch each for all four B lanes).
 -- scale = the HARMONY page: mode/root/degree/diatonic/quality/inversion/voicing +
--- 6 channel roles = 13. mix = algo + mod index + 4 op levels + fm fb + filter +
--- pan + channel level = 10 (all four op ratios are sequenced, edited on seq pages).
+-- 6 channel roles = 13. mix = algo + mod index + 4 op levels + fm fb + widen + filter
+-- + pan + channel level = 11 (all four op ratios are sequenced, edited on seq pages).
 local LINES_PER_PAGE = {}
 for i = 1, NUM_SEQ do LINES_PER_PAGE[i] = 6 end  -- unused for seq pages; kept for clamps
 LINES_PER_PAGE[PAGE_PERF]  = 7
 LINES_PER_PAGE[PAGE_PROB]  = 5
 LINES_PER_PAGE[PAGE_SCALE] = 15  -- 7 context + prog run + bars + 6 channel roles
-LINES_PER_PAGE[PAGE_MIX]   = 10
+LINES_PER_PAGE[PAGE_MIX]   = 11
 
 local NOTE_NAMES = {'c','c#','d','d#','e','f','f#','g','g#','a','a#','b'}
 
@@ -487,8 +487,8 @@ end
 
 -- MIX page cursor in signal-flow order (matching the grid's left->right layout):
 -- line 1 = mod index, 2 = FM algorithm, lines 3..6 = op1..op4 level (0..1 grid),
--- 7 = FM feedback, 8 = filter (DJ position), 9 = pan, 10 = channel level/volume.
--- (Op ratios are sequenced.)
+-- 7 = FM feedback, 8 = op1 widen (detune), 9 = filter (DJ position), 10 = pan,
+-- 11 = channel level/volume. (Op ratios are sequenced.)
 function Screen:_edit_mix(d)
   local ch = self.sel_ch
   local c = self.engine.channels[ch + 1]
@@ -500,10 +500,12 @@ function Screen:_edit_mix(d)
   elseif line == 7 then
     self.ctl:set_scalar(ch, 'fmFeedback', step_table(c.fmFeedback, GridUI.FM_FEEDBACK_VALUES, d))
   elseif line == 8 then
-    self.ctl:set_scalar(ch, 'filterPos', step_table(c.filterPos, GridUI.FILTER_VALUES, d))
+    self.ctl:set_scalar(ch, 'detune', step_table(c.detune or 0, GridUI.DETUNE_VALUES, d))
   elseif line == 9 then
-    self.ctl:set_scalar(ch, 'pan', step_table(c.pan, GridUI.PAN_VALUES, d))
+    self.ctl:set_scalar(ch, 'filterPos', step_table(c.filterPos, GridUI.FILTER_VALUES, d))
   elseif line == 10 then
+    self.ctl:set_scalar(ch, 'pan', step_table(c.pan, GridUI.PAN_VALUES, d))
+  elseif line == 11 then
     self.ctl:set_scalar(ch, 'level', step_table(c.level, GridUI.OP_LEVEL_VALUES, d))
   else
     local field = 'opLevel' .. (line - 2)  -- line 3->op1 .. 6->op4
@@ -732,9 +734,9 @@ function Screen:page_lines()
     end
   elseif self.page == PAGE_MIX then
     -- signal-flow order: FM algorithm + mod index, the four static op levels, FM
-    -- feedback, then the output stage: DJ filter, pan + channel level/volume. All
-    -- four op ratios are sequenced (shown/edited on the per-param seq pages),
-    -- absent here.
+    -- feedback, then the output/spatial stage: op1 widen (detune), DJ filter, pan +
+    -- channel level/volume. All four op ratios are sequenced (shown/edited on the
+    -- per-param seq pages), absent here.
     lines = {
       {'alg',   GridUI.ALGO_NAMES[c.algo] or '?'},
       {'index', string.format('%d', c.modIndex)},
@@ -743,6 +745,7 @@ function Screen:page_lines()
       {'op3 l', string.format('%.2f', c.opLevel3)},
       {'op4 l', string.format('%.2f', c.opLevel4)},
       {'fm fb', string.format('%.2f', c.fmFeedback)},
+      {'widen', string.format('%d c', c.detune or 0)},
       {'filter', GridUI.filter_label(c.filterPos)},
       {'pan',   GridUI.pan_label(c.pan)},
       {'level', string.format('%.2f', c.level)},

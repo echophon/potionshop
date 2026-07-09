@@ -44,10 +44,18 @@
 --   layer intact so it can keep variating the copied sequins.
 --   MIX:   rows 0-5 = signal-flow order: FM ALGORITHM (col 0, per-channel) + mod INDEX (col 1),
 --          then op1-4 LEVEL (cols 3-6) + FM FEEDBACK (col 8), then the output stage:
---          FILTER (col 13, one bipolar DJ knob: LP left / off centre / HP right) +
---          PAN (col 14) + channel LEVEL/volume (col 15). Cols 2/7/9-12 are dark
---          separators. Tap a cell to open its value picker on rows 6-7. (All four op
---          ratios are sequenced — edited on their row-7 pages, not here.)
+--          FILTER (col 10, one bipolar DJ knob: LP left / off centre / HP right) +
+--          op1 WIDEN detune (col 12) + PAN (col 13) + channel LEVEL/volume (col 15).
+--          Cols 2/7/9/11/14 are dark separators. Tap a cell to open a MULTI-SELECT
+--          value picker on rows 6-7: the cell flashes, and tapping more cells (any
+--          channel/field) toggles them into the selection. A value tap applies that
+--          grid POSITION to every selected cell (each field resolves it through its
+--          own 32-value layout) and KEEPS the picker open; a dark/empty column exits.
+--          GESTURE: HOLD one value cell and, while holding, tap another — every
+--          selected cell then GLIDES from the held position to the tapped one, one
+--          grid-step per trigger on its OWN channel's clock (advance_mix_ramps, driven
+--          off the fire event). A plain value tap cancels an in-progress glide.
+--          (All four op ratios are sequenced — edited on their row-7 pages, not here.)
 --   PROB:  rows 0-5 = probability (col 0, tap -> 32-value picker on rows 6-7)
 --          · three hold<->step trig toggles (single button each, off=hold on=step):
 --            note alt(B) layer (col 3) · op-ratio seqs (col 4, ONE switch for all
@@ -168,17 +176,27 @@ local function launch_channel_at(x, y)
 end
 -- MIX page channel-row layout follows the voice's signal flow left -> right: the FM
 -- SOURCE scalars first (algorithm col 0, mod index col 1), then the OPERATOR mix (op1..4
--- LEVEL on cols 3..6, FM feedback on col 8), then the OUTPUT stage on the far right
--- (FILTER col 13, stereo PAN col 14, channel LEVEL/volume col 15). Cols 2 and 7 are
--- dark separators; cols 9..12 are dark. All four op ratios are sequenced (row-7
--- pages), not here.
+-- LEVEL on cols 3..6, FM feedback on col 8), then the OUTPUT/spatial stage (DJ FILTER
+-- col 10, op1 WIDEN detune col 12, stereo PAN col 13, channel LEVEL/volume col 15).
+-- Cols 2/7/9/11/14 are dark separators. All four op ratios are sequenced (row-7 pages),
+-- not here.
 local MOD_INDEX_COL = 1     -- FM mod index (PM/AM depth)
 local ALGO_COL = 0          -- FM algorithm (operator routing, per-channel)
 local OP_LEVEL_COL0 = 3     -- op1..op4 output levels on cols 3..6
 local FM_FEEDBACK_COL = 8   -- op4 self-feedback
-local FILTER_COL = 13       -- DJ filter position (LP | off | HP, output stage)
-local PAN_COL = 14          -- stereo pan (output stage)
+local FILTER_COL = 10       -- DJ filter position (LP | off | HP, output stage)
+local DETUNE_COL = 12       -- op1 stereo-widening detune (output/spatial stage)
+local PAN_COL = 13          -- stereo pan (output stage)
 local MIX_LEVEL_COL = 15    -- channel level / volume (final output)
+-- field -> MIX column, the inverse of the press dispatch below. Used by the
+-- multi-select picker to flash every selected cell on its channel row.
+local MIX_FIELD_COL = {
+  algo = ALGO_COL, modIndex = MOD_INDEX_COL,
+  opLevel1 = OP_LEVEL_COL0, opLevel2 = OP_LEVEL_COL0 + 1,
+  opLevel3 = OP_LEVEL_COL0 + 2, opLevel4 = OP_LEVEL_COL0 + 3,
+  fmFeedback = FM_FEEDBACK_COL, filterPos = FILTER_COL,
+  detune = DETUNE_COL, pan = PAN_COL, level = MIX_LEVEL_COL,
+}
 -- The step picker's 32-value grid renders on the control rows (6-7) while a pick
 -- is in progress, leaving all six channel rows visible so the step being edited
 -- is never hidden behind the picker. (The scale picker still owns rows 0-5.)
@@ -435,6 +453,29 @@ local PAN_VALUES = range(32, function(i) return math.max(-1, math.min(1, (i - 16
 -- is exactly 0 = no filter (the grid-exact default); left of centre closes the
 -- low-pass toward -1, right of centre raises the high-pass toward +1.
 local FILTER_VALUES = range(32, function(i) return math.max(-1, math.min(1, (i - 16) / 15)) end)
+-- op1 stereo-widening detune, in CENTS. 2-cent steps across the 32-cell grid
+-- (0 = off/phantom-centre .. 62 = widest), so the default 6 cents lands exactly on
+-- cell 3. Matches the SC PotionFM `detune` arg (rides trig, arg 32) like pan.
+local DETUNE_VALUES = range(32, function(i) return i * 2 end)
+-- MIX column -> (field, value layout, status kind). The single source of truth
+-- for which cell each MIX column edits; used both to OPEN a picker (normal press)
+-- and to TOGGLE a cell into the multi-select set (picker press). Dark separator
+-- columns (2/7/9/11/14, and anything unmapped) return nil = "empty column" — the
+-- tap that exits the multi-select picker.
+local function mix_cell_at(x)
+  if x == FILTER_COL then return 'filterPos', FILTER_VALUES, 'filter'
+  elseif x == DETUNE_COL then return 'detune', DETUNE_VALUES, 'widen'
+  elseif x == PAN_COL then return 'pan', PAN_VALUES, 'pan'
+  elseif x == MIX_LEVEL_COL then return 'level', OP_LEVEL_VALUES, 'level'
+  elseif x == MOD_INDEX_COL then return 'modIndex', MOD_INDEX_VALUES, 'index'
+  elseif x == FM_FEEDBACK_COL then return 'fmFeedback', FM_FEEDBACK_VALUES, 'fb'
+  elseif x == ALGO_COL then return 'algo', ALGO_VALUES, 'algo'
+  else
+    local lvi = x - OP_LEVEL_COL0
+    if lvi >= 0 and lvi <= 3 then return 'opLevel' .. (lvi + 1), OP_LEVEL_VALUES, 'level' end
+  end
+  return nil
+end
 -- Curated per-channel quantize grids (events per whole note). Mirrors
 -- Burst.QUANTIZE_VALUES — keep in sync. Edited on the per-channel PRISM page.
 local QUANTIZE_VALUES = {3, 4, 6, 8, 12, 16, 24, 32}
@@ -573,6 +614,7 @@ GridUI.PAN_VALUES = PAN_VALUES
 GridUI.pan_label = pan_label
 GridUI.FILTER_VALUES = FILTER_VALUES  -- bipolar DJ filter-position grid
 GridUI.filter_label = filter_label
+GridUI.DETUNE_VALUES = DETUNE_VALUES  -- op1 stereo-widening detune grid (cents)
 
 -- opts.on_status(string): pushed status text (for screen). opts.on_redraw():
 -- called after any state change so the screen can refresh too. opts.on_edit(ev):
@@ -612,6 +654,7 @@ function GridUI.new(engine, grid, opts)
   -- resets on script reload, which is a fresh start anyway).
   self.hasLaunched = false
 
+  self.downKeys = {}            -- key (y*GRID_W+x) -> true while physically held
   self.kbMode = false
   self.kbPage = 1
   self.kbBLayer = false
@@ -621,6 +664,11 @@ function GridUI.new(engine, grid, opts)
 
   engine:on(function(ev)
     if ev.type == 'fire' then
+      -- MIX ramp gesture: step any glide on this channel one position per trigger.
+      if self.picker and self.picker.kind == 'mix' then
+        if self:advance_mix_ramps(ev.ch - 1) then self:render_all(); self.g:refresh() end
+        return
+      end
       if self.kbMode or self.probMode or self.perfMode or self.prismMode or self.mixMode then return end
       -- the scale picker repurposes the channel rows; a step picker does not
       -- (it lives on rows 6-7), so let its channel-row playheads keep animating
@@ -690,10 +738,34 @@ end
 -- ---- press dispatch ----------------------------------------------------
 
 function GridUI:press(x, y)
+  -- track which keys are physically held (for the MIX ramp gesture). Recorded for
+  -- every press; only the picker's value grid reads it. Cleared on release + when a
+  -- picker opens/closes so a missed release can't strand a stale "held" key.
+  self.downKeys[y * GRID_W + x] = true
   -- KB mode disabled (see handle_row6): kbMode never becomes true.
   -- if self.kbMode then self:handle_kb_press(x, y); return end
   if self.picker then self:handle_picker_press(x, y)
   else self:handle_normal_press(x, y) end
+end
+
+function GridUI:release(x, y)
+  self.downKeys[y * GRID_W + x] = nil
+end
+
+-- The index (1-based, into the value grid's 32 cells) of a value-grid key that is
+-- currently held down OTHER than the one at (cx, cy) — the "from" anchor of the
+-- hold-then-tap ramp gesture. nil if no other value key is held.
+function GridUI:held_picker_value(cx, cy)
+  local cur = cy * GRID_W + cx
+  for k in pairs(self.downKeys) do
+    if k ~= cur then
+      local ky = math.floor(k / GRID_W)
+      if ky >= PICKER_ROW0 then
+        return (ky - PICKER_ROW0) * GRID_W + (k % GRID_W) + 1
+      end
+    end
+  end
+  return nil
 end
 
 function GridUI:handle_normal_press(x, y)
@@ -756,27 +828,13 @@ function GridUI:handle_normal_press(x, y)
     end
     if self.mixMode then
       -- signal-flow layout: algorithm (col 0) + mod index (col 1), op1..op4 levels
-      -- (cols 3..6) + FM feedback (col 8), then filter (col 13) + pan (col 14) +
-      -- channel level (col 15). Cols 2/7/9..12 are dark. All four op ratios are
-      -- sequenced (their row-7 pages).
-      if x == FILTER_COL then                    -- DJ filter (LP | off | HP)
-        self:open_scalar_picker(y, 'filterPos', FILTER_VALUES, 'filter')
-      elseif x == PAN_COL then                   -- stereo pan
-        self:open_scalar_picker(y, 'pan', PAN_VALUES, 'pan')
-      elseif x == MIX_LEVEL_COL then            -- channel level (volume)
-        self:open_scalar_picker(y, 'level', OP_LEVEL_VALUES, 'level')
-      elseif x == MOD_INDEX_COL then            -- FM mod index
-        self:open_scalar_picker(y, 'modIndex', MOD_INDEX_VALUES, 'index')
-      elseif x == FM_FEEDBACK_COL then          -- FM feedback
-        self:open_scalar_picker(y, 'fmFeedback', FM_FEEDBACK_VALUES, 'fb')
-      elseif x == ALGO_COL then                 -- FM algorithm (per-channel)
-        self:open_scalar_picker(y, 'algo', ALGO_VALUES, 'algo')
-      else
-        local lvi = x - OP_LEVEL_COL0
-        if lvi >= 0 and lvi <= 3 then           -- op1..op4 level
-          self:open_scalar_picker(y, 'opLevel' .. (lvi + 1), OP_LEVEL_VALUES, 'level')
-        end
-      end
+      -- (cols 3..6) + FM feedback (col 8), then filter (col 10) + widen (col 12) +
+      -- pan (col 13) + channel level (col 15). Cols 2/7/9/11/14 are dark. All four op
+      -- ratios are sequenced (their row-7 pages). Tapping a cell opens the MIX
+      -- multi-select picker seeded with that cell (see open_mix_picker); dark
+      -- columns do nothing.
+      local field, layout, valkind = mix_cell_at(x)
+      if field then self:open_mix_picker(y, field, layout, valkind) end
       return
     end
     local li, step = decode_col(x)
@@ -791,6 +849,7 @@ end
 
 function GridUI:handle_picker_press(x, y)
   local p = self.picker
+  if p.kind == 'mix' then self:handle_mix_picker_press(x, y); return end
   if p.kind == 'scale' then
     if y < 6 then self:apply_picker_value(p, x, y); return end
     if y == 6 and x == ROW6_SCALE_COL then self:close_picker(); return end
@@ -1018,6 +1077,93 @@ function GridUI:open_scalar_picker(ch, field, layout, valkind)
   self:render_all()
 end
 
+-- MIX-page MULTI-SELECT picker. Unlike the single-shot scalar picker, this holds a
+-- LIST of selected {ch, field, layout, valkind} cells (`sel`) that all flash on the
+-- grid. Tapping a value on rows 6-7 applies that grid POSITION to every selected
+-- cell (each field resolves the index through its own 32-value layout), and the
+-- picker STAYS OPEN so a run of edits share one selection. Tapping another MIX cell
+-- toggles it in/out of the set; tapping a dark/empty column exits. The last cell
+-- added is the "anchor" (`sel[#sel]`) whose layout + current value drive the value
+-- grid's brightness reference.
+function GridUI:open_mix_picker(ch, field, layout, valkind)
+  self:_focus(ch)
+  self.downKeys = {}   -- fresh gesture state; ignore anything held from before
+  self.picker = {kind = 'mix', sel = {{ch = ch, field = field, layout = layout, valkind = valkind}}}
+  self:render_all()
+end
+
+-- add or remove a cell from the selection (matched on ch + field); a re-tapped cell
+-- toggles off. Keeps the picker open even when the set empties (exit is the dark
+-- column) so the selection is never cleared out from under a series of edits.
+function GridUI:toggle_mix_sel(ch, field, layout, valkind)
+  local sel = self.picker.sel
+  for i, e in ipairs(sel) do
+    if e.ch == ch and e.field == field then table.remove(sel, i); return end
+  end
+  sel[#sel + 1] = {ch = ch, field = field, layout = layout, valkind = valkind}
+end
+
+function GridUI:handle_mix_picker_press(x, y)
+  if y >= PICKER_ROW0 then
+    local idx = (y - PICKER_ROW0) * GRID_W + x + 1
+    -- GESTURE: if another value cell is still held down, this is a hold-then-tap
+    -- ramp — every selected cell GLIDES from the held cell's position to this one,
+    -- one grid-step per trigger on its own channel (see advance_mix_ramps).
+    local from = self:held_picker_value(x, y)
+    if from and from ~= idx then
+      self:arm_mix_ramp(from, idx)
+    else
+      -- plain tap: apply this grid position to every selected cell (cancelling any
+      -- ramp in progress) and keep the picker open.
+      for _, e in ipairs(self.picker.sel) do
+        e.ramp = nil
+        local v = e.layout[idx]
+        if v ~= nil then self:set_scalar(e.ch, e.field, v) end
+      end
+    end
+    self:render_all()
+    return
+  end
+  -- a channel row: a MIX cell toggles selection, a dark/empty column exits.
+  local field, layout, valkind = mix_cell_at(x)
+  if field == nil then self:close_picker(); return end
+  self:_focus(y)
+  self:toggle_mix_sel(y, field, layout, valkind)
+  self:render_all()
+end
+
+-- Arm a glide on every selected cell from grid position `from` to `to` (1-based
+-- into the 32-cell value grid). The value snaps to `from` immediately, then
+-- advance_mix_ramps walks it one step toward `to` on each of that channel's fires.
+function GridUI:arm_mix_ramp(from, to)
+  for _, e in ipairs(self.picker.sel) do
+    e.ramp = { idx = from, target = to }
+    local v = e.layout[from]
+    if v ~= nil then self:set_scalar(e.ch, e.field, v) end
+  end
+end
+
+-- Step every ramp on channel `ch0` (0-based) one grid-position toward its target,
+-- writing the new value. Clears a ramp once it lands. Returns true if anything
+-- moved (so the caller repaints). Called from the fire subscription.
+function GridUI:advance_mix_ramps(ch0)
+  local p = self.picker
+  if not (p and p.kind == 'mix') then return false end
+  local moved = false
+  for _, e in ipairs(p.sel) do
+    if e.ch == ch0 and e.ramp then
+      local r = e.ramp
+      if r.idx < r.target then r.idx = r.idx + 1
+      elseif r.idx > r.target then r.idx = r.idx - 1 end
+      local v = e.layout[r.idx]
+      if v ~= nil then self:set_scalar(e.ch, e.field, v) end
+      if r.idx == r.target then e.ramp = nil end
+      moved = true
+    end
+  end
+  return moved
+end
+
 function GridUI:open_scale_picker()
   -- entering the harmony page is exclusive with the other row-6 latch modes, so
   -- only one row-6 button stays lit (see handle_row6's latch handlers)
@@ -1028,6 +1174,7 @@ end
 
 function GridUI:close_picker()
   self.picker = nil
+  self.downKeys = {}   -- drop any held-key state with the picker (ramps stop with it)
   -- an in-progress progression recording is only meaningful while the HARM page
   -- is open, so leaving it cancels the (uncommitted) buffer rather than stranding
   -- the REC arm.
@@ -1091,7 +1238,7 @@ end
 local MIX_SCALARS = {
   'pan', 'filterPos',
   'level', 'opLevel1', 'opLevel2', 'opLevel3', 'opLevel4',
-  'modIndex', 'fmFeedback', 'algo', 'envMode', 'geodeMode',
+  'modIndex', 'fmFeedback', 'algo', 'detune', 'envMode', 'geodeMode',
 }
 
 function GridUI:clear_channel(ch)
@@ -1226,11 +1373,13 @@ function GridUI:render_all()
   -- KB mode disabled (see handle_row6): kbMode never becomes true.
   -- if self.kbMode then self:render_kb_mode(); self:_status(); self.g:refresh(); self.on_redraw(); return end
   self.g:clear()
-  if self.picker and (self.picker.kind == 'step' or self.picker.kind == 'scalar') then
-    -- step/scalar pick: every channel row stays drawn (the edited cell glows on
+  if self.picker and (self.picker.kind == 'step' or self.picker.kind == 'scalar'
+                      or self.picker.kind == 'mix') then
+    -- step/scalar/mix pick: every channel row stays drawn (the edited cell glows on
     -- its own row) and the value grid borrows the control rows (6-7).
     for ch = 0, NUM_CHANNELS - 1 do self:render_channel_row(ch) end
     if self.picker.kind == 'step' then self:render_step_picker(self.picker)
+    elseif self.picker.kind == 'mix' then self:render_mix_picker(self.picker)
     else self:render_scalar_picker(self.picker) end
     self:_status()
     self.g:refresh()
@@ -1289,6 +1438,32 @@ function GridUI:render_scalar_picker(p)
     local x = (i - 1) % GRID_W
     local y = PICKER_ROW0 + math.floor((i - 1) / GRID_W)
     self.g:set_led(x, y, eq(p.layout[i], cur) and 15 or 1)
+  end
+end
+
+-- MIX multi-select value grid (rows 6-7): the ANCHOR cell (last selected) drives
+-- the layout + the bright current-value marker, since a shared grid can only mark
+-- one field's current value. An empty selection leaves the rows dark (exit pending).
+function GridUI:render_mix_picker(p)
+  for y = 0, 1 do
+    for x = 0, GRID_W - 1 do self.g:set_led(x, PICKER_ROW0 + y, 0) end
+  end
+  local a = p.sel[#p.sel]
+  if not a then return end
+  local cur = self:chan(a.ch)[a.field]
+  for i = 1, #a.layout do
+    local x = (i - 1) % GRID_W
+    local y = PICKER_ROW0 + math.floor((i - 1) / GRID_W)
+    self.g:set_led(x, y, eq(a.layout[i], cur) and 15 or 1)
+  end
+  -- while a ramp is gliding, mark its target (a mid-bright strobing cell) so the
+  -- destination reads against the moving full-bright current-value cell.
+  if a.ramp then
+    local t = a.ramp.target
+    local x = (t - 1) % GRID_W
+    local y = PICKER_ROW0 + math.floor((t - 1) / GRID_W)
+    self.g:set_led(x, y, 8)
+    self.g:set_strobe(x, y, 'slow')
   end
 end
 
@@ -1430,9 +1605,9 @@ function GridUI:render_channel_row(ch)
 end
 
 -- MIX page (signal-flow order): FM algorithm (col 0) + mod index (col 1), op1..4 level
--- (cols 3..6) + FM feedback (col 8), then pan (col 14) + channel level/volume (col 15).
--- Each cell's brightness encodes its value (normalised to its own range); picker opens
--- on tap. All four op ratios are sequenced (their own row-7 pages).
+-- (cols 3..6) + FM feedback (col 8), then filter (col 10) + widen (col 12) + pan
+-- (col 13) + channel level/volume (col 15). Each cell's brightness encodes its value
+-- (normalised to its own range); picker opens on tap. Op ratios are sequenced (row-7).
 function GridUI:render_mix_row(ch)
   local c = self:chan(ch)
   local function bright(frac) return math.max(2, round(2 + clamp(frac, 0, 1) * 11)) end
@@ -1446,17 +1621,20 @@ function GridUI:render_mix_row(ch)
   -- filter brightness = distance from centre (off = dim, either extreme = bright),
   -- so the cell reads "how much filtering", not which direction.
   self.g:set_led(FILTER_COL, ch, bright(math.abs(c.filterPos or 0)))
+  -- widen brightness = detune magnitude over its 0..62¢ span (off = dim).
+  self.g:set_led(DETUNE_COL, ch, bright((c.detune or 0) / 62))
   self.g:set_led(PAN_COL, ch, bright(((c.pan or 0) + 1) / 2))  -- -1..1 -> 0..1 brightness
   self.g:set_led(MIX_LEVEL_COL, ch, bright(c.level or 0))
-  if self.picker and self.picker.kind == 'scalar' and self.picker.ch == ch then
-    local f = self.picker.field
-    if f == 'filterPos' then self.g:set_led(FILTER_COL, ch, 15)
-    elseif f == 'pan' then self.g:set_led(PAN_COL, ch, 15)
-    elseif f == 'level' then self.g:set_led(MIX_LEVEL_COL, ch, 15)
-    elseif f == 'modIndex' then self.g:set_led(MOD_INDEX_COL, ch, 15)
-    elseif f == 'fmFeedback' then self.g:set_led(FM_FEEDBACK_COL, ch, 15)
-    elseif f == 'algo' then self.g:set_led(ALGO_COL, ch, 15)
-    elseif f:match('^opLevel') then self.g:set_led(OP_LEVEL_COL0 + (tonumber(f:sub(-1)) - 1), ch, 15) end
+  -- multi-select: every selected cell on this row flashes full-bright so the
+  -- active set reads at a glance across all six channels.
+  if self.picker and self.picker.kind == 'mix' then
+    for _, e in ipairs(self.picker.sel) do
+      local col = e.ch == ch and MIX_FIELD_COL[e.field]
+      if col then
+        self.g:set_led(col, ch, 15)
+        self.g:set_strobe(col, ch, 'fast')
+      end
+    end
   end
 end
 
@@ -1768,6 +1946,7 @@ function GridUI:current_page()
     -- the prob picker opens from the PROB page; every other scalar is a MIX cell
     return self.picker.field == 'burstProb' and 'PROB' or 'MIX'
   end
+  if self.picker and self.picker.kind == 'mix' then return 'MIX' end
   if self.perfMode then return 'PERF' end
   if self.probMode then return 'PROB' end
   if self.prismMode then return 'PRISM' end
@@ -1808,6 +1987,15 @@ function GridUI:_status()
         or ({modIndex = 'mod index', fmFeedback = 'fm fb'})[f]
         or 'level'
       s = 'edit ch' .. (self.picker.ch + 1) .. ' ' .. lbl .. '=' .. tostring(val)
+    end
+  elseif self.picker and self.picker.kind == 'mix' then
+    local n = #self.picker.sel
+    local a = self.picker.sel[n]
+    if a then
+      local lbl = a.valkind or a.field
+      s = 'MIX ' .. n .. ' sel — pick a value (all), empty col = exit · ' .. lbl
+    else
+      s = 'MIX 0 sel — tap a cell to select, empty col = exit'
     end
   elseif self.picker and self.picker.kind == 'step' then
     local pp = self.picker.param

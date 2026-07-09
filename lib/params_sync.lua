@@ -286,6 +286,9 @@ function M:add_globals()
     ctl:set_prog_bars(PROG_BARS_VALUES[i]); self:request_render()
   end)
 
+  -- op1 stereo widening is per-channel now (chN_detune, added in the channel loop
+  -- below as a MIX-page scalar) — the old global 'op1_detune' param is gone.
+
   -- quantize is per-channel now (chN_quantize, added in the channel loop below) —
   -- the old global 'quantize' param is gone.
 
@@ -426,6 +429,18 @@ function M:_add_channel_params(n)
       function(p) return GridUI.pan_label(clamp((p:get() - 16) / 15, -1, 1)) end)
     params:set_action(id('pan'), function(v)
       c.pan = clamp((v - 16) / 15, -1, 1)
+      self:request_render()
+    end)
+  end)
+  -- op1 stereo-widening detune (MIX page, col 12) — static per-channel scalar on a
+  -- 0..31 grid mapped to 0..62 CENTS in 2¢ steps (DETUNE_VALUES[v+1] = v*2), the same
+  -- discrete set the MIX picker uses so a grid/menu edit reflects exactly. Default 6¢
+  -- = grid index 3. Rides trig (arg 32) like pan; exempt from randomize/mutate.
+  def(1, function()
+    params:add_number(id('detune'), 'op1 widen', 0, 31, round((c.detune or 0) / 2),
+      function(p) return (p:get() * 2) .. ' cents' end)
+    params:set_action(id('detune'), function(v)
+      c.detune = v * 2
       self:request_render()
     end)
   end)
@@ -653,6 +668,7 @@ function M:reflect_scalars(n)
   params:set(id('octave'), c.octave, true)
   params:set(id('level'), round(c.level * 31), true)
   params:set(id('pan'), round(c.pan * 15 + 16), true)
+  params:set(id('detune'), round((c.detune or 0) / 2), true)
   params:set(id('filter'), round((c.filterPos or 0) * 15 + 16), true)
   for op = 1, 4 do params:set(id('level' .. op), round(c['opLevel' .. op] * 31), true) end
   params:set(id('mod_index'), round(c.modIndex), true)

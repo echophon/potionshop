@@ -131,8 +131,10 @@ Engine_Potionshop : CroneEngine {
 			atk3 = 0.001, dec3 = 0.2, atkCurve3 = -4, decCurve3 = -4,  // op3 EG
 			atk4 = 0.001, dec4 = 0.2, atkCurve4 = -4, decCurve4 = -4,  // op4 EG
 			gate = 1,                                       // voice gate
-			pan = 0;                                        // stereo position (-1 L .. +1 R)
-			var e1, e2, e3, e4, cut, free, maxTime, o1, o2, o3, o4, sig;
+			pan = 0,                                        // stereo position (-1 L .. +1 R)
+			detune = 0;                                     // op1 widening detune, cents (0 = off)
+			var e1, e2, e3, e4, cut, free, maxTime, o2, o3, o4, sig;
+			var o1mod, o1L, o1R, dUp, dDn, o1amA, o1amG, restSig, op1sig, halfW;
 
 			// PER-OPERATOR envelope generators (DX-style EG): each shapes its own
 			// operator's output (unit 0->1->0). A carrier's eN is its amplitude
@@ -170,7 +172,22 @@ Engine_Potionshop : CroneEngine {
 			o4 = SinOscFB.ar(freq * r4, feedback) * lvl4 * e4;
 			o3 = SinOsc.ar(freq * r3, modIndex * (m43 * o4)) * lvl3 * e3;
 			o2 = SinOsc.ar(freq * r2, modIndex * (m42 * o4 + m32 * o3)) * lvl2 * e2;
-			o1 = SinOsc.ar(freq * r1, modIndex * (m41 * o4 + m31 * o3 + m21 * o2)) * lvl1 * e1;
+
+			// op1 STEREO WIDENING: op1 (the terminal carrier -- nothing reads it, so
+			// splitting it is safe) is CLONED into two copies, one detuned `detune`
+			// cents DOWN and hard-panned LEFT, one `detune` cents UP and hard-panned
+			// RIGHT, each at HALF gain so the doubling preserves total energy. Both
+			// clones share op1's modulation input, envelope (e1) and level (lvl1), so
+			// only the base frequency differs. detune = 0 => identical copies =>
+			// phantom-centre (transparent). This is a GLOBAL macro for now (one
+			// `detune` param); the per-channel MIX control is the documented next step.
+			// (Cheaper delay/chorus widening coloured the sound too much -- this is a
+			// pure detuned-double instead.)
+			dUp = (detune / 100).midiratio;      // cents -> freq ratio (up)
+			dDn = (detune.neg / 100).midiratio;  // cents -> freq ratio (down)
+			o1mod = modIndex * (m41 * o4 + m31 * o3 + m21 * o2);
+			o1L = SinOsc.ar(freq * r1 * dDn, o1mod) * lvl1 * e1;
+			o1R = SinOsc.ar(freq * r1 * dUp, o1mod) * lvl1 * e1;
 
 			// amplitude/ring modulation post-pass (higher op modulates a lower op's
 			// amplitude). Applied top-down (o3, o2, o1) so ring chains cascade through
@@ -184,18 +201,26 @@ Engine_Potionshop : CroneEngine {
 			o3 = o3 * (1 + (amDepth * (g43 * (o4 - 1))));
 			o2 = o2 * (1 + (amDepth * (a42 * o4 + a32 * o3)));
 			o2 = o2 * (1 + (amDepth * (g42 * (o4 - 1) + g32 * (o3 - 1))));
-			o1 = o1 * (1 + (amDepth * (a41 * o4 + a31 * o3 + a21 * o2)));
-			o1 = o1 * (1 + (amDepth * (g41 * (o4 - 1) + g31 * (o3 - 1) + g21 * (o2 - 1))));
+			// op1's AM/ring multiplier (same sources + depth) applies to BOTH clones.
+			o1amA = 1 + (amDepth * (a41 * o4 + a31 * o3 + a21 * o2));
+			o1amG = 1 + (amDepth * (g41 * (o4 - 1) + g31 * (o3 - 1) + g21 * (o2 - 1)));
+			o1L = o1L * o1amA * o1amG;
+			o1R = o1R * o1amA * o1amG;
 
-			// sum carriers (each already enveloped by its own eN), apply voice-gate +
-			// level. 0.5 master gain: halve the level range so a mid `level` reads as a
-			// moderate hit rather than a heavy accent, and leave headroom for
-			// additive / multi-channel sums (the limiter still backstops peaks).
-			sig = (c1 * o1) + (c2 * o2) + (c3 * o3) + (c4 * o4);
-			sig = sig * cut * amp * 0.5;
-
-			// mono voice -> stereo field at the per-channel pan position.
-			sig = Pan2.ar(sig, pan);
+			// sum the non-op1 carriers (each already enveloped by its own eN) and pan
+			// them at the channel position. op1's two clones are panned AROUND that same
+			// centre: `pan` positions the image, `halfW` (0..1, scaled by detune over its
+			// 0..62 cent grid) spreads the clones about it. detune = 0 => halfW 0 => both
+			// clones sit AT pan => channel pan is pure AND the pair sums back to unity (no
+			// 3 dB dip). Hard pan clamps the spread to the field edge, so the image
+			// narrows as it reaches full L/R (a stereo-wide source can't occupy one
+			// point). 0.5 master gain: halve the level range so a mid `level` reads as a
+			// moderate hit and leaves headroom for multi-channel sums (limiter backstops).
+			restSig = Pan2.ar((c2 * o2) + (c3 * o3) + (c4 * o4), pan);
+			halfW = (detune / 62).clip(0, 1);   // 62 = DETUNE_VALUES max (grid_ui.lua)
+			op1sig = Pan2.ar(c1 * o1L * 0.5, (pan - halfW).clip(-1, 1))
+			       + Pan2.ar(c1 * o1R * 0.5, (pan + halfW).clip(-1, 1));
+			sig = (restSig + op1sig) * cut * amp * 0.5;
 
 			Out.ar(out, sig);
 		}).add;
@@ -272,7 +297,8 @@ Engine_Potionshop : CroneEngine {
 		//      atk1, dec1, atkCurve1, decCurve1,   // op1 EG
 		//      atk2, dec2, atkCurve2, decCurve2,   // op2 EG
 		//      atk3, dec3, atkCurve3, decCurve3,   // op3 EG
-		//      atk4, dec4, atkCurve4, decCurve4)   // op4 EG -- 31 floats total
+		//      atk4, dec4, atkCurve4, decCurve4,   // op4 EG
+		//      detune)                             // op1 widen, cents -- 32 floats total
 		//
 		// `algo` (1..32) selects the routing/carrier data; the rest are the final
 		// per-hit values Burst:fire already computes. The handler expands `algo`
@@ -282,8 +308,9 @@ Engine_Potionshop : CroneEngine {
 		// are the per-operator output levels; r1 is op1's per-channel ratio. Each
 		// operator carries its OWN envelope (per-op EG) from its sequenced opEnvN
 		// shape, resolved in Burst:fire to {atk, dec, atkCurve, decCurve} and grouped
-		// per op at args 16..31.
-		this.addCommand("trig", "fffffffffffffffffffffffffffffff", { arg msg;
+		// per op at args 16..31. `detune` (arg 32, cents) is the per-channel op1
+		// stereo-widening amount (a MIX scalar, like pan).
+		this.addCommand("trig", "ffffffffffffffffffffffffffffffff", { arg msg;
 			var freq = msg[1], amp = msg[2];
 			var algo = msg[3].asInteger.clip(1, 32);
 			var r2 = msg[4], r3 = msg[5], r4 = msg[6];
@@ -297,6 +324,7 @@ Engine_Potionshop : CroneEngine {
 			var atk2 = msg[20], dec2 = msg[21], atkCurve2 = msg[22], decCurve2 = msg[23];
 			var atk3 = msg[24], dec3 = msg[25], atkCurve3 = msg[26], decCurve3 = msg[27];
 			var atk4 = msg[28], dec4 = msg[29], atkCurve4 = msg[30], decCurve4 = msg[31];
+			var detune = msg[32];   // op1 stereo-widening detune, cents
 			var spec, edges, carriers, amEdges, cgain, weights, amWeights, pmIndex, amDepth, voice;
 
 			spec = algorithms[algo - 1];
@@ -357,7 +385,7 @@ Engine_Potionshop : CroneEngine {
 				\atk2, atk2, \dec2, dec2, \atkCurve2, atkCurve2, \decCurve2, decCurve2,
 				\atk3, atk3, \dec3, dec3, \atkCurve3, atkCurve3, \decCurve3, decCurve3,
 				\atk4, atk4, \dec4, dec4, \atkCurve4, atkCurve4, \decCurve4, decCurve4,
-				\pan, pan
+				\pan, pan, \detune, detune
 			], fmGroup);
 			voices[ch - 1] = voice;
 			// clear the slot when the voice frees itself (perc done or gate release)

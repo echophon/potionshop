@@ -448,14 +448,22 @@ local function default_channel()
     -- per-channel STATIC voice macros, edited on the MIX page after the op levels (no
     -- grid page / sequence): FM mod index (1..32, brightness depth), FM feedback
     -- (0..4 rad, modulator self-feedback) and FM algo (1..32, DX-style operator routing,
-    -- MIX col 15). Like level/opLevel they're exempt from randomize/mutate and survive
+    -- MIX col 0). Like level/opLevel they're exempt from randomize/mutate and survive
     -- clear/copy/paste. Drawn straight at fire time.
     modIndex = 2, fmFeedback = 0, algo = 1,
     -- per-channel STATIC stereo pan (MIX page): -1 = hard left, 0 = centre,
     -- +1 = hard right. Like the other MIX scalars it's exempt from randomize/mutate
     -- and survives clear/copy/paste. Drawn straight at fire time (SC Pan2).
     pan = 0,
-    -- per-channel DJ-style multimode filter (MIX page, col 13): one bipolar knob,
+    -- per-channel op1 STEREO-WIDENING detune (MIX page, col 12), in CENTS: op1 (the
+    -- terminal carrier) is cloned into two copies detuned +/- this many cents at half
+    -- gain each, panned AROUND the channel `pan` (pan ± detune/62) so pan positions the
+    -- image and widen spreads the clones about it (SC PotionFM `detune` arg, rides trig
+    -- arg 32 like pan). 0 = off: both clones sit at pan, so pan is pure. Default 6¢ is a
+    -- gentle width. Grid picker resolves in 2¢ steps (DETUNE_VALUES, 0..62). Exempt from
+    -- randomize/mutate, travels with copy/paste — a MIX scalar like pan.
+    detune = 6,
+    -- per-channel DJ-style multimode filter (MIX page, col 10): one bipolar knob,
     -- -1 = low-pass closed, 0 = no filter (both sections open), +1 = high-pass
     -- fully up. Unlike the other MIX scalars it lives on a PERSISTENT SC strip
     -- synth (PotionChannel), so edits are PUSHED via Burst:push_filter instead of
@@ -1061,6 +1069,7 @@ function Burst:fire(ch, beat, freq, level, env1, env2, env3, env4, div, total, h
   local mod_index = c.modIndex
   local feedback  = c.fmFeedback
   local pan       = c.pan or 0
+  local detune    = c.detune or 0   -- op1 stereo-widening detune, cents (trig arg 32)
   -- per-channel static operator levels, passed straight to the voice.
   local ol = {c.opLevel1, c.opLevel2, c.opLevel3, c.opLevel4}
   local out = self.outputs
@@ -1071,7 +1080,8 @@ function Burst:fire(ch, beat, freq, level, env1, env2, env3, env4, div, total, h
     -- from its sequenced SHAPE index, resolved above to {atk, dec, atkCurve, decCurve}
     -- and grouped per op at args 16..31 (op1 16-19, op2 20-23, op3 24-27, op4 28-31).
     -- ol[1..4] are this channel's static operator levels, geode-shaped per hit above.
-    -- See the trig command header in Engine_Potionshop.sc for the full arg order.
+    -- detune (arg 32) is the op1 stereo-widening amount (cents). See the trig command
+    -- header in Engine_Potionshop.sc for the full arg order.
     engine.trig(geo_freq, actual_level, c.algo,
                 ratio2, ratio3, ratio4, mod_index,
                 feedback, ch,
@@ -1079,7 +1089,8 @@ function Burst:fire(ch, beat, freq, level, env1, env2, env3, env4, div, total, h
                 atk1, dec1, atkC1, decC1,
                 atk2, dec2, atkC2, decC2,
                 atk3, dec3, atkC3, decC3,
-                atk4, dec4, atkC4, decC4)
+                atk4, dec4, atkC4, decC4,
+                detune)
   end
   if out then
     -- external voices can't render FM timbre; hand them the four sequenced op ratios.

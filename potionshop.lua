@@ -100,7 +100,11 @@ function init()
   g = grid.connect()
   gw = make_grid_wrapper(g)
   g.key = function(x, y, z)
-    if z == 1 and controller then controller:press(x - 1, y - 1) end
+    if not controller then return end
+    -- releases are forwarded too (not just presses): the MIX multi-select picker's
+    -- hold-then-tap ramp gesture needs to know which keys are still held down.
+    if z == 1 then controller:press(x - 1, y - 1)
+    else controller:release(x - 1, y - 1) end
   end
 
   controller = GridUI.new(eng, gw, {
