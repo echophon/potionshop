@@ -124,10 +124,10 @@ channel level + per-op levels are **static** scalars on the MIX page, not sequen
 
 `[x: 11-15, y: 6]`
 
-- `11` **OP** — per-operator ratios + levels (per channel)
-- `12` **PERF** — perf page (reset / octave / rate / quantize)
-- `13` **PROB** — prob page (probability / alt-trig)
-- `14` **SCALE** — ROOT page: global scale mask + per-channel root (2-octave kb)
+- `11` **MIX** — per-channel algorithm / mod index / op levels / feedback / filter / pan / level
+- `12` **PERF** — perf page (reset / octave / rate)
+- `13` **PROB** — prob page (probability / alt-trig / op-seq & op-env trig)
+- `14` **SCALE** — harmony page (mode / root / chord degree / quality / inversion / voicing / roles)
 - `15` **PRISM** — per-channel quantize + env mode + geode page
 
 ### channel actions
@@ -198,7 +198,42 @@ rows 0–5, per channel — three selectors sharing one page:
 
 cols 8 and 12 are dark separators. env mode + geode are also on the screen PERF page.
 
-### ROOT page (scale mask + per-channel root)
+### harmony page
+
+opened by **SCALE** (row 6, col 14). modal music theory made playable (modeled on
+the Instruō harmonàig): a global **harmonic context** — mode, root, chord degree,
+chord quality, inversion, voicing — resolves a four-tone seventh chord, and any
+channel can be assigned one of its tones as a **role**:
+
+- modes `[x: 0-6, y: 0-1]` — row 0 = the seven Ionian modes (ionian · dorian ·
+  phrygian · lydian · mixolydian · aeolian · locrian), row 1 = the seven
+  harmonic-minor modes (aeolian♯7 · locrian♯6 · ionian♯5 · dorian♯4 · phrygian♯3 ·
+  lydian♯2 · super locrian)
+- chord degree `[x: 0-6, y: 2]` — **I..VII**. unselected degrees brightness-encode
+  their diatonic chord quality (bright = major-type, mid = minor, dark =
+  diminished), so the mode's harmonization reads at a glance. pressing a degree
+  re-harmonizes every role channel on its next hit — play chord progressions live.
+- quality `[y: 3]` — **DIA** `[x: 0]` toggles diatonic auto-quality (derived from
+  mode + degree); the eight seventh-chord qualities `[x: 2-9]` — **mM7 · o7 ·
+  m7b5 · m7 · 7 · M7 · +M7 · +7** — and picking one takes manual control (DIA
+  hands it back)
+- root keyboard `[x: 0-6, y: 4-5]` — pick the tonic (compact piano)
+- inversion `[x: 8-11, y: 4]` — **root / 1st / 2nd / 3rd** (lowest tone hops up
+  an octave)
+- voicing `[x: 8-11, y: 5]` — **close / drop2 / drop3 / spread** (octave-spread
+  the chord tones)
+- roles `[x: 12-15, y: 0-5]` — per channel (row = channel), assign **R / 3 / 5 /
+  7**: the channel's pitch follows that chord tone instead of its note lane
+  (which keeps advancing underneath, and per-channel octave still applies).
+  re-press the lit role to free the channel.
+
+free channels' note lanes index degrees of the selected mode, so everything stays
+diatonic. all context params (`mode`, `root`, `chord_degree`, `chord_quality`,
+`diatonic`, `inversion`, `voicing`, `chN_role`) are MIDI-mappable, so a
+progression can also be driven externally. the **per-channel root transpose**
+(`chN_root`, an additional ±octave tonic shift that composes with the global
+root) and the **tuning** switch (**just intonation** ↔ **12-TET**) are
+PARAMETERS-menu globals/scalars, not grid pages.
 
 opened by **SCALE** (row 6, col 14). scale presets moved to the PARAMETERS menu
 (expanded list), freeing room for three stacked mini-keyboards:
@@ -232,11 +267,15 @@ a complete secondary surface that stays in sync with the grid. six pages:
 - **K1** — left to the norns system menus
 
 **main** edits the six A-layer sequences; **alt** is its clone for the B (additive
-offset) layer. **perf / prob / scale / op** edit the same per-channel fields as the
+offset) layer. **perf / prob / scale / mix** edit the same per-channel fields as the
 grid's matching pages (the screen folds per-channel **quantize**, **env mode** and
-**geode** onto its perf page, which the grid keeps on its own PRISM page), and the grid's mode buttons switch the
-screen tab to match. screen edits go through the same code path as grid edits, so
-both surfaces stay in sync and screen-entered values remain grid-reachable.
+**geode** onto its perf page, which the grid keeps on its own PRISM page), and the
+grid's mode buttons switch the screen tab to match. the **scale** tab is the harmony
+page: 13 lines (mode, root, degree, diatonic, quality, inversion, voicing, ch1–6
+roles) beside a root keyboard and a live chord readout — the symbol (e.g. `V7`) and
+the four voiced tones the role channels will play. screen edits go through the same
+code path as grid edits, so both surfaces stay in sync and screen-entered values
+remain grid-reachable.
 
 ## outputs
 
@@ -283,16 +322,16 @@ the current algorithm.
 the entire instrument is norns params (`lib/params_sync.lua`), so everything saves
 to PSETs and is MIDI-mappable:
 
-- **globals** — `scale` (the shared mask; expanded preset list). `root` is
-  per-channel now, and there is no VOICE group anymore — `env mode` and `geode` are
-  per-channel too.
+- **globals** — `tuning` (just intonation / 12-TET) plus the harmonic context:
+  `mode`, `root`, `chord_degree`, `chord_quality`, `diatonic`, `inversion`,
+  `voicing`. there is no VOICE group — `env mode`, `geode`, `algorithm`, `mod index`
+  and `fm feedback` are all per-channel now.
 - **OUTPUTS** — per-channel destination (see [outputs](#outputs))
 - **ch1–ch6 groups** — run, rate, quantize, `root` (−12..+11 transpose), `env mode`,
-  `geode`, prob, alt-trig, reset, octave, the
-  per-channel voice scalars (`mod index`, `fm feedback`, `algorithm`), the
-  per-op ratios/levels, the randomize/mutate/clear/copy/paste triggers, and every
-  sequence × layer as a text param (the whole sequence as a string) plus step/value
-  cursor params
+  `geode`, prob, alt-trig, chord role, reset, octave, the per-channel voice scalars
+  (`mod index`, `fm feedback`, `algorithm`), the per-op ratios/levels, the
+  randomize/mutate/clear/copy/paste triggers, and every sequence × layer as a text
+  param (the whole sequence as a string) plus step/value cursor params
 
 param edits, grid presses, and screen edits all stay bidirectionally in sync. tempo
 lives in the system **CLOCK** menu (the script uses whatever it's set to).
@@ -307,7 +346,8 @@ lives in the system **CLOCK** menu (the script uses whatever it's set to).
 | `lib/outputs.lua` | per-channel output routing (audio / MIDI / crow CV / crow ii JF + ER-301), params-only |
 | `lib/grid_ui.lua` | the grid controller / UI state machine (pages, pickers, action modes) |
 | `lib/screen_ui.lua` | hand-drawn minimalist screen: focus-brightness lines, note glyph, A/B step squares |
-| `lib/scales.lua` | scales (via `musicutil`) + degree→frequency |
+| `lib/scales.lua` | pitch math: degree/semitone→frequency (via `musicutil`) |
+| `lib/chords.lua` | modal harmony: 14 modes, chord qualities, inversion/voicing math |
 | `lib/quantize.lua` | division/beat snapping |
 | `lib/seqx.lua` | glue over the stock `sequins` library |
 | `lib/Engine_Potionshop.sc` | SuperCollider four-operator FM engine (16 algorithms) + master limiter |

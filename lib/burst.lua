@@ -26,6 +26,7 @@
 
 local quantize = require 'quantize'
 local scales   = require 'scales'
+local chords   = require 'chords'
 local seqx     = require 'seqx'
 
 local NUM_CHANNELS = 6
@@ -422,8 +423,17 @@ local function default_channel()
     opEnv3 = seqx.new{Burst.SHAPE_MOD_DEFAULT},
     opEnv4 = seqx.new{Burst.SHAPE_MOD_DEFAULT},
     opEnv1B = seqx.new{0}, opEnv2B = seqx.new{0}, opEnv3B = seqx.new{0}, opEnv4B = seqx.new{0},
-    -- div/reps have no B layer; note + the op ratios + the op envelopes each keep one.
+    -- div/reps have no B layer; note + stack + the op ratios + the op envelopes
+    -- each keep one.
     noteB  = seqx.new{0},
+    -- chord-role pitch material, SEPARATE from the free note lanes: signed
+    -- chord-stack offsets from the channel's role tone (0 = the tone itself;
+    -- see chord_freq / chords.stack_tone). The note grid/screen page edits
+    -- these instead of note/noteB while a role is active (GridUI.row_lanes),
+    -- so flipping a role swaps musical materials — a free melody is never
+    -- reinterpreted as offsets, and both survive the flip untouched.
+    stack  = seqx.new{0},
+    stackB = seqx.new{0},
     -- per-operator FM ratios. ALL four are SEQUENCED (their own grid pages, A value
     -- + B index offset, like note/level) so every operator's voicing can morph per
     -- step. op1 is the fundamental — its A defaults to 1.0 (a pitch anchor that
@@ -438,14 +448,22 @@ local function default_channel()
     -- per-channel STATIC voice macros, edited on the MIX page after the op levels (no
     -- grid page / sequence): FM mod index (1..32, brightness depth), FM feedback
     -- (0..4 rad, modulator self-feedback) and FM algo (1..32, DX-style operator routing,
-    -- MIX col 15). Like level/opLevel they're exempt from randomize/mutate and survive
+    -- MIX col 0). Like level/opLevel they're exempt from randomize/mutate and survive
     -- clear/copy/paste. Drawn straight at fire time.
     modIndex = 2, fmFeedback = 0, algo = 1,
     -- per-channel STATIC stereo pan (MIX page): -1 = hard left, 0 = centre,
     -- +1 = hard right. Like the other MIX scalars it's exempt from randomize/mutate
     -- and survives clear/copy/paste. Drawn straight at fire time (SC Pan2).
     pan = 0,
-    -- per-channel DJ-style multimode filter (MIX page, col 13): one bipolar knob,
+    -- per-channel op1 STEREO-WIDENING detune (MIX page, col 12), in CENTS: op1 (the
+    -- terminal carrier) is cloned into two copies detuned +/- this many cents at half
+    -- gain each, panned AROUND the channel `pan` (pan ± detune/62) so pan positions the
+    -- image and widen spreads the clones about it (SC PotionFM `detune` arg, rides trig
+    -- arg 32 like pan). 0 = off: both clones sit at pan, so pan is pure. Default 6¢ is a
+    -- gentle width. Grid picker resolves in 2¢ steps (DETUNE_VALUES, 0..62). Exempt from
+    -- randomize/mutate, travels with copy/paste — a MIX scalar like pan.
+    detune = 6,
+    -- per-channel DJ-style multimode filter (MIX page, col 10): one bipolar knob,
     -- -1 = low-pass closed, 0 = no filter (both sections open), +1 = high-pass
     -- fully up. Unlike the other MIX scalars it lives on a PERSISTENT SC strip
     -- synth (PotionChannel), so edits are PUSHED via Burst:push_filter instead of
@@ -466,9 +484,10 @@ local function default_channel()
     -- macros; now per channel, edited on the PRISM page alongside quantize.
     envMode = 0,
     geodeMode = 1,
-    -- per-channel tonic transposition (ROOT/scale page), signed semitones -12..+11
+    -- per-channel tonic transposition (ROOT page), signed semitones -12..+11
     -- (0 = base tonic C1, no transpose). Spans the two-octave root keyboard; sums with
-    -- `octave` below at fire time. The scale MASK stays global (self.scale).
+    -- `octave` below at fire time and composes with the GLOBAL harmonic root
+    -- (self.root) as a tonic shift. The mode/harmonic context is global.
     root = 0,
     octave = 0,     -- -2..2, whole-octave pitch shift (perf page)
     altTrig = 0,    -- alt(B) note layering: 0=hold (add&hold) 1=step (per-hit)
@@ -484,6 +503,13 @@ local function default_channel()
     -- so the envelope shapes arpeggiate within a burst). Identical mechanism to
     -- opSeqTrig (walks B). (Was four per-op fields opEnv1..4Trig; collapsed.)
     opEnvTrig = 0,
+    -- chord-tone role: 0 = free (pitch from the note lane, today's behavior);
+    -- 1..4 = Root/3rd/5th/7th of the global harmonic context (chords.ROLE_NAMES).
+    -- While a role is active pitch comes from the chord tone walked by the
+    -- STACK lanes above; the free note lanes freeze in place, so flipping back
+    -- to free resumes the melody exactly where it left off. The per-channel
+    -- `root` above still applies as an additional tonic transpose either way.
+    role = 0,
   }
 end
 
@@ -491,8 +517,26 @@ function Burst.new()
   local self = setmetatable({}, Burst)
   self.launchGrid = 4   -- launches snap to the next quarter-note boundary
   -- (event snap grid is per-channel now: channels[ch].quantize, from QUANTIZE_VALUES)
-  self.scale = scales.by_name.major   -- GLOBAL scale mask (shared by all channels)
-  -- (root is per-channel now: channels[ch].root, a signed semitone transpose)
+  -- Harmonic context (harmonàig model, lib/chords.lua): mode + root place the
+  -- scale; degree/quality/inversion/voicing resolve the four-tone chord that
+  -- role channels (channels[ch].role > 0) draw their pitch from. Free channels
+  -- only use mode + root (their note lanes index mode degrees). The modal system
+  -- REPLACES the old global scale mask (scales.by_name) — modes live in chords.lua.
+  -- self.root is the GLOBAL harmonic root; each channel's c.root adds on top.
+  self.mode = 1         -- index into chords.MODES (1 = ionian)
+  -- Bar-clocked chord progression (see the progression section below): a list
+  -- of chord degrees stepped once every progBars bars while progOn, each
+  -- advance writing self.degree (role channels re-resolve on their next hit).
+  self.prog = seqx.new{1}
+  self.progOn = false
+  self.progBars = 1     -- bars per chord step (1/2/4 on the params surface)
+  self.prog_clock = nil -- clock.run id while progOn
+  self.root = 0         -- global tonic transposition in semitones (0..11; 0 = C)
+  self.degree = 1       -- chord degree I..VII
+  self.diatonic = true  -- quality derived from mode+degree (vs manual pick)
+  self.quality = 6      -- manual quality index (maj7), used when diatonic = false
+  self.inversion = 0    -- 0..3 = root/1st/2nd/3rd
+  self.voicing = 1      -- 1..4 = close/drop2/drop3/spread
   self.channels = {}
   self.running = {}
   self.clocks = {}      -- per-channel clock.run id (or nil)
@@ -517,6 +561,103 @@ end
 
 -- Kept for call-site compatibility; the clock model needs no setup.
 function Burst:setup() end
+
+-- ---- harmonic context ----------------------------------------------------
+
+function Burst:mode_intervals()
+  return chords.MODES[self.mode].intervals
+end
+
+function Burst:chord_ctx()
+  return { intervals = self:mode_intervals(), root = self.root,
+           degree = self.degree, diatonic = self.diatonic,
+           quality = self.quality, inversion = self.inversion,
+           voicing = self.voicing }
+end
+
+-- Chord-tone role (1..4 = R/3/5/7) -> Hz, pre-octave (fire applies 2^c.octave).
+-- `root` is the channel's additional tonic transpose (c.root), layered on the
+-- global harmonic root already baked into the chord tones (self.root, via ctx).
+-- `off` (optional, signed integer) walks the chord's tone stack from the role's
+-- VOICED tone: the anchor comes from chord_tones — so inversion/voicing place
+-- the register exactly as before, and off = 0 is identical to the old behavior —
+-- and the offset adds the pure stack interval role -> role+off on top
+-- (chords.stack_tone), so a voiced channel arpeggiates around wherever the
+-- voicing put it rather than snapping back to the raw stack.
+function Burst:chord_freq(role, root, off)
+  local ctx = self:chord_ctx()
+  local tone = chords.chord_tones(ctx)[role]
+  if off and off ~= 0 then
+    tone = tone + chords.stack_tone(ctx, role + off) - chords.stack_tone(ctx, role)
+  end
+  -- chords.CHORD_OCTAVE lifts the C1-anchored chord tones into a mid register
+  -- (see chords.lua). Kept out of chord_tones so the pure-math contract holds.
+  return scales.semitone_to_freq(tone + 12 * chords.CHORD_OCTAVE, root)
+end
+
+-- ---- chord progression (bar-clocked) -------------------------------------
+-- A global list of chord degrees (1..7, up to PROG_LEN steps) stepped once
+-- every progBars bars while progOn. Each advance simply writes self.degree —
+-- role channels re-resolve their chord tone per hit, so a progression is just
+-- scheduled degree edits with no extra plumbing. The coroutine rides
+-- clock.sync on the same bar grid as the per-bar reset scheduler
+-- (potionshop.lua), so chord changes land exactly on channel-reset downbeats.
+
+Burst.PROG_LEN = 8  -- mirrored by the grid HARM strip (lib/grid_ui.lua)
+
+-- Install a progression: degrees clamped to 1..7 (ints), capped at PROG_LEN;
+-- empty falls back to a single I. Takes effect at the next advance (the new
+-- sequins starts at its own step 1).
+function Burst:set_prog(list)
+  local vals = {}
+  for i = 1, math.min(#(list or {}), Burst.PROG_LEN) do
+    vals[i] = clamp(round(list[i]), 1, 7)
+  end
+  if #vals == 0 then vals = {1} end
+  self.prog = seqx.new(vals)
+end
+
+-- Apply the next progression step now: draw a degree and make it THE degree.
+-- Emits 'prog' so the surfaces can repaint (grid strip playhead, chord symbol).
+function Burst:prog_advance()
+  self.degree = clamp(self.prog(), 1, 7)
+  self:emit{ type = 'prog', degree = self.degree, step = seqx.playhead(self.prog) }
+end
+
+-- Jump to step i (0-based) and apply it immediately — the grid strip press.
+-- While the clock runs the walk continues from there; while off the strip is a
+-- chord palette (tap a step to hear that chord).
+function Burst:prog_jump(i)
+  local n = seqx.len(self.prog)
+  if n == 0 then return end
+  self.prog:select(clamp(i, 0, n - 1) + 1)
+  self:prog_advance()
+end
+
+-- Start/stop the bar clock. Enabling rewinds to step 1 and applies it
+-- IMMEDIATELY (you hear the progression begin), then advances every progBars
+-- bars on the shared bar grid; disabling freezes the harmony where it stands.
+-- A progBars edit applies at the next advance (the sync interval is re-read
+-- each loop). The coroutine double-checks progOn after every sync so a stop
+-- racing a bar boundary never applies a stale advance.
+function Burst:set_prog_on(on)
+  on = on and true or false
+  if on == self.progOn then return end
+  self.progOn = on
+  if not on then
+    if self.prog_clock then clock.cancel(self.prog_clock); self.prog_clock = nil end
+    return
+  end
+  self.prog:reset()
+  self:prog_advance()
+  self.prog_clock = clock.run(function()
+    while self.progOn do
+      clock.sync(4 * self.progBars)
+      if not self.progOn then return end
+      self:prog_advance()
+    end
+  end)
+end
 
 -- ---- event listeners ---------------------------------------------------
 
@@ -560,10 +701,10 @@ end
 
 function Burst:reset_channel(ch)
   local c = self.channels[ch]
-  for _, k in ipairs{'div','reps','note',                          -- timing + pitch (A)
+  for _, k in ipairs{'div','reps','note','stack',                  -- timing + pitch (A; stack = role offsets)
                      'opEnv1','opEnv2','opEnv3','opEnv4',          -- per-op envelope shapes (A)
                      'opRatio1','opRatio2','opRatio3','opRatio4',  -- sequenced op ratios (A)
-                     'noteB',                                      -- note keeps a B layer
+                     'noteB','stackB',                             -- note + stack keep a B layer
                      'opEnv1B','opEnv2B','opEnv3B','opEnv4B',      -- op envelopes keep a B layer
                      'opRatio1B','opRatio2B','opRatio3B','opRatio4B'} do  -- op ratios keep a B layer
     c[k]:reset()
@@ -690,8 +831,14 @@ function Burst:run_burst(ch, token, target_in)
   local target = target_in
   while self.tokens[ch] == token do
     local c = self.channels[ch]
-    local div_seq, reps_seq, note_seq = c.div, c.reps, c.note
-    local note_seqB = c.noteB  -- note keeps an A/B layer (alt-trig)
+    -- pitch pair: the ACTIVE material for this channel — the free note lanes
+    -- (mode degrees), or the stack lanes (signed chord-stack offsets) while a
+    -- chord role is held. Only the active pair is drawn, so the other material
+    -- freezes in place across a role flip.
+    local role_seq = c.role > 0
+    local note_seq  = role_seq and c.stack  or c.note
+    local note_seqB = role_seq and c.stackB or c.noteB  -- A/B layers (alt-trig)
+    local div_seq, reps_seq = c.div, c.reps
     local div = math.max(1, div_seq())
     local reps = reps_seq()
     -- A/B note degrees kept separate so the alt-trig 'step' mode can advance the
@@ -731,7 +878,18 @@ function Burst:run_burst(ch, token, target_in)
     local env2 = op_env(env2A, env2B)
     local env3 = op_env(env3A, env3B)
     local env4 = op_env(env4A, env4B)
-    local freq = scales.degree_to_freq(degreeA + degreeB, self.scale, c.root)
+    -- Role channels take their pitch from the harmonic context's chord tone,
+    -- WALKED by the stack lanes drawn above: A + B sum to a signed STACK OFFSET
+    -- from the channel's voiced role tone (0 = the tone itself — see chord_freq
+    -- / chords.stack_tone), so the lane is chord-relative motion. Free channels
+    -- index mode degrees from the note lanes. self.root (global harmonic root)
+    -- + c.root (per-channel transpose) compose as tonic shifts under the tuning.
+    local freq
+    if c.role > 0 then
+      freq = self:chord_freq(c.role, c.root, degreeA + degreeB)
+    else
+      freq = scales.degree_to_freq(degreeA + degreeB, self:mode_intervals(), self.root + c.root)
+    end
 
     -- REST: reps <= 0 fires nothing but still consumes (1 - reps) div-steps of
     -- time so the rhythm holds. We drew all the sequins above (so they advance
@@ -760,22 +918,36 @@ function Burst:run_burst(ch, token, target_in)
     while i < total and self.tokens[ch] == token do
       -- identity check: a live grid edit / relaunch replaced a timing or
       -- position sequins, so restart this burst with the new values now.
-      if c.div ~= div_seq or c.reps ~= reps_seq or c.note ~= note_seq
-         or c.noteB ~= note_seqB then
+      -- (the pitch identity re-derives the active pair, so a mid-burst ROLE
+      -- flip also restarts the burst onto the other material immediately)
+      local ns  = c.role > 0 and c.stack  or c.note
+      local nsB = c.role > 0 and c.stackB or c.noteB
+      if c.div ~= div_seq or c.reps ~= reps_seq or ns ~= note_seq
+         or nsB ~= note_seqB then
         restarted = true
         break
       end
       self:wait_until_beat(target, c.quantize)
       if self.tokens[ch] ~= token then return nil end
 
+      -- ROLE CHANNELS re-resolve the chord tone EVERY hit: a degree/quality/
+      -- mode/inversion/voicing edit re-harmonizes on the very next hit even
+      -- mid-burst (harmonàig behavior), with no extra plumbing. The note lane
+      -- rides along as the stack offset (A + B), so the alt-trig step mode
+      -- below applies identically — a role channel arpeggiates the chord stack.
+      --
       -- ALT-TRIG STEP MODE: when c.altTrig == 1 the alt (B) pitch layer
       -- arpeggiates — advance the captured B note sequins per hit and re-sum
-      -- with the held degreeA. i == 0 already consumed the burst-start draw.
-      -- Advancing here (above the probHit skip) keeps the arpeggio locked to the
-      -- beat grid: a skipped hit still consumes a B value.
-      if c.altTrig == 1 and i > 0 then
+      -- with the held degreeA (a mode-degree offset when free, a further stack
+      -- offset under a role). i == 0 already consumed the burst-start draw.
+      -- Advancing here (above the probHit skip) keeps the arpeggio locked to
+      -- the beat grid: a skipped hit still consumes a B value.
+      if c.role > 0 then
+        if c.altTrig == 1 and i > 0 then degreeB = note_seqB() end
+        freq = self:chord_freq(c.role, c.root, degreeA + degreeB)
+      elseif c.altTrig == 1 and i > 0 then
         degreeB = note_seqB()
-        freq = scales.degree_to_freq(degreeA + degreeB, self.scale, c.root)
+        freq = scales.degree_to_freq(degreeA + degreeB, self:mode_intervals(), self.root + c.root)
       end
 
       -- OP-RATIO STEP MODE: when opSeqTrig == 1 every op's B (offset) lane
@@ -897,6 +1069,7 @@ function Burst:fire(ch, beat, freq, level, env1, env2, env3, env4, div, total, h
   local mod_index = c.modIndex
   local feedback  = c.fmFeedback
   local pan       = c.pan or 0
+  local detune    = c.detune or 0   -- op1 stereo-widening detune, cents (trig arg 32)
   -- per-channel static operator levels, passed straight to the voice.
   local ol = {c.opLevel1, c.opLevel2, c.opLevel3, c.opLevel4}
   local out = self.outputs
@@ -907,7 +1080,8 @@ function Burst:fire(ch, beat, freq, level, env1, env2, env3, env4, div, total, h
     -- from its sequenced SHAPE index, resolved above to {atk, dec, atkCurve, decCurve}
     -- and grouped per op at args 16..31 (op1 16-19, op2 20-23, op3 24-27, op4 28-31).
     -- ol[1..4] are this channel's static operator levels, geode-shaped per hit above.
-    -- See the trig command header in Engine_Potionshop.sc for the full arg order.
+    -- detune (arg 32) is the op1 stereo-widening amount (cents). See the trig command
+    -- header in Engine_Potionshop.sc for the full arg order.
     engine.trig(geo_freq, actual_level, c.algo,
                 ratio2, ratio3, ratio4, mod_index,
                 feedback, ch,
@@ -915,7 +1089,8 @@ function Burst:fire(ch, beat, freq, level, env1, env2, env3, env4, div, total, h
                 atk1, dec1, atkC1, decC1,
                 atk2, dec2, atkC2, decC2,
                 atk3, dec3, atkC3, decC3,
-                atk4, dec4, atkC4, decC4)
+                atk4, dec4, atkC4, decC4,
+                detune)
   end
   if out then
     -- external voices can't render FM timbre; hand them the four sequenced op ratios.
@@ -946,7 +1121,16 @@ function Burst:randomize(ch)
   local function fill(n, f) local t = {} for i = 1, n do t[i] = f() end return t end
   c.div  = seqx.new(fill(len, function() return pick(MUSICAL_DIVS) end))
   c.reps = seqx.new(fill(len, function() return pick{1, 2, 2, 3, 4} end))
-  c.note = seqx.new(fill(len, function() return ri(16) end))
+  -- pitch: only the ACTIVE material is scrambled — a free channel's note lane
+  -- (mode degrees) or a role channel's stack lane (small chord-stack offsets
+  -- around home, about one cycle) — so the stashed other material survives a
+  -- randomize intact. Both draws stay inside their picker layout (the
+  -- grid-reachability contract).
+  if (c.role or 0) > 0 then
+    c.stack = seqx.new(fill(len, function() return math.random(-3, 4) end))
+  else
+    c.note = seqx.new(fill(len, function() return ri(16) end))
+  end
   -- volume (level) is intentionally NOT randomized: it stays the channel's fixed
   -- constant so the mix loudness is stable.
   -- envelope shapes: a SINGLE random shape index per envelope (held for the whole
@@ -1001,7 +1185,14 @@ function Burst:mutate(ch, amount)
     if Burst.reps_is_rest(v) then return v end  -- leave rests intact (like level)
     return clamp(round(v + jitter(amount * 4)), 1, 8)
   end)
-  c.note  = map(c.note,  function(v) return round(v + jitter(amount * 4)) end)
+  -- pitch: like randomize, only the ACTIVE material is nudged, clamped to its
+  -- picker layout (the reachability contract): note degrees 0..31, stack
+  -- offsets -15..16. The stashed other material survives a mutate intact.
+  if (c.role or 0) > 0 then
+    c.stack = map(c.stack, function(v) return clamp(round(v + jitter(amount * 4)), -15, 16) end)
+  else
+    c.note  = map(c.note,  function(v) return clamp(round(v + jitter(amount * 4)), 0, 31) end)
+  end
   -- volume (level) left untouched: a constant, never jittered (see randomize).
   -- nudge each op env's shape index to a neighbouring shape (grid-exact in 1..#SHAPES);
   -- the B offset lane is left untouched, like the op ratios below.

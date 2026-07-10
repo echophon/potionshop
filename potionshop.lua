@@ -22,7 +22,7 @@ package.path = _dir .. 'lib/?.lua;' .. package.path
 -- require() caches in package.loaded, and a norns script RELOAD does not clear
 -- it (only a full matron restart does). Drop our own modules from the cache so
 -- editing a lib/ file and reloading the script actually picks up the change.
-for _, m in ipairs({'burst', 'grid_ui', 'screen_ui', 'scales', 'seqx', 'quantize', 'params_sync', 'outputs'}) do
+for _, m in ipairs({'burst', 'grid_ui', 'screen_ui', 'scales', 'chords', 'seqx', 'quantize', 'params_sync', 'outputs'}) do
   package.loaded[m] = nil
 end
 
@@ -31,7 +31,6 @@ local GridUI     = require 'grid_ui'
 local ScreenUI   = require 'screen_ui'
 local ParamsSync = require 'params_sync'
 local Outputs    = require 'outputs'
-local scales     = require 'scales'
 
 local eng        -- Burst engine
 local controller -- GridUI
@@ -101,7 +100,11 @@ function init()
   g = grid.connect()
   gw = make_grid_wrapper(g)
   g.key = function(x, y, z)
-    if z == 1 and controller then controller:press(x - 1, y - 1) end
+    if not controller then return end
+    -- releases are forwarded too (not just presses): the MIX multi-select picker's
+    -- hold-then-tap ramp gesture needs to know which keys are still held down.
+    if z == 1 then controller:press(x - 1, y - 1)
+    else controller:release(x - 1, y - 1) end
   end
 
   controller = GridUI.new(eng, gw, {
@@ -114,7 +117,7 @@ function init()
   -- kept bidirectionally in sync with the grid/screen. Defaults are captured
   -- from the engine state seeded above, so the bang re-applies the boot
   -- randomization rather than clobbering it; triggers arm only after the bang.
-  psync = ParamsSync.new{engine = eng, controller = controller, params = params, scales = scales}
+  psync = ParamsSync.new{engine = eng, controller = controller, params = params}
 
   -- output routing (lib/outputs.lua): per-channel midi / crow / i2c
   -- destinations, params-only (OUTPUTS group, placed between the globals
@@ -133,6 +136,8 @@ function init()
   -- sequencers back to bar 1). outs gates the whole thing on `midi clock out`.
   eng:on(function(ev)
     if ev.type == 'stop' then outs:notes_off(ev.ch) end
+    -- a bar-clock chord advance repaints the HARM strip playhead + screen readout
+    if ev.type == 'prog' then controller:refresh() end
     if ev.type == 'launch' or ev.type == 'stop' then
       local any = false
       for i = 1, Burst.NUM_CHANNELS do if eng:is_running(i) then any = true; break end end
@@ -207,4 +212,5 @@ function cleanup()
   if strobe_metro then strobe_metro:stop() end
   if screen_metro then screen_metro:stop() end
   if reset_clock then clock.cancel(reset_clock) end
+  if eng and eng.prog_clock then clock.cancel(eng.prog_clock); eng.prog_clock = nil end
 end

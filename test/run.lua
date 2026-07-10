@@ -27,23 +27,15 @@ check('snaps forward to next 1/16 (q=16 -> step .25)', approx(q.snap_beat(0.3, 1
 -- ---- scales ------------------------------------------------------------
 local scales = require 'scales'
 print('scales:')
-local major = scales.by_name.major
-check('major intervals from musicutil', #major == 7 and major[1] == 0 and major[7] == 11)
-check('octave (12) stripped from musicutil intervals', major[#major] ~= 12)
+-- scale content lives in chords.lua now; scales.lua is pure pitch math.
+local major = {0, 2, 4, 5, 7, 9, 11}
 check('degree 0 in major = C1 = 32.7032 Hz', approx(scales.degree_to_freq(0, major), 32.7032))
 check('degree 7 in major wraps to next octave root (x2 freq)',
   approx(scales.degree_to_freq(7, major), 2 * scales.degree_to_freq(0, major)))
 check('degree -1 in major = previous B (floor-mod)',
   scales.degree_to_semitones(-1, major) == -1)
-check('custom scale hijaz preserved literally', #scales.by_name.hijaz == 7
-  and scales.by_name.hijaz[2] == 1)
-check('expanded scale list, every name resolves to intervals',
-  #scales.names >= 12 and scales.names[1] == 'chromatic'
-  and scales.by_name[scales.names[#scales.names]] ~= nil)
-check('scale list gained the extra modes', scales.by_name.lydian ~= nil
-  and scales.by_name.blues ~= nil and scales.by_name.wholeTone ~= nil)
-check('no grid preset list anymore (presets moved to params menu)',
-  scales.picker_names == nil)
+-- (v0.3's scale-mask tests dropped: the modal system replaces scales.by_name;
+--  the 14 modes are tested in the chords section below.)
 check('root transposes tonic up by semitones',
   approx(scales.degree_to_freq(0, major, 2),
     require('musicutil').note_num_to_freq(26)))
@@ -52,8 +44,10 @@ check('negative root transposes tonic DOWN (per-channel -1 octave)',
     require('musicutil').note_num_to_freq(12)))
 check('root defaults to 0 (no transposition)',
   approx(scales.degree_to_freq(0, major, 0), scales.degree_to_freq(0, major)))
--- JUST INTONATION: the in-between intervals are pure ratios, not 12-TET. The
--- tonic (degree 0) and octaves stay exact; degrees in between ring as rationals.
+-- JUST INTONATION (default tuning): the in-between intervals are pure ratios,
+-- not 12-TET. The tonic (degree 0) and octaves stay exact; degrees in between
+-- ring as rationals.
+local chromatic = {0,1,2,3,4,5,6,7,8,9,10,11}
 local tonic = scales.degree_to_freq(0, major)
 check('JI table is one octave [1,2)', scales.JI_RATIOS[0] == 1
   and scales.JI_RATIOS[7] == 3/2 and scales.JI_RATIOS[11] == 15/8)
@@ -64,10 +58,178 @@ check('perfect 5th (degree 4) = pure 3/2 above tonic',
 check('JI fifth is sharper than the 12-TET fifth',
   scales.degree_to_freq(4, major) > tonic * 2^(7/12))
 check('chromatic degree 4 = pure major third (5/4)',
-  approx(scales.degree_to_freq(4, scales.by_name.chromatic), tonic * 5/4))
+  approx(scales.degree_to_freq(4, chromatic), tonic * 5/4))
 check('octave of any degree is exact 2:1',
   approx(scales.degree_to_freq(2 + #major, major),
          2 * scales.degree_to_freq(2, major)))
+check('semitone_to_freq places absolute offsets above C1 (JI)',
+  approx(scales.semitone_to_freq(0), 32.7032)
+  and approx(scales.semitone_to_freq(12), 2 * 32.7032))
+
+-- TUNING SWITCH: flipping scales.tuning to 2 (12-TET) makes the in-between
+-- intervals equal-tempered; JI ratios no longer apply. Restore just after.
+scales.tuning = 2
+check('12-TET degree 2 = equal-tempered major third (not 5/4)',
+  approx(scales.degree_to_freq(2, major),
+    require('musicutil').note_num_to_freq(28)))
+check('12-TET semitone_to_freq = plain note_num_to_freq',
+  approx(scales.semitone_to_freq(7),
+    require('musicutil').note_num_to_freq(31)))
+check('octave still exact 2:1 under 12-TET',
+  approx(scales.degree_to_freq(7, major), 2 * scales.degree_to_freq(0, major)))
+scales.tuning = 1
+check('tuning restored to just', scales.tuning == 1)
+
+-- ---- chords ------------------------------------------------------------
+local chords = require 'chords'
+print('chords:')
+local function ivals_eq(a, b)
+  if #a ~= #b then return false end
+  for i = 1, #a do if a[i] ~= b[i] then return false end end
+  return true
+end
+check('14 modes with names and abbrs', #chords.MODES == 14
+  and #chords.MODE_NAMES == 14 and #chords.MODE_ABBRS == 14)
+local abbr_ok = true
+for _, m in ipairs(chords.MODES) do if #m.abbr > 4 then abbr_ok = false end end
+check('mode abbrs fit the grid/screen (<=4 chars)', abbr_ok)
+check('mode 1 = ionian (major)', ivals_eq(chords.MODES[1].intervals, {0,2,4,5,7,9,11}))
+check('mode 2 = dorian rotation', ivals_eq(chords.MODES[2].intervals, {0,2,3,5,7,9,10}))
+check('mode 6 = aeolian (natural minor)', ivals_eq(chords.MODES[6].intervals, {0,2,3,5,7,8,10}))
+check('mode 8 = aeolian #7 (harmonic minor)', ivals_eq(chords.MODES[8].intervals, {0,2,3,5,7,8,11}))
+check('mode 9 = locrian #6 rotation', ivals_eq(chords.MODES[9].intervals, {0,1,3,5,6,9,10}))
+-- 7th rotation of HARMONIC minor (bb7) — not the melodic-minor altered scale
+check('mode 14 = super locrian rotation', ivals_eq(chords.MODES[14].intervals, {0,1,3,4,6,8,9}))
+
+-- manual qualities: each triple lands exactly on the harmonàig chord tones
+local ionian = chords.MODES[1].intervals
+local function manual_tones(qi, opts)
+  local ctx = { intervals = ionian, root = 0, degree = 1, diatonic = false,
+                quality = qi, inversion = 0, voicing = 1 }
+  for k, v in pairs(opts or {}) do ctx[k] = v end
+  return chords.chord_tones(ctx)
+end
+local QUAL_EXPECT = {
+  {0,3,7,11}, {0,3,6,9}, {0,3,6,10}, {0,3,7,10},
+  {0,4,7,10}, {0,4,7,11}, {0,4,8,11}, {0,4,8,10},
+}
+local qual_ok = true
+for qi, exp in ipairs(QUAL_EXPECT) do
+  if not ivals_eq(manual_tones(qi), exp) then qual_ok = false end
+end
+check('all 8 quality triples produce their chord tones', qual_ok)
+
+-- diatonic harmonization tables (classified quality index per degree)
+local function harmonization(mode_i)
+  local out = {}
+  for d = 1, 7 do out[d] = chords.diatonic_quality(chords.MODES[mode_i].intervals, d) end
+  return out
+end
+-- quality indices: 1 mM7, 2 o7, 3 m7b5, 4 m7, 5 dom7, 6 M7, 7 +M7, 8 +7
+check('ionian harmonizes M7 m7 m7 M7 7 m7 m7b5',
+  ivals_eq(harmonization(1), {6, 4, 4, 6, 5, 4, 3}))
+check('dorian harmonizes m7 m7 M7 7 m7 m7b5 M7',
+  ivals_eq(harmonization(2), {4, 4, 6, 5, 4, 3, 6}))
+check('harmonic minor harmonizes mM7 m7b5 +M7 m7 7 M7 o7',
+  ivals_eq(harmonization(8), {1, 3, 7, 4, 5, 6, 2}))
+
+-- diatonic stack wraps the octave past degree VII
+check('diatonic stack at ionian degree VII = {11,14,17,21}',
+  ivals_eq(chords.chord_tones{ intervals = ionian, root = 0, degree = 7,
+    diatonic = true, inversion = 0, voicing = 1 }, {11, 14, 17, 21}))
+
+-- inversion: member identity preserved, lowest tone hops up an octave each step
+check('1st inversion lifts the chord root an octave',
+  ivals_eq(manual_tones(6, {inversion = 1}), {12, 4, 7, 11}))
+check('3rd inversion leaves only the 7th in place',
+  ivals_eq(manual_tones(6, {inversion = 3}), {12, 16, 19, 11}))
+
+-- voicings on root-position maj7 {0,4,7,11}
+check('close voicing is the raw stack', ivals_eq(manual_tones(6), {0, 4, 7, 11}))
+check('drop2 lowers the 2nd-highest (the 5th)',
+  ivals_eq(manual_tones(6, {voicing = 2}), {0, 4, -5, 11}))
+check('drop3 lowers the 3rd-highest (the 3rd)',
+  ivals_eq(manual_tones(6, {voicing = 3}), {0, -8, 7, 11}))
+check('spread = drop2 + highest up an octave',
+  ivals_eq(manual_tones(6, {voicing = 4}), {0, 4, -5, 23}))
+
+-- root + degree transposition: root=2, degree V in ionian -> chord root 9
+local v_of_d = chords.chord_tones{ intervals = ionian, root = 2, degree = 5,
+  diatonic = true, inversion = 0, voicing = 1 }
+check('root transposes the chord root (2 + 7 = 9)', v_of_d[1] == 9)
+
+check('classify folds octaves (mod 12)', chords.classify(16, 19, 22) == 5)
+check('chord_symbol: ionian degree V diatonic = V7',
+  chords.chord_symbol{ intervals = ionian, root = 0, degree = 5, diatonic = true } == 'V7')
+check('chord_symbol: manual quality overrides (I+7)',
+  chords.chord_symbol{ intervals = ionian, root = 0, degree = 1, diatonic = false,
+    quality = 8 } == 'I+7')
+
+-- stack_tone: the infinite alternating-degree ladder behind the chord.
+local function stack_ctx(opts)
+  local ctx = { intervals = ionian, root = 0, degree = 1, diatonic = true,
+                quality = 6, inversion = 0, voicing = 1 }
+  for k, v in pairs(opts or {}) do ctx[k] = v end
+  return ctx
+end
+-- members 1..4 agree exactly with the raw (pre-inversion, close) chord_tones
+local stack_agree = true
+for _, dia in ipairs{true, false} do
+  for qi = 1, 8 do
+    for d = 1, 7 do
+      local ctx = stack_ctx{degree = d, diatonic = dia, quality = qi}
+      local tones = chords.chord_tones(ctx)
+      for k = 1, 4 do
+        if chords.stack_tone(ctx, k) ~= tones[k] then stack_agree = false end
+      end
+    end
+  end
+end
+check('stack_tone members 1..4 = raw chord_tones (dia + all 8 qualities)', stack_agree)
+
+-- extensions and wraps: ionian I -> 9th/11th/13th = 14/17/21; member 8 = root
+-- two octaves up; one step BELOW the root (k = 0) is the 13th of the cycle
+-- below (descending walks 13/11/9/7.. before the octave-down root at k = -6).
+local sc1 = stack_ctx{}
+check('ionian I extensions 9/11/13 = 14/17/21',
+  chords.stack_tone(sc1, 5) == 14 and chords.stack_tone(sc1, 6) == 17
+  and chords.stack_tone(sc1, 7) == 21)
+check('stack wraps: member 8 = root + 24, member 0 = 13th - 24',
+  chords.stack_tone(sc1, 8) == 24 and chords.stack_tone(sc1, 0) == 21 - 24)
+
+-- strictly ascending in k across every mode x degree, diatonic + all qualities:
+-- an offset of +/-1 always moves, never crosses a neighbour.
+local stack_mono = true
+for mi = 1, #chords.MODES do
+  for d = 1, 7 do
+    local ctxs = { stack_ctx{intervals = chords.MODES[mi].intervals, degree = d} }
+    for qi = 1, 8 do
+      ctxs[#ctxs + 1] = stack_ctx{intervals = chords.MODES[mi].intervals, degree = d,
+                                  diatonic = false, quality = qi}
+    end
+    for _, ctx in ipairs(ctxs) do
+      local prev = chords.stack_tone(ctx, -7)
+      for k = -6, 14 do
+        local t = chords.stack_tone(ctx, k)
+        if t <= prev then stack_mono = false end
+        prev = t
+      end
+    end
+  end
+end
+check('stack_tone strictly ascends (modes x degrees x qualities, k -7..14)', stack_mono)
+
+-- DIA-toggle register stability: the root and the diatonic extensions stay put
+-- when a manual quality takes over (it only overrides members 2..4).
+local stack_dia = true
+for d = 1, 7 do
+  local cd = stack_ctx{degree = d}
+  local cm = stack_ctx{degree = d, diatonic = false, quality = 3}
+  for _, k in ipairs{1, 5, 6, 7, 8} do
+    if chords.stack_tone(cd, k) ~= chords.stack_tone(cm, k) then stack_dia = false end
+  end
+end
+check('DIA toggle keeps root + 9/11/13 members in place', stack_dia)
 
 -- ---- seqx / sequins ----------------------------------------------------
 local seqx = require 'seqx'
@@ -165,6 +327,36 @@ check('randomize leaves channel level at the fixed init constant', ok_level_cons
 check('lengths: div/reps/note 2..4', ok_len)
 check('shapes + op2/3/4 randomize to a single held step', ok_single)
 
+-- ROLE channels: pitch material is the SEPARATE stack lanes. randomize/mutate
+-- touch only the ACTIVE material — a role channel's stack draws small offsets
+-- around home and stays inside the stack picker grid (-15..16), while the
+-- stashed free note lane survives untouched (and vice versa when free).
+local engr = Burst.new()
+engr.channels[1].role = 2
+engr.channels[1].note = seqx.new{3, 5}  -- stashed free melody
+local ok_role_rand, ok_role_mut, ok_note_kept = true, true, true
+for _ = 1, 200 do
+  engr:randomize(1)
+  for _, v in ipairs(seqx.values(engr.channels[1].stack)) do
+    if not (v == math.floor(v) and v >= -3 and v <= 4) then ok_role_rand = false end
+  end
+end
+for _ = 1, 50 do engr:mutate(1) end
+for _, v in ipairs(seqx.values(engr.channels[1].stack)) do
+  if not (v == math.floor(v) and v >= -15 and v <= 16) then ok_role_mut = false end
+end
+if not ivals_eq(seqx.values(engr.channels[1].note), {3, 5}) then ok_note_kept = false end
+check('role-channel randomize scrambles stack with small offsets (-3..4)', ok_role_rand)
+check('role-channel mutate keeps stack in the picker window (-15..16)', ok_role_mut)
+check('role-channel randomize/mutate leave the free note melody stashed', ok_note_kept)
+-- and symmetrically: a FREE channel's randomize/mutate never touch the stack
+local engf = Burst.new()
+engf.channels[1].stack = seqx.new{0, 2, -1}
+engf:randomize(1)
+for _ = 1, 20 do engf:mutate(1) end
+check('free-channel randomize/mutate leave the stack material stashed',
+  ivals_eq(seqx.values(engf.channels[1].stack), {0, 2, -1}))
+
 -- mutate must also leave the channel level untouched (a static scalar), even with a
 -- custom value, and keep per-op ratios on the curated set.
 local emut = Burst.new()
@@ -203,7 +395,7 @@ engR.channels[1].note = seqx.new{0}
 engR.channels[1].root = 2      -- +2 semitones (per-channel tonic transpose)
 engR:launch(1)
 check('per-channel root transposes fired freq (degree 0, root +2)',
-  #firesR == 1 and approx(firesR[1].freq, scales.degree_to_freq(0, scales.by_name.major, 2)))
+  #firesR == 1 and approx(firesR[1].freq, scales.degree_to_freq(0, major, 2)))
 
 -- octave scalar: applied per hit in fire, so external outputs and the ghost
 -- note see the shifted freq
@@ -315,11 +507,177 @@ check('op-env step arpeggiates the shape per hit',
   #sh_step == 3 and not approx(sh_step[1], sh_step[2])
   and not approx(sh_step[2], sh_step[3]) and not approx(sh_step[1], sh_step[3]))
 
+-- chord-tone roles: a role channel takes its pitch from the harmonic context's
+-- resolved chord tone, walked by its SEPARATE stack lanes (signed offsets,
+-- default 0 = the role tone itself); the free note lanes are a different
+-- material that freezes while the role is held. Per-hit re-resolution means a
+-- degree change re-harmonizes the very next hit; octave still applies.
+local function role_fire(setup)
+  clock._reset()
+  local e = Burst.new()
+  set_quant(e, 0)
+  local f = {}
+  e:on(function(ev) if ev.type == 'fire' then f[#f + 1] = ev.freq end end)
+  e.channels[1].div  = seqx.new{4}
+  e.channels[1].reps = seqx.new{1}
+  e.channels[1].note = seqx.new{3}  -- free-lane degree: IGNORED while a role is active
+  setup(e)
+  e:launch(1)
+  clock._run_until(4)
+  return f, e
+end
+-- role channels sound at the CHORD_OCTAVE register lift (chords.lua) above the
+-- C1-anchored chord tone; fold that lift into every expected role frequency.
+local LIFT = 12 * chords.CHORD_OCTAVE
+local rf = role_fire(function(e) e.channels[1].role = 1; e.degree = 5 end)
+-- ionian degree V root = semitone 7
+check('role R fires the chord root of degree V',
+  #rf == 1 and approx(rf[1], scales.semitone_to_freq(7 + LIFT)))
+rf = role_fire(function(e) e.channels[1].role = 4; e.degree = 1 end)
+check('role 7th fires the seventh (Imaj7 -> 11 st)',
+  approx(rf[1], scales.semitone_to_freq(11 + LIFT)))
+rf = role_fire(function(e)
+  e.channels[1].role = 2; e.degree = 1; e.diatonic = false; e.quality = 8
+end)
+check('manual quality feeds role tones (+7 third = 4 st)',
+  approx(rf[1], scales.semitone_to_freq(4 + LIFT)))
+rf = role_fire(function(e) e.channels[1].role = 1; e.channels[1].octave = 1 end)
+check('octave still doubles a role channel', approx(rf[1], 2 * scales.semitone_to_freq(LIFT)))
+
+-- the stack lanes walk the chord's tone stack while a role is active: the value
+-- is a signed member offset from the role's (voiced) tone. Ionian Imaj7.
+rf = role_fire(function(e) e.channels[1].role = 1; e.channels[1].stack = seqx.new{2} end)
+check('role R + stack offset 2 fires the fifth (member 3, 7 st)',
+  approx(rf[1], scales.semitone_to_freq(7 + LIFT)))
+rf = role_fire(function(e) e.channels[1].role = 1; e.channels[1].stack = seqx.new{-1} end)
+check('role R + stack offset -1 descends to the 13th below (-3 st)',
+  approx(rf[1], scales.semitone_to_freq(-3 + LIFT)))
+-- offsets walk from the VOICED tone: 1st inversion lifts the root anchor an
+-- octave (12 st) and the +1 step adds the pure root->3rd interval (4 st) on top.
+rf = role_fire(function(e)
+  e.channels[1].role = 1; e.inversion = 1; e.channels[1].stack = seqx.new{1}
+end)
+check('offset walks from the voiced anchor (inverted R + 1 -> 16 st)',
+  approx(rf[1], scales.semitone_to_freq(16 + LIFT)))
+
+-- alt-trig step mode arpeggiates the stack offset (stackB lane) per hit on a
+-- role channel, exactly like the free-channel note arpeggio: R, 5th, 9th.
+clock._reset()
+local ear = Burst.new()
+set_quant(ear, 0)
+local arf = {}
+ear:on(function(ev) if ev.type == 'fire' then arf[#arf + 1] = ev.freq end end)
+ear.channels[1].div  = seqx.new{4}
+ear.channels[1].reps = seqx.new{3}
+ear.channels[1].stackB = seqx.new{0, 2, 4}
+ear.channels[1].altTrig = 1
+ear.channels[1].role = 1
+ear:launch(1)
+clock._run_until(4)
+check('alt-trig step arpeggiates the stack under a role (R, 5th, 9th)',
+  #arf == 3 and approx(arf[1], scales.semitone_to_freq(0 + LIFT))
+  and approx(arf[2], scales.semitone_to_freq(7 + LIFT))
+  and approx(arf[3], scales.semitone_to_freq(14 + LIFT)))
+
+-- mid-burst re-harmonization: 3 hits, change degree after the first fire.
+clock._reset()
+local erh = Burst.new()
+set_quant(erh, 0)
+local rhf = {}
+erh:on(function(ev)
+  if ev.type == 'fire' then
+    rhf[#rhf + 1] = ev.freq
+    if #rhf == 1 then erh.degree = 4 end  -- I -> IV between hits
+  end
+end)
+erh.channels[1].div  = seqx.new{4}
+erh.channels[1].reps = seqx.new{3}
+erh.channels[1].role = 1
+erh:launch(1)
+clock._run_until(4)
+check('degree change re-harmonizes mid-burst on the next hit',
+  #rhf == 3 and approx(rhf[1], scales.semitone_to_freq(0 + LIFT))
+  and approx(rhf[2], scales.semitone_to_freq(5 + LIFT))
+  and approx(rhf[3], scales.semitone_to_freq(5 + LIFT)))
+
+-- material separation: while a role is active the stack lanes are drawn and
+-- the free note lanes FREEZE, so flipping back to free resumes the melody
+-- exactly where it left off. (A fresh sequins has qix == 1; the stub consumes
+-- qix on the first draw, so qix == nil means "has been drawn".)
+local _, elane = role_fire(function(e)
+  e.channels[1].note  = seqx.new{0, 5}
+  e.channels[1].stack = seqx.new{0, 2}
+  e.channels[1].role = 3
+end)
+check('role channel: stack lane draws, free note lane freezes',
+  elane.channels[1].stack.qix == nil and elane.channels[1].note.qix == 1)
+
+-- bar-clocked chord progression: enabling applies step 1 immediately, then one
+-- advance per progBars bars (clock.sync on the shared 4-beat bar grid);
+-- disabling freezes the harmony where it stands.
+clock._reset()
+local ep = Burst.new()
+ep:set_prog{1, 4, 5}
+ep.degree = 3
+ep:set_prog_on(true)
+check('prog on applies step 1 immediately', ep.degree == 1 and ep.progOn)
+clock._run_until(4.5)
+check('prog advances to step 2 at bar 1', ep.degree == 4)
+clock._run_until(8.5)
+check('prog advances to step 3 at bar 2', ep.degree == 5)
+clock._run_until(12.5)
+check('prog wraps back to step 1', ep.degree == 1)
+ep:set_prog_on(false)
+clock._run_until(30)
+check('prog off freezes the degree and cancels the clock',
+  ep.degree == 1 and ep.progOn == false and ep.prog_clock == nil)
+
+-- progBars stretches the advance interval; prog_jump applies a step now
+clock._reset()
+local ep2 = Burst.new()
+ep2.progBars = 2
+ep2:set_prog{2, 6}
+ep2:set_prog_on(true)
+clock._run_until(4.5)
+check('progBars 2: no advance after one bar', ep2.degree == 2)
+clock._run_until(8.5)
+check('progBars 2 advances after two bars', ep2.degree == 6)
+ep2:prog_jump(0)
+check('prog_jump applies the chosen step immediately', ep2.degree == 2)
+
+-- set_prog hygiene: clamp to 1..7 ints, cap at PROG_LEN, empty -> single I
+local ep3 = Burst.new()
+ep3:set_prog{0, 9, 3.4}
+check('set_prog clamps degrees to integer 1..7',
+  ivals_eq(seqx.values(ep3.prog), {1, 7, 3}))
+ep3:set_prog{}
+check('set_prog empty falls back to a single I', ivals_eq(seqx.values(ep3.prog), {1}))
+ep3:set_prog{1, 2, 3, 4, 5, 6, 7, 1, 2, 3}
+check('set_prog caps at PROG_LEN steps', seqx.len(ep3.prog) == Burst.PROG_LEN)
+
+-- role channels follow the progression: a running Root channel re-harmonizes
+-- on its next hit after each bar advance (degree edits are all it takes)
+clock._reset()
+local epr = Burst.new()
+set_quant(epr, 0)
+local prf = {}
+epr:on(function(ev) if ev.type == 'fire' then prf[#prf + 1] = ev.freq end end)
+epr.channels[1].div  = seqx.new{1}   -- one hit per 4 beats = one per bar
+epr.channels[1].reps = seqx.new{2}
+epr.channels[1].role = 1
+epr:set_prog{1, 5}
+epr:set_prog_on(true)
+epr:launch(1)
+clock._run_until(7.9)  -- two bars: hit at beat 0 (I) and beat 4 (V)
+check('running role channel follows the bar progression (I then V)',
+  #prf >= 2 and approx(prf[1], scales.semitone_to_freq(0 + LIFT))
+  and approx(prf[2], scales.semitone_to_freq(7 + LIFT)))
+
 -- all four op ratios are sequenced (A value + B offset, drawn per burst). The drawn
 -- op2/3/4 values pass straight to trig args 4/5/6 (r2/r3/r4); op1's drawn value rides
--- as r1 at arg 14; the per-channel pan rides at arg 15.
+-- as r1 at arg 14; the per-channel pan rides at arg 15; op1 widen detune at arg 32.
 -- engine.trig(freq, amp, algo, r2, r3, r4, modIndex, feedback, ch,
---             lvl1..4, r1, pan, then per-op env {atk,dec,atkCurve,decCurve} x4 at 16..31).
+--             lvl1..4, r1, pan, per-op env {atk,dec,atkCurve,decCurve} x4 at 16..31, detune).
 local function first_trig()
   clock._reset()
   local saved = engine
@@ -334,6 +692,7 @@ local function first_trig()
   e.channels[1].opRatio3 = seqx.new{3}
   e.channels[1].opRatio4 = seqx.new{7}
   e.channels[1].pan = -0.5
+  e.channels[1].detune = 12
   e:launch(1)
   clock._run_until(2)
   engine = saved
@@ -346,6 +705,8 @@ check('sequenced op2/3/4 ratios pass at trig args 4/5/6',
 -- op1 ratio (sequenced): its drawn value rides as r1 at trig arg 14.
 check('op1 ratio passes at trig arg 14', off and approx(off[14], 0.5))
 check('pan passes at trig arg 15', off and approx(off[15], -0.5))
+-- op1 stereo-widening detune (cents) rides at trig arg 32.
+check('op1 widen detune passes at trig arg 32', off and approx(off[32], 12))
 
 -- op ratio B lane is an INDEX OFFSET: it shifts A's position UP the op's ROLE SET
 -- (never an off-grid sum), reaching the higher upper-32 ratios. Under algo 1 op2 is a
@@ -858,6 +1219,25 @@ ctl:press(0, 0)  -- open A step 0 again to verify the picker reopened on layer A
 check('A-half press targets the A layer', ctl.picker.layer == 'A' and ctl.picker.col == 0)
 ctl:close_picker()
 
+-- ROLE channels: the note page is backed by the channel's OWN stack lanes, so
+-- a press edits c.stack on the signed offset grid (-15..+16, 0 at cell 16)
+-- while the free note lane persists untouched — and vice versa when freed.
+local note_before = seqx.values(geng.channels[1].note)[1]
+geng.channels[1].role = 1
+ctl:press(0, 0)  -- open the note-page picker on the (now role) channel
+check('role-channel note page opens a stack picker', ctl.picker.param == 'stack')
+ctl:press(0, 6)  -- cell 1 = stack offset -15
+check('role-channel picker commits into the stack lane',
+  seqx.values(geng.channels[1].stack)[1] == -15
+  and seqx.values(geng.channels[1].note)[1] == note_before)
+ctl:press(0, 0); ctl:press(15, 6)  -- cell 16 = offset 0 (the role tone itself)
+check('stack picker cell 16 = offset 0', seqx.values(geng.channels[1].stack)[1] == 0)
+geng.channels[1].role = 0
+ctl:press(0, 0); ctl:press(3, 6)  -- degree 3 (!= current 5, so it sets not removes)
+check('freed channel note picker edits the note (degree) lane again',
+  seqx.values(geng.channels[1].note)[1] == 3
+  and seqx.values(geng.channels[1].stack)[1] == 0)
+
 -- 8-step cap: the add slot stops appearing past SEQ_LEN; commit truncates
 geng.channels[1].note = seqx.new{0, 1, 2, 3, 4, 5, 6, 7}  -- exactly 8 (A half full)
 ctl:press(0, 6)  -- row 6 col 0 = note page
@@ -990,47 +1370,69 @@ check('idle launch button settles to a static dim', mg.leds[7 * 16 + 6] == 4)
 check('running launch button is solid full-bright', mg.leds[7 * 16 + 5] == 15)
 geng:stop(1)
 
--- ROOT/scale page (row6 col 14): mask kb rows 0-1, root kb rows 2-5 (upper 2-3,
--- lower 4-5), channel selectors on row 7 cols 5-10. root is per-channel now.
-ctl.focusCh = 0
-ctl:close_picker()
+-- harmony picker (row6 SCALE col 14): mode/degree/quality/root/inv/voi/roles
 ctl:press(14, 6)
-check('SCALE col opens ROOT page', ctl.picker ~= nil and ctl.picker.kind == 'scale')
-check('root page seeds target = focused channel 0', ctl.rootTargets[0] == true)
--- global mask keyboard (rows 0-1): white row col 0 = pitch class 0 (in major -> removes)
-local m0 = #geng.scale
-ctl:press(0, 1)
-check('mask keyboard edits the global scale', #geng.scale ~= m0)
-ctl:press(0, 1)
-check('mask keyboard toggles back', #geng.scale == m0)
--- root UPPER octave (rows 2-3): white row col 0 = pitch class 0 -> offset 0 (base tonic)
-ctl:press(0, 3)
-check('root sets targeted channel 0 to offset 0', geng.channels[1].root == 0)
-check('single target auto-advances to channel 1',
-  ctl.rootTargets[1] == true and ctl.rootTargets[0] == nil)
--- root LOWER octave (rows 4-5): white col 1 = pc 2 -> offset 2-12 = -10 (down an octave)
-ctl:press(1, 5)
-check('root lower octave sets channel 1 to -10', geng.channels[2].root == -10)
--- single applies auto-advanced twice, so the target is channel 2 now. Add ch0 (col5)
--- and ch3 (col8) via the row-7 channel selectors for a multi-target edit.
-check('auto-advance reached channel 2', ctl.rootTargets[2] == true)
-ctl:press(5, 7)
-ctl:press(8, 7)
-check('multi-select adds channels', ctl.rootTargets[2] and ctl.rootTargets[0] and ctl.rootTargets[3])
--- apply root to all selected: upper white col 2 = pc 4 -> offset 4
-ctl:press(2, 3)
-check('root applies to all selected channels', geng.channels[1].root == 4
-  and geng.channels[3].root == 4 and geng.channels[4].root == 4)
-check('multi target does NOT auto-advance',
-  ctl.rootTargets[0] and ctl.rootTargets[2] and ctl.rootTargets[3])
--- selectors refuse to empty the target set
-ctl:press(5, 7)   -- ch0 off -> {2,3}
-ctl:press(7, 7)   -- ch2 off -> {3}
-ctl:press(8, 7)   -- try ch3 off -> refused
-check('selector refuses to empty the target set',
-  ctl.rootTargets[3] == true)
-ctl:press(14, 6)  -- close
-check('ROOT page closed via SCALE col', ctl.picker == nil)
+check('SCALE opens harmony picker', ctl.picker ~= nil and ctl.picker.kind == 'scale')
+ctl:press(1, 0)  -- mode row A col 1 = dorian
+check('mode row A selects dorian', geng.mode == 2)
+ctl:press(0, 1)  -- mode row B col 0 = aeolian #7 (harmonic minor)
+check('mode row B selects harmonic minor', geng.mode == 8)
+ctl:press(0, 0)  -- back to ionian
+check('mode row A selects ionian', geng.mode == 1)
+ctl:press(4, 2)  -- degree row col 4 = V
+check('degree row selects V', geng.degree == 5)
+ctl:press(0, 5)  -- root keyboard white row, col 0 = semitone 0 (C)
+check('root keyboard sets engine.root to C', geng.root == 0)
+ctl:press(1, 5)  -- col 1 white = semitone 2 (D)
+check('root keyboard sets engine.root to D', geng.root == 2)
+ctl:press(6, 3)  -- quality col 6 = QUALITY_COL0 + 4 -> dom7 (index 5)
+check('quality press goes manual', geng.quality == 5 and geng.diatonic == false)
+ctl:press(0, 3)  -- DIA toggle
+check('DIA press restores diatonic', geng.diatonic == true)
+ctl:press(9, 4)   -- inversion col 9 = 1st
+check('inversion cell sets 1st inversion', geng.inversion == 1)
+ctl:press(10, 5)  -- voicing col 10 = drop3
+check('voicing cell sets drop3', geng.voicing == 3)
+ctl:press(12, 0)  -- ch1 role = R
+check('role cell assigns R to ch1', geng.channels[1].role == 1)
+ctl:press(15, 1)  -- ch2 role = 7th
+check('role cell assigns 7th to ch2', geng.channels[2].role == 4)
+ctl:press(12, 0)  -- re-press the lit role
+check('role re-press frees the channel', geng.channels[1].role == 0)
+
+-- progression strip: REC retypes via the degree row, ON runs the bar clock, a
+-- strip step press jumps the walk. Picker stays open throughout.
+local deg_before = geng.degree
+ctl:press(7, 1)  -- REC arm
+check('REC arms the progression recorder', ctl.progRec == true and #ctl.progRecBuffer == 0)
+ctl:press(0, 2); ctl:press(3, 2); ctl:press(4, 2)  -- degree row: I, IV, V into the buffer
+check('degree-row taps append to the buffer, not the live degree',
+  #ctl.progRecBuffer == 3 and geng.degree == deg_before)
+ctl:press(7, 1)  -- REC commit
+check('REC commit installs the progression + disarms',
+  ctl.progRec == false and ivals_eq(seqx.values(geng.prog), {1, 4, 5}))
+ctl:press(9, 0)  -- strip step index 1 (row0 col8+1) = the IV
+check('strip step press jumps the walk to that chord', geng.degree == 4)
+ctl:press(7, 0)  -- ON
+check('ON starts the progression bar clock', geng.progOn == true and geng.prog_clock ~= nil)
+ctl:press(7, 0)  -- ON off
+check('ON again stops the clock', geng.progOn == false and geng.prog_clock == nil)
+ctl:press(7, 1)  -- REC arm again
+for _ = 1, 8 do ctl:press(0, 2) end  -- eight taps of degree I
+check('REC auto-commits + disarms at PROG_LEN steps',
+  ctl.progRec == false and seqx.len(geng.prog) == 8)
+-- an uncommitted recording cancels when the harmony page closes
+geng.prog = seqx.new{1, 4, 5}
+ctl:press(7, 1); ctl:press(2, 2)  -- arm + one tap (uncommitted)
+ctl:press(14, 6)  -- close the harmony picker
+check('closing HARM cancels an uncommitted recording',
+  ctl.progRec == false and ivals_eq(seqx.values(geng.prog), {1, 4, 5}))
+ctl:press(14, 6)  -- reopen for the restore section below
+
+-- restore defaults so later sections start from known harmonic state
+ctl:press(15, 1); ctl:press(0, 2); ctl:press(8, 4); ctl:press(8, 5)
+ctl:press(14, 6)  -- close harmony picker
+check('harmony picker closed via SCALE', ctl.picker == nil)
 
 -- entering the scale page is exclusive with the other row-6 latch modes, so
 -- only the active page's button stays lit (regression: a prior PERF/PROB/SND
@@ -1045,12 +1447,6 @@ check('switching to PROB clears scale picker', ctl.picker == nil)
 check('PROB mode active after leaving scale', ctl.probMode == true)
 ctl:press(13, 6)  -- PROB off, back to channels
 check('PROB mode off', ctl.probMode == false)
-
--- set_mask: replace the whole mask at once (the keymask param edit path)
-ctl:set_mask({7, 0, 4, 7, 13})  -- dup 7 + out-of-range 13 dropped, then sorted
-check('set_mask dedups, drops out-of-range, sorts', vals_eq(geng.scale, {0, 4, 7}))
-ctl:set_mask({})
-check('set_mask refuses to empty the scale', vals_eq(geng.scale, {0, 4, 7}))
 
 -- prob mode (row6 col 13)
 ctl:press(13, 6)
@@ -1083,60 +1479,155 @@ ctl:press(13, 6)
 check('PROB mode exited', ctl.probMode == false)
 
 -- MIX page (row6 col 11) in signal-flow order: algo (col 0) + mod index (col 1) + per-op
--- level (cols 3-6) + FM feedback (col 8) + filter (col 13) + pan (col 14) + channel
--- level/volume (col 15). Chorus was removed; cols 2/7/9-12 are inert.
+-- level (cols 3-6) + FM feedback (col 8) + filter (col 10) + op1 widen/detune (col 12)
+-- + pan (col 13) + channel level/volume (col 15). Cols 2/7/9/11/14 are inert.
+-- Tapping a cell opens the MULTI-SELECT picker seeded with that cell; more cells
+-- toggle in/out; a value tap applies to the WHOLE selection and leaves the picker
+-- open; a dark/empty column exits (the selection is never cleared out from under
+-- an in-progress edit).
+-- tap = press+release, mirroring the hardware key lifecycle. Value-grid taps MUST
+-- release, else the accumulated down-keys would be misread as the hold-then-tap
+-- ramp gesture (which the dedicated gesture test below exercises on purpose).
+local function tap(x, y) ctl:press(x, y); ctl:release(x, y) end
 ctl:press(11, 6)
 check('MIX mode entered', ctl.mixMode == true)
--- col2 is a dark separator now (chorus removed) — inert.
+-- col2 is a dark separator now (chorus removed) — no picker opens, inert.
 ctl:press(2, 0)
 check('MIX col2 is inert (separator)', ctl.picker == nil)
-ctl:press(0, 0)   -- col0 -> algorithm picker
-check('MIX col0 opens the algorithm scalar picker',
-  ctl.picker and ctl.picker.field == 'algo')
-ctl:press(1, 0)   -- col1 -> mod index picker
-check('MIX col1 opens the mod index scalar picker',
-  ctl.picker and ctl.picker.field == 'modIndex')
-ctl:press(14, 0)  -- col14 -> pan picker
-check('MIX col14 opens the pan scalar picker',
-  ctl.picker and ctl.picker.field == 'pan')
-ctl:press(0, 6)   -- value grid row 6 col 0 -> PAN_VALUES[1] = -1 (hard left)
-check('MIX pan picker sets c.pan hard left', approx(geng.channels[1].pan, -1))
-ctl:press(14, 0)  -- reopen pan picker
-ctl:press(0, 7)   -- value grid row 7 col 0 -> PAN_VALUES[17] = 0 (centre, grid-exact)
-check('MIX pan picker can return to dead centre', approx(geng.channels[1].pan, 0))
-ctl:press(15, 0)  -- col15 -> channel level/volume picker
-check('MIX col15 opens the channel level scalar picker',
-  ctl.picker and ctl.picker.field == 'level')
-ctl:press(0, 6)   -- value grid row 6 col 0 -> OP_LEVEL_VALUES[1] = 0
-check('MIX channel level picker sets c.level', approx(geng.channels[1].level, 0))
-ctl:press(3, 0)   -- col3 -> op1 level picker
-check('MIX op level cell opens a scalar picker',
-  ctl.picker and ctl.picker.field == 'opLevel1')
-ctl:press(15, 7)  -- value grid row 7 col 15 -> OP_LEVEL_VALUES[32] = 1.0
-check('MIX op level picker sets opLevel1', approx(geng.channels[1].opLevel1, 1.0))
-ctl:press(8, 0)   -- col8 -> FM feedback picker
-check('MIX col8 opens the FM feedback scalar picker',
-  ctl.picker and ctl.picker.field == 'fmFeedback')
-ctl:close_picker()
--- DJ filter (col 13): one bipolar knob, centre = no filter, left = LP, right = HP.
+
+-- each cell opens the multi-select picker seeded with its field; helper closes it
+-- (empty column) so the next check starts from a single-cell selection.
+local function mix_opens(col, ch, field)
+  ctl:press(col, ch)
+  local ok = ctl.picker and ctl.picker.kind == 'mix' and #ctl.picker.sel == 1
+    and ctl.picker.sel[1].field == field and ctl.picker.sel[1].ch == ch
+  ctl:press(2, ch)  -- dark column -> exit, back to a clean slate
+  return ok
+end
+check('MIX col0 opens the algorithm cell', mix_opens(0, 0, 'algo'))
+check('MIX col1 opens the mod index cell', mix_opens(1, 0, 'modIndex'))
+check('MIX col3 opens the op1 level cell', mix_opens(3, 0, 'opLevel1'))
+check('MIX col8 opens the FM feedback cell', mix_opens(8, 0, 'fmFeedback'))
+check('MIX col10 opens the filter cell', mix_opens(10, 0, 'filterPos'))
+check('MIX col12 opens the op1 widen (detune) cell', mix_opens(12, 0, 'detune'))
+check('MIX col13 opens the pan cell', mix_opens(13, 0, 'pan'))
+check('MIX col15 opens the channel level cell', mix_opens(15, 0, 'level'))
+
+-- a value tap applies AND keeps the picker open (unlike the one-shot prob picker).
+ctl:press(13, 0); ctl:release(13, 0)  -- pan ch0
+tap(0, 6)         -- PAN_VALUES[1] = -1 (hard left)
+check('MIX value tap sets the field and keeps the picker open',
+  approx(geng.channels[1].pan, -1) and ctl.picker ~= nil)
+
+-- tapping another cell ADDS it; one value tap then writes every selected cell.
+ctl:press(13, 1); ctl:release(13, 1)  -- pan ch1 -> selection = {pan ch0, pan ch1}
+check('tapping another cell adds it to the selection', #ctl.picker.sel == 2)
+tap(0, 7)         -- PAN_VALUES[17] = 0 (centre) applied to BOTH channels
+check('a value applies to every selected cell',
+  approx(geng.channels[1].pan, 0) and approx(geng.channels[2].pan, 0))
+
+-- re-tapping a selected cell deselects it (leaving the rest of the set intact).
+ctl:press(13, 0); ctl:release(13, 0)
+check('re-tapping a selected cell deselects it',
+  #ctl.picker.sel == 1 and ctl.picker.sel[1].ch == 1)
+
+-- heterogeneous fields co-select; a grid POSITION resolves through each field's own
+-- 32-value layout, so index 32 -> PAN_VALUES[32] = +1 and OP_LEVEL_VALUES[32] = 1.0.
+ctl:press(3, 0); ctl:release(3, 0)    -- add op1 level ch0 alongside pan ch1
+check('heterogeneous fields can co-select', #ctl.picker.sel == 2)
+tap(15, 7)        -- grid position 32
+check('grid position resolves per field layout',
+  approx(geng.channels[2].pan, 1) and approx(geng.channels[1].opLevel1, 1.0))
+
+-- a dark/empty column exits the picker.
+ctl:press(2, 0); ctl:release(2, 0)
+check('empty column exits the multi-select picker', ctl.picker == nil)
+
+-- value extremes reach through each field's layout (single-cell for clarity).
+ctl:press(12, 0); tap(0, 6)           -- detune DETUNE_VALUES[1] = 0 (off)
+check('MIX detune reaches 0 (off)', geng.channels[1].detune == 0)
+tap(15, 7)                             -- DETUNE_VALUES[32] = 62 (widest)
+check('MIX detune reaches the widest step', geng.channels[1].detune == 62)
+tap(2, 0)                              -- exit
+ctl:press(15, 0); tap(0, 6)           -- channel level OP_LEVEL_VALUES[1] = 0
+check('MIX channel level reaches 0', approx(geng.channels[1].level, 0))
+tap(2, 0)                              -- exit
+
+-- DJ filter (col 10): one bipolar knob, centre = no filter, left = LP, right = HP.
+geng.channels[1].filterPos = 0
 check('filterPos defaults to 0 (no filter)', geng.channels[1].filterPos == 0)
-ctl:press(13, 0)  -- col13 -> filter picker
-check('MIX col13 opens the filter scalar picker',
-  ctl.picker and ctl.picker.field == 'filterPos')
-ctl:press(0, 6)   -- value grid row 6 col 0 -> FILTER_VALUES[1] = -1 (LP closed)
-check('MIX filter picker sets filterPos to the LP extreme',
-  approx(geng.channels[1].filterPos, -1))
-ctl:press(13, 0)  -- reopen filter picker
-ctl:press(0, 7)   -- value grid row 7 col 0 -> FILTER_VALUES[17] = 0 (off, grid-exact)
-check('MIX filter picker can return to off (centre)',
-  approx(geng.channels[1].filterPos, 0))
-ctl:press(13, 0)
-ctl:press(15, 7)  -- value grid row 7 col 15 -> FILTER_VALUES[32] = +1 (HP extreme)
-check('MIX filter picker sets filterPos to the HP extreme',
-  approx(geng.channels[1].filterPos, 1))
-geng.channels[1].filterPos = 0  -- restore the default for later checks
+ctl:press(10, 0); tap(0, 6)           -- FILTER_VALUES[1] = -1 (LP closed)
+check('MIX filter reaches the LP extreme', approx(geng.channels[1].filterPos, -1))
+tap(0, 7)                              -- FILTER_VALUES[17] = 0 (off, grid-exact)
+check('MIX filter can return to off (centre)', approx(geng.channels[1].filterPos, 0))
+tap(15, 7)                             -- FILTER_VALUES[32] = +1 (HP extreme)
+check('MIX filter reaches the HP extreme', approx(geng.channels[1].filterPos, 1))
+tap(2, 0)                              -- exit the picker before leaving the page
+geng.channels[1].filterPos = 0        -- restore the default for later checks
+geng.channels[1].pan, geng.channels[2].pan = 0, 0
+
+-- ---- MIX ramp gesture: HOLD one value cell, tap another -> the value GLIDES from
+-- the held cell to the tapped one, one grid-step per trigger on each selected
+-- channel's own clock. op1 level (col 3) has a clean monotonic layout:
+-- position k -> value (k-1)/31, ideal for reading the ramp. -------------------
+ctl:press(3, 0); ctl:release(3, 0)     -- select op1 level ch0
+ctl:press(3, 1); ctl:release(3, 1)     -- add op1 level ch1
+ctl:press(0, 6)                        -- HOLD grid position 1 (row6 col0), no release
+ctl:press(4, 6)                        -- TAP grid position 5 (row6 col4) while held
+ctl:release(4, 6); ctl:release(0, 6)
+check('gesture arms a ramp on every selected cell',
+  ctl:ramp_for(0, 'opLevel1') and ctl:ramp_for(0, 'opLevel1').idx == 1
+  and ctl:ramp_for(0, 'opLevel1').target == 5
+  and ctl:ramp_for(1, 'opLevel1') and ctl:ramp_for(1, 'opLevel1').target == 5)
+check('ramp snaps each cell to the FROM position immediately',
+  approx(geng.channels[1].opLevel1, 0/31) and approx(geng.channels[2].opLevel1, 0/31))
+-- advance_mix_ramps steps one position toward the target per fire on that channel.
+ctl:advance_mix_ramps(0)               -- ch0 fires once -> position 2
+check('a trigger steps that channel one position toward the target',
+  ctl:ramp_for(0, 'opLevel1').idx == 2 and approx(geng.channels[1].opLevel1, 1/31))
+check('other channels are unaffected until they fire',
+  ctl:ramp_for(1, 'opLevel1').idx == 1 and approx(geng.channels[2].opLevel1, 0/31))
+ctl:advance_mix_ramps(0); ctl:advance_mix_ramps(0)  -- -> 3, 4
+ctl:advance_mix_ramps(0)               -- -> 5 (target): ramp clears
+check('the ramp lands on the target and clears',
+  ctl:ramp_for(0, 'opLevel1') == nil and approx(geng.channels[1].opLevel1, 4/31))
+ctl:advance_mix_ramps(0)               -- no-op once cleared
+check('a cleared ramp holds its value', approx(geng.channels[1].opLevel1, 4/31))
+-- a plain value tap cancels an in-progress ramp.
+ctl:press(4, 6)                        -- plain tap position 5 (both cells -> 4/31)
+ctl:press(8, 6)                        -- HOLD 5, TAP 9 -> re-arm glide 5 -> 9 on both
+ctl:release(8, 6); ctl:release(4, 6)
+check('re-arm arms a fresh 5->9 ramp', ctl:ramp_for(0, 'opLevel1')
+  and ctl:ramp_for(0, 'opLevel1').idx == 5 and ctl:ramp_for(0, 'opLevel1').target == 9)
+tap(0, 7)                              -- plain tap (position 17) cancels + applies
+check('a plain value tap cancels the ramp',
+  ctl:ramp_for(0, 'opLevel1') == nil and approx(geng.channels[2].opLevel1, 16/31))
+tap(2, 0)                              -- exit
 ctl:press(11, 6)
 check('MIX mode exited', ctl.mixMode == false)
+
+-- a glide KEEPS RUNNING after the picker closes / the MIX page is left / the cell
+-- loses focus: the ramp lives on the controller, and the fire subscription advances
+-- it regardless of the page showing. Arm on ch0, leave MIX entirely, then drive real
+-- fire events through the engine and watch it march to the target.
+geng.channels[1].opLevel1 = 0
+ctl:press(11, 6)                       -- enter MIX
+ctl:press(3, 0); ctl:release(3, 0)     -- select op1 level ch0
+ctl:press(0, 6)                        -- HOLD position 1
+ctl:press(8, 6)                        -- TAP position 9 -> glide 1 -> 9
+ctl:release(8, 6); ctl:release(0, 6)
+tap(2, 0)                              -- exit the picker
+ctl:press(11, 6)                       -- leave the MIX page entirely
+ctl:press(0, 6)                        -- switch to a sequence page (note) -> new focus
+check('glide survives closing the picker and leaving the page',
+  ctl.picker == nil and ctl.mixMode == false and ctl:ramp_for(0, 'opLevel1') ~= nil)
+geng:emit{ type = 'fire', ch = 1 }     -- a real trigger on ch0 (1-based in events)
+check('a fire off the MIX page still advances the glide',
+  ctl:ramp_for(0, 'opLevel1').idx == 2 and approx(geng.channels[1].opLevel1, 1/31))
+for _ = 1, 7 do geng:emit{ type = 'fire', ch = 1 } end  -- march to position 9
+check('the headless glide reaches its target and clears',
+  ctl:ramp_for(0, 'opLevel1') == nil and approx(geng.channels[1].opLevel1, 8/31))
+geng.channels[1].opLevel1 = 1          -- restore op1 default
 
 -- the channel-strip filter pushes to the SC engine on every set_scalar (unlike
 -- the other MIX scalars, which ride the next trig): Burst:push_filter forwards
@@ -1293,22 +1784,27 @@ sui:set_page(P_MIX)
 check('mix page_lines is signal-flow order (alg, index, op1 l ...)',
   sui:page_lines()[1][1] == 'alg' and sui:page_lines()[2][1] == 'index'
   and sui:page_lines()[3][1] == 'op1 l')
-check('mix page has 10 lines (filter added)', #sui:page_lines() == 10)
-sui.sel_line[P_MIX] = 9   -- pan
+check('mix page has 11 lines (widen added)', #sui:page_lines() == 11)
+sui.sel_line[P_MIX] = 10  -- pan
 seng.channels[1].pan = 0
 sui:enc(3, -1)
 check('mix page pan line steps pan left down the -1..1 grid',
   in_set(seng.channels[1].pan, GridUI.PAN_VALUES) and seng.channels[1].pan < 0)
-sui.sel_line[P_MIX] = 10  -- channel level (volume)
+sui.sel_line[P_MIX] = 11  -- channel level (volume)
 seng.channels[1].level = 1.0
 sui:enc(3, -1)
 check('mix page level line steps channel level down the 0..1 grid',
   in_set(seng.channels[1].level, GridUI.OP_LEVEL_VALUES) and seng.channels[1].level < 1.0)
-sui.sel_line[P_MIX] = 8   -- DJ filter position
+sui.sel_line[P_MIX] = 9   -- DJ filter position
 seng.channels[1].filterPos = 0
 sui:enc(3, -1)
 check('mix page filter line steps toward the low-pass down the -1..1 grid',
   in_set(seng.channels[1].filterPos, GridUI.FILTER_VALUES) and seng.channels[1].filterPos < 0)
+sui.sel_line[P_MIX] = 8   -- op1 widen (detune)
+seng.channels[1].detune = 0
+sui:enc(3, 1)
+check('mix page widen line steps detune up the 0..62¢ grid',
+  in_set(seng.channels[1].detune, GridUI.DETUNE_VALUES) and seng.channels[1].detune > 0)
 sui.sel_line[P_MIX] = 3   -- op1 level
 seng.channels[1].opLevel1 = 1.0
 sui:enc(3, -1)
@@ -1350,22 +1846,56 @@ sui.sel_line[P_PERF] = 4   -- rate
 sui:enc(3, 1)
 check('rate E3 lands in RATE_VALUES', in_set(seng.channels[1].rate, GridUI.RATE_VALUES))
 
--- scale page: E2 walks root -> 12 keys; E3 edits the SELECTED channel's root
--- (per-channel now, -12..+11 signed transpose, no wrap; mask stays global)
+-- harmony page: E2 walks mode/root/degree/dia/qual/inv/voice + 6 roles;
+-- E3 edits each through the controller's setters
 sui:set_page(P_SCALE)
-local sch = sui.sel_ch + 1
-seng.channels[sch].root = 0
-sui.sel_line[P_SCALE] = 1            -- root
-sui:enc(3, 2)
-check('scale E3 raises the selected channel root by semitones', seng.channels[sch].root == 2)
-sui:enc(3, -5)                 -- goes negative (down-octave transpose), no wrap
-check('scale root goes negative, clamped not wrapped', seng.channels[sch].root == -3)
-seng.scale = {0, 4, 7}
-sui.sel_line[P_SCALE] = 2 + 2        -- key for pitch class 2 (D)
+seng.root = 0
+sui.sel_line[P_SCALE] = 1            -- mode
 sui:enc(3, 1)
-check('scale E3 right adds a key to the mask', in_set(2, seng.scale) and #seng.scale == 4)
+check('harmony E3 steps the mode', seng.mode == 2)
 sui:enc(3, -1)
-check('scale E3 left removes the key', not in_set(2, seng.scale) and #seng.scale == 3)
+sui.sel_line[P_SCALE] = 2            -- root
+sui:enc(3, 2)
+check('harmony E3 raises root by semitones', seng.root == 2)
+sui:enc(3, -3)                 -- wraps below 0
+check('harmony root wraps mod 12', seng.root == 11)
+sui.sel_line[P_SCALE] = 3            -- degree
+sui:enc(3, 4)
+check('harmony E3 steps the chord degree', seng.degree == 5)
+sui.sel_line[P_SCALE] = 5            -- quality: editing goes manual
+sui:enc(3, 1)
+check('harmony quality edit turns diatonic off',
+  seng.diatonic == false and in_set(seng.quality, {1,2,3,4,5,6,7,8}))
+sui.sel_line[P_SCALE] = 4            -- dia line: right = back on
+sui:enc(3, 1)
+check('harmony dia line restores diatonic', seng.diatonic == true)
+sui.sel_line[P_SCALE] = 6            -- inversion
+sui:enc(3, 2)
+check('harmony E3 steps inversion', seng.inversion == 2)
+sui:enc(3, -2)
+sui.sel_line[P_SCALE] = 7            -- voicing
+sui:enc(3, 3)
+check('harmony E3 steps voicing', seng.voicing == 4)
+sui:enc(3, -3)
+-- prog run (line 8) + bars/step (line 9), then roles shift to lines 10..15
+sui.sel_line[P_SCALE] = 8            -- prog run toggle
+sui:enc(3, 1)
+check('harmony prog line starts the bar clock', seng.progOn == true)
+sui:enc(3, -1)
+check('harmony prog line stops the bar clock', seng.progOn == false)
+sui.sel_line[P_SCALE] = 9            -- bars/step, stepping the {1,2,4} set
+seng.progBars = 1
+sui:enc(3, 1)
+check('harmony bars line steps 1 -> 2', seng.progBars == 2)
+sui:enc(3, 1)
+check('harmony bars line steps 2 -> 4', seng.progBars == 4)
+sui.sel_line[P_SCALE] = 11           -- ch2 role (roles now at 10..15)
+sui:enc(3, 2)
+check('harmony role line edits channel 2', seng.channels[2].role == 2)
+sui:enc(3, -4)
+check('harmony role line clamps at free', seng.channels[2].role == 0)
+check('harmony page_lines labels', sui:page_lines()[1][1] == 'mode'
+  and sui:page_lines()[8][1] == 'prog' and sui:page_lines()[10][1] == 'ch1')
 
 -- perf page: per-channel quantize on line 5 (after run/reset/oct/rate), curated set
 sui:set_page(P_PERF)
@@ -1375,9 +1905,11 @@ sui:enc(3, 1)
 check('perf E3 steps quantize up the curated set', seng.channels[1].quantize == 12)
 check('perf quantize lands in QUANTIZE_VALUES', in_set(seng.channels[1].quantize, GridUI.QUANTIZE_VALUES))
 
--- restore musical state the fire tests below assume (unshifted c1, major)
-seng.channels[1].root = 0     -- root is per-channel now
-seng.scale = scales.by_name.major
+-- restore musical state the fire tests below assume (unshifted c1, ionian, I)
+seng.root = 0
+seng.mode = 1
+seng.degree = 1
+seng.channels[1].root = 0     -- per-channel transpose also neutral
 set_quant(seng, 32)
 
 -- fire reactivity: ghost note recorded, dirty set, tick repaints + clears
@@ -1539,6 +2071,27 @@ sui:enc(3, 1)
 check('lane-B `_` appends 0', seqx.len(seng.channels[1].noteB) == 2
   and seqx.values(seng.channels[1].noteB)[2] == 0)
 
+-- the note page is chord-role-dependent: a role channel's lanes resolve to its
+-- stack (offset) sequences with the signed offset layout; freed, back to note.
+seng.channels[1].role = 2
+sui.sel_lane = 1
+check('screen note page resolves to the stack lane under a role',
+  sui:main_param() == 'stack'
+  and sui:_layout('stack') == GridUI.STEP_PICKER_VALUES.stack)
+seng.channels[1].role = 0
+check('screen note page resolves to the note lane when free',
+  sui:main_param() == 'note'
+  and sui:_layout('note') == GridUI.STEP_PICKER_VALUES.note)
+
+-- mixed roles: each of the six note-page rows shows its OWN material
+seng.channels[1].role = 1
+seng.channels[1].stack = seqx.new{-2}
+seng.channels[2].note = seqx.new{4}
+local pls = sui:page_lines()
+check('note page rows resolve per channel (ch1 stack, ch2 note)',
+  pls[1][2]:find('-2', 1, true) ~= nil and pls[2][2]:find('4', 1, true) ~= nil)
+seng.channels[1].role = 0
+
 -- div/reps lane 2 is `reps` (a paired A-layer lane), not a B offset
 sui:set_page(P_DIV)
 sui.sel_lane = 2
@@ -1598,7 +2151,7 @@ peng.channels[1].noteB = seqx.new{3}
 local pctl = GridUI.new(peng, mock_grid())
 local pui = ScreenUI.new(peng, pctl)
 local fake = Paramset.new()
-local psync = ParamsSync.new{engine = peng, controller = pctl, params = fake, scales = scales}
+local psync = ParamsSync.new{engine = peng, controller = pctl, params = fake}
 psync:add_params()
 psync:attach()
 
@@ -1635,11 +2188,21 @@ fake:set('ch1_note_a', '0 3 5')
 check('text edit installs sequence', vals_eq(seqx.values(peng.channels[1].note), {0, 3, 5}))
 check('text normalized after edit', fake:get('ch1_note_a') == '0 3 5')
 
+-- the stack lanes are full sequence params of their own (chN_stack_a/b), so a
+-- role channel's signed offsets survive a params/PSET round-trip exactly and
+-- never collide with the note (degree) params.
+fake:set('ch1_stack_a', '0 -3 2')
+check('stack offsets round-trip through their own text param',
+  vals_eq(seqx.values(peng.channels[1].stack), {0, -3, 2})
+  and fake:get('ch1_stack_a') == '0 -3 2'
+  and fake:get('ch1_note_a') == '0 3 5')
+
 -- cursor pair: step selects, val edits at the cursor (index-based)
 fake:set('ch1_note_a_step', 2)
 check('step cursor refreshes val param',
   fake:get('ch1_note_a_val') == ParamsSync.value_to_index('note', 'A', 3))
-fake:set('ch1_note_a_val', 9)  -- note layout: index 9 -> value 8
+-- note _val indexes the -15..31 union (degrees + role stack offsets)
+fake:set('ch1_note_a_val', ParamsSync.value_to_index('note', 'A', 8))
 check('val edit writes at cursor', seqx.values(peng.channels[1].note)[2] == 8)
 check('text reflects val edit', fake:get('ch1_note_a') == '0 8 5')
 fake:set('ch1_note_a_step', 99)
@@ -1838,21 +2401,68 @@ check('grid quantize edit reflects to chN_quantize param',
   fake:get('ch1_quantize') == GridUI.nearest_index(GridUI.QUANTIZE_VALUES, 16))
 pctl:press(15, 6)  -- leave the QNT page
 
--- keymask: the note mask is viewed/edited/stored like a sequence string
-check('mask_to_text renders pitch-class names',
-  ParamsSync.mask_to_text({0, 2, 4, 5, 7, 9, 11}) == 'C D E F G A B')
-check('mask_from_text parses names + numbers, dedups, keeps order',
-  vals_eq(ParamsSync.mask_from_text('c e g 7 bb'), {0, 4, 7, 10}))
-fake:set('keymask', 'g c e')  -- commits through controller:set_mask (sorts)
-check('keymask param installs sorted mask on engine', vals_eq(peng.scale, {0, 4, 7}))
-check('keymask text reflected back canonical (sorted names)', fake:get('keymask') == 'C E G')
-fake:set('keymask', '')       -- refuse to empty the scale; restore the display
-check('empty keymask refused, display restored',
-  vals_eq(peng.scale, {0, 4, 7}) and fake:get('keymask') == 'C E G')
--- picking a scale preset keeps the keymask text in step
-fake:set('scale', 2)  -- scales.names[2] = 'major'
-check('scale preset updates keymask text',
-  fake:get('keymask') == ParamsSync.mask_to_text(scales.by_name.major))
+-- harmonic-context params: actions route through the controller's setters
+fake:set('mode', 2)
+check('mode param sets engine mode', peng.mode == 2)
+fake:set('chord_degree', 5)
+check('chord_degree param sets engine degree', peng.degree == 5)
+fake:set('inversion', 3)  -- option index 3 = 2nd inversion (value 2)
+check('inversion param sets engine value', peng.inversion == 2)
+fake:set('voicing', 2)
+check('voicing param sets drop2', peng.voicing == 2)
+fake:set('chord_quality', 5)
+check('chord_quality param sets quality WITHOUT clearing diatonic',
+  peng.quality == 5 and peng.diatonic == true)
+fake:set('diatonic', 0)
+check('diatonic param goes manual', peng.diatonic == false)
+fake:set('diatonic', 1)
+check('diatonic param restores auto', peng.diatonic == true)
+
+-- progression params: text (roman or arabic degrees), run toggle, bars/step
+fake:set('prog', 'I IV V vi')  -- roman, mixed case
+check('prog param installs the degree list from roman text',
+  ivals_eq(seqx.values(peng.prog), {1, 4, 5, 6}))
+check('prog param normalizes to roman on read', fake:get('prog') == 'I IV V VI')
+fake:set('prog', '2 5 1')  -- arabic also accepted
+check('prog param accepts arabic degrees', ivals_eq(seqx.values(peng.prog), {2, 5, 1}))
+fake:set('prog_bars', 3)  -- option index 3 = 4 bars
+check('prog_bars option sets bars-per-step', peng.progBars == 4)
+fake:set('prog_run', 1)
+check('prog_run starts the bar clock', peng.progOn == true and peng.prog_clock ~= nil)
+fake:set('prog_run', 0)
+check('prog_run stops the bar clock', peng.progOn == false and peng.prog_clock == nil)
+-- reflection: an engine-side progression edit shows up silently in the params
+peng:set_prog{1, 5}
+psync:reflect_globals()
+check('engine prog reflects back into the text param', fake:get('prog') == 'I V')
+
+-- grid harmony edits reflect silently into the params
+local fh = fake.fires
+pctl:press(14, 6)  -- open the harmony picker
+pctl:press(2, 2)   -- degree row col 2 = III
+check('grid degree press reflects into chord_degree', fake:get('chord_degree') == 3)
+pctl:press(4, 3)   -- quality col 4 -> index 3 (m7b5): the grid gesture goes manual
+check('grid quality press reflects quality + diatonic',
+  fake:get('chord_quality') == 3 and fake:get('diatonic') == 0)
+pctl:press(0, 3)   -- DIA back on
+check('grid DIA press reflects diatonic on', fake:get('diatonic') == 1)
+pctl:press(12, 2)  -- ch3 role = R
+check('grid role press reflects into ch3_role', fake:get('ch3_role') == 2)
+check('grid harmony edits fired zero param actions', fake.fires == fh)
+pctl:press(12, 2)  -- free ch3 again
+pctl:press(14, 6)  -- close the picker
+
+-- role param round-trip
+fake:set('ch1_role', 4)  -- option 4 = '5th' (value 3)
+check('role param sets channel role', peng.channels[1].role == 3)
+fake:set('ch1_role', 1)
+check('role param frees the channel', peng.channels[1].role == 0)
+
+-- bang keeps the harmonic context intact (the chord_quality action must not
+-- clobber diatonic during a replay of every action)
+fake:bang()
+check('params:bang() preserves diatonic', peng.diatonic == true)
+check('params:bang() preserves quality/degree', peng.quality == 3 and peng.degree == 3)
 
 -- render coalescing: actions raise the flag, flush repaints once
 psync.render_pending = false
