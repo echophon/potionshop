@@ -23,7 +23,7 @@ whose rhythm, pitch, density and tone come from a stack of looping value sequenc
 in the maiden REPL type:
 
 ```
-;install https://github.com/echophon/potionshop/archive/refs/tags/v0.4.zip
+;install https://github.com/echophon/potionshop/archive/refs/tags/v0.4.1_multiselect.zip
 ```
 
 on initial install, Norns will need to be restarted to load the new engine.
