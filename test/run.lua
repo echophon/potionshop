@@ -1195,17 +1195,28 @@ ctl:press(1, 0); ctl:press(3, 6)  -- step 1, pick value 3
 check('picker still sets a different value',
   seqx.len(geng.channels[1].note) == 3 and seqx.values(geng.channels[1].note)[2] == 3)
 
--- tapping another channel step hops the open picker there (rows 6-7 = values,
--- so the channel rows stay live for re-targeting)
+-- tapping a SECOND step arms multi-select: both steps join a sticky selection, a
+-- value paints ALL of them, and the picker stays open (mirrors the MIX page).
 geng.channels[1].note = seqx.new{5, 7, 9}
-ctl:press(0, 0)                    -- open on ch0 step0
-ctl:press(2, 0)                    -- tap ch0 step2 -> hop, picker stays open
-check('tapping another step hops the picker',
-  ctl.picker ~= nil and ctl.picker.col == 2)
--- re-tapping the open step cancels (closes) without removing it
-ctl:press(2, 0)
-check('re-tapping the open step cancels without removing',
-  ctl.picker == nil and seqx.len(geng.channels[1].note) == 3)
+ctl:press(0, 0)                    -- open single picker on ch0 step0
+ctl:press(2, 0)                    -- tap ch0 step2 -> arms multi (sel = step0 + step2)
+check('second step tap arms multi-select',
+  ctl.picker ~= nil and ctl.picker.sel ~= nil and #ctl.picker.sel == 2
+  and ctl.picker.col == 2)
+ctl:press(3, 6)                    -- value grid pos 4 -> note value 3, paints BOTH + exits
+check('multi paint sets every selected step then closes',
+  ctl.picker == nil
+  and seqx.values(geng.channels[1].note)[1] == 3
+  and seqx.values(geng.channels[1].note)[3] == 3
+  and seqx.values(geng.channels[1].note)[2] == 7)  -- step1 untouched
+-- re-tapping a selected step toggles it back out of the set (before committing)
+geng.channels[1].note = seqx.new{5, 7, 9}
+ctl:press(0, 0); ctl:press(2, 0)   -- arm multi on step0 + step2
+ctl:press(0, 0)                    -- re-tap step0 -> removes it, picker stays open
+check('re-tap removes a step from the selection',
+  ctl.picker ~= nil and ctl.picker.sel ~= nil and #ctl.picker.sel == 1)
+ctl:close_picker()
+geng.channels[1].note = seqx.new{5, 7, 9}  -- restore for the downstream role tests
 
 -- B layer edits live on the right half (cols 8..15) — no double-press needed
 geng.channels[1].noteB = seqx.new{0}
@@ -1274,6 +1285,28 @@ check('rest cells strobe across the whole bottom row',
 check('hit-count cells (top row) do not strobe',
   mg.strobes[6 * 16 + 0] == nil and mg.strobes[6 * 16 + 15] == nil)
 ctl:close_picker()
+
+-- multi-select spans channel ROWS (like the MIX page): one value paints steps on
+-- different channels at once. Selecting an add slot appends a default step first,
+-- and a dark cell (beyond a lane) exits the picker.
+geng.channels[1].note = seqx.new{5, 7, 9}
+geng.channels[2].note = seqx.new{1, 2}
+ctl:press(0, 6)                    -- row 6 col 0 = note page
+ctl:press(0, 0)                    -- ch0 step0 (single)
+ctl:press(0, 1)                    -- ch1 step0 -> arms multi ACROSS channels
+check('multi-select spans channel rows',
+  ctl.picker.sel ~= nil and #ctl.picker.sel == 2)
+ctl:press(6, 6)                    -- value grid pos 7 -> note value 6, paints both + exits
+check('cross-channel paint sets a step on every selected channel then closes',
+  ctl.picker == nil
+  and seqx.values(geng.channels[1].note)[1] == 6
+  and seqx.values(geng.channels[2].note)[1] == 6)
+-- selecting an add slot appends a default step; a dark cell cancels the picker
+ctl:press(0, 0); ctl:press(2, 1)   -- ch0 step0, then ch1 add slot (len 2) -> appends
+check('selecting the add slot appends a default step',
+  seqx.len(geng.channels[2].note) == 3 and #ctl.picker.sel == 2)
+ctl:press(7, 0)                    -- ch0 note len 3 -> col 7 is dark -> cancel
+check('dark cell exits the multi picker', ctl.picker == nil)
 
 -- per-op envelope pages (row 7 cols 1/2/3/4 = opEnv1/2/3/4, following div/reps at
 -- col 0): an A|B sequence like the op ratios (left = A shape index, right = B index
@@ -1482,9 +1515,9 @@ check('PROB mode exited', ctl.probMode == false)
 -- level (cols 3-6) + FM feedback (col 8) + filter (col 10) + op1 widen/detune (col 12)
 -- + pan (col 13) + channel level/volume (col 15). Cols 2/7/9/11/14 are inert.
 -- Tapping a cell opens the MULTI-SELECT picker seeded with that cell; more cells
--- toggle in/out; a value tap applies to the WHOLE selection and leaves the picker
--- open; a dark/empty column exits (the selection is never cleared out from under
--- an in-progress edit).
+-- toggle in/out; a value applies to the WHOLE selection and, on the key LIFT,
+-- commits + EXITS the picker (a tap = touch then release). A dark/empty column
+-- cancels an open selection without applying.
 -- tap = press+release, mirroring the hardware key lifecycle. Value-grid taps MUST
 -- release, else the accumulated down-keys would be misread as the hold-then-tap
 -- ramp gesture (which the dedicated gesture test below exercises on purpose).
@@ -1513,56 +1546,60 @@ check('MIX col12 opens the op1 widen (detune) cell', mix_opens(12, 0, 'detune'))
 check('MIX col13 opens the pan cell', mix_opens(13, 0, 'pan'))
 check('MIX col15 opens the channel level cell', mix_opens(15, 0, 'level'))
 
--- a value tap applies AND keeps the picker open (unlike the one-shot prob picker).
+-- a value applies on press and EXITS on the key lift (a tap = touch + release).
 ctl:press(13, 0); ctl:release(13, 0)  -- pan ch0
 tap(0, 6)         -- PAN_VALUES[1] = -1 (hard left)
-check('MIX value tap sets the field and keeps the picker open',
-  approx(geng.channels[1].pan, -1) and ctl.picker ~= nil)
+check('MIX value tap sets the field and exits on release',
+  approx(geng.channels[1].pan, -1) and ctl.picker == nil)
 
--- tapping another cell ADDS it; one value tap then writes every selected cell.
-ctl:press(13, 1); ctl:release(13, 1)  -- pan ch1 -> selection = {pan ch0, pan ch1}
+-- tapping another cell ADDS it; one value writes every selected cell then exits.
+ctl:press(13, 0); ctl:release(13, 0)  -- re-open pan ch0
+ctl:press(13, 1); ctl:release(13, 1)  -- add pan ch1 -> selection = {pan ch0, pan ch1}
 check('tapping another cell adds it to the selection', #ctl.picker.sel == 2)
 tap(0, 7)         -- PAN_VALUES[17] = 0 (centre) applied to BOTH channels
-check('a value applies to every selected cell',
-  approx(geng.channels[1].pan, 0) and approx(geng.channels[2].pan, 0))
+check('a value applies to every selected cell then exits',
+  approx(geng.channels[1].pan, 0) and approx(geng.channels[2].pan, 0)
+  and ctl.picker == nil)
 
 -- re-tapping a selected cell deselects it (leaving the rest of the set intact).
-ctl:press(13, 0); ctl:release(13, 0)
+ctl:press(13, 0); ctl:release(13, 0)  -- open pan ch0
+ctl:press(13, 1); ctl:release(13, 1)  -- add pan ch1 -> selection = 2
+ctl:press(13, 0); ctl:release(13, 0)  -- re-tap ch0 -> deselect (picker stays open)
 check('re-tapping a selected cell deselects it',
-  #ctl.picker.sel == 1 and ctl.picker.sel[1].ch == 1)
+  ctl.picker ~= nil and #ctl.picker.sel == 1 and ctl.picker.sel[1].ch == 1)
 
 -- heterogeneous fields co-select; a grid POSITION resolves through each field's own
 -- 32-value layout, so index 32 -> PAN_VALUES[32] = +1 and OP_LEVEL_VALUES[32] = 1.0.
 ctl:press(3, 0); ctl:release(3, 0)    -- add op1 level ch0 alongside pan ch1
 check('heterogeneous fields can co-select', #ctl.picker.sel == 2)
-tap(15, 7)        -- grid position 32
-check('grid position resolves per field layout',
-  approx(geng.channels[2].pan, 1) and approx(geng.channels[1].opLevel1, 1.0))
+tap(15, 7)        -- grid position 32 -> resolves per field, then exits
+check('grid position resolves per field layout then exits',
+  approx(geng.channels[2].pan, 1) and approx(geng.channels[1].opLevel1, 1.0)
+  and ctl.picker == nil)
 
--- a dark/empty column exits the picker.
-ctl:press(2, 0); ctl:release(2, 0)
-check('empty column exits the multi-select picker', ctl.picker == nil)
+-- a dark/empty column cancels an open selection without applying.
+ctl:press(3, 0); ctl:release(3, 0)    -- open a cell
+ctl:press(2, 0); ctl:release(2, 0)    -- dark column -> cancel
+check('empty column cancels the multi-select picker', ctl.picker == nil)
 
--- value extremes reach through each field's layout (single-cell for clarity).
+-- value extremes reach through each field's layout (single-cell for clarity). Each
+-- value exits the picker, so re-open the cell before the next value tap.
 ctl:press(12, 0); tap(0, 6)           -- detune DETUNE_VALUES[1] = 0 (off)
 check('MIX detune reaches 0 (off)', geng.channels[1].detune == 0)
-tap(15, 7)                             -- DETUNE_VALUES[32] = 62 (widest)
+ctl:press(12, 0); tap(15, 7)          -- DETUNE_VALUES[32] = 62 (widest)
 check('MIX detune reaches the widest step', geng.channels[1].detune == 62)
-tap(2, 0)                              -- exit
 ctl:press(15, 0); tap(0, 6)           -- channel level OP_LEVEL_VALUES[1] = 0
 check('MIX channel level reaches 0', approx(geng.channels[1].level, 0))
-tap(2, 0)                              -- exit
 
 -- DJ filter (col 10): one bipolar knob, centre = no filter, left = LP, right = HP.
 geng.channels[1].filterPos = 0
 check('filterPos defaults to 0 (no filter)', geng.channels[1].filterPos == 0)
 ctl:press(10, 0); tap(0, 6)           -- FILTER_VALUES[1] = -1 (LP closed)
 check('MIX filter reaches the LP extreme', approx(geng.channels[1].filterPos, -1))
-tap(0, 7)                              -- FILTER_VALUES[17] = 0 (off, grid-exact)
+ctl:press(10, 0); tap(0, 7)           -- FILTER_VALUES[17] = 0 (off, grid-exact)
 check('MIX filter can return to off (centre)', approx(geng.channels[1].filterPos, 0))
-tap(15, 7)                             -- FILTER_VALUES[32] = +1 (HP extreme)
+ctl:press(10, 0); tap(15, 7)          -- FILTER_VALUES[32] = +1 (HP extreme)
 check('MIX filter reaches the HP extreme', approx(geng.channels[1].filterPos, 1))
-tap(2, 0)                              -- exit the picker before leaving the page
 geng.channels[1].filterPos = 0        -- restore the default for later checks
 geng.channels[1].pan, geng.channels[2].pan = 0, 0
 
@@ -1588,21 +1625,31 @@ check('a trigger steps that channel one position toward the target',
 check('other channels are unaffected until they fire',
   ctl:ramp_for(1, 'opLevel1').idx == 1 and approx(geng.channels[2].opLevel1, 0/31))
 ctl:advance_mix_ramps(0); ctl:advance_mix_ramps(0)  -- -> 3, 4
-ctl:advance_mix_ramps(0)               -- -> 5 (target): ramp clears
-check('the ramp lands on the target and clears',
-  ctl:ramp_for(0, 'opLevel1') == nil and approx(geng.channels[1].opLevel1, 4/31))
-ctl:advance_mix_ramps(0)               -- no-op once cleared
-check('a cleared ramp holds its value', approx(geng.channels[1].opLevel1, 4/31))
--- a plain value tap cancels an in-progress ramp.
-ctl:press(4, 6)                        -- plain tap position 5 (both cells -> 4/31)
-ctl:press(8, 6)                        -- HOLD 5, TAP 9 -> re-arm glide 5 -> 9 on both
-ctl:release(8, 6); ctl:release(4, 6)
-check('re-arm arms a fresh 5->9 ramp', ctl:ramp_for(0, 'opLevel1')
-  and ctl:ramp_for(0, 'opLevel1').idx == 5 and ctl:ramp_for(0, 'opLevel1').target == 9)
-tap(0, 7)                              -- plain tap (position 17) cancels + applies
+ctl:advance_mix_ramps(0)               -- -> 5 (target reached, stays armed)
+check('the glide reaches the target and stays armed (it loops)',
+  ctl:ramp_for(0, 'opLevel1') and ctl:ramp_for(0, 'opLevel1').idx == 5
+  and approx(geng.channels[1].opLevel1, 4/31))
+ctl:advance_mix_ramps(0)               -- at target -> loop back to the start (pos 1)
+check('the next trigger loops the glide back to the start',
+  ctl:ramp_for(0, 'opLevel1').idx == 1 and approx(geng.channels[1].opLevel1, 0/31))
+-- a plain value tap cancels an in-progress ramp (re-open first — a value exited the
+-- picker when the earlier ramp was armed).
+ctl:press(3, 0); ctl:release(3, 0)     -- re-open op1 level ch0
+ctl:press(3, 1); ctl:release(3, 1)     -- + ch1
+tap(0, 7)                              -- plain tap (position 17) cancels + applies + exits
 check('a plain value tap cancels the ramp',
-  ctl:ramp_for(0, 'opLevel1') == nil and approx(geng.channels[2].opLevel1, 16/31))
-tap(2, 0)                              -- exit
+  ctl:ramp_for(0, 'opLevel1') == nil and approx(geng.channels[2].opLevel1, 16/31)
+  and ctl.picker == nil)
+-- a fresh HOLD-then-tap re-arms a glide and exits on the lift.
+ctl:press(3, 0); ctl:release(3, 0)     -- re-open op1 level ch0
+ctl:press(3, 1); ctl:release(3, 1)     -- + ch1
+ctl:press(4, 6)                        -- HOLD position 5
+ctl:press(8, 6)                        -- TAP position 9 while held -> arm 5 -> 9 on both
+ctl:release(8, 6); ctl:release(4, 6)
+check('re-arm arms a fresh 5->9 ramp and exits on lift',
+  ctl:ramp_for(0, 'opLevel1') and ctl:ramp_for(0, 'opLevel1').idx == 5
+  and ctl:ramp_for(0, 'opLevel1').target == 9 and ctl.picker == nil)
+ctl.ramps = {}                         -- clear the glides so they don't bleed onward
 ctl:press(11, 6)
 check('MIX mode exited', ctl.mixMode == false)
 
@@ -1615,8 +1662,7 @@ ctl:press(11, 6)                       -- enter MIX
 ctl:press(3, 0); ctl:release(3, 0)     -- select op1 level ch0
 ctl:press(0, 6)                        -- HOLD position 1
 ctl:press(8, 6)                        -- TAP position 9 -> glide 1 -> 9
-ctl:release(8, 6); ctl:release(0, 6)
-tap(2, 0)                              -- exit the picker
+ctl:release(8, 6); ctl:release(0, 6)   -- the lift already exits the picker
 ctl:press(11, 6)                       -- leave the MIX page entirely
 ctl:press(0, 6)                        -- switch to a sequence page (note) -> new focus
 check('glide survives closing the picker and leaving the page',
@@ -1624,9 +1670,14 @@ check('glide survives closing the picker and leaving the page',
 geng:emit{ type = 'fire', ch = 1 }     -- a real trigger on ch0 (1-based in events)
 check('a fire off the MIX page still advances the glide',
   ctl:ramp_for(0, 'opLevel1').idx == 2 and approx(geng.channels[1].opLevel1, 1/31))
-for _ = 1, 7 do geng:emit{ type = 'fire', ch = 1 } end  -- march to position 9
-check('the headless glide reaches its target and clears',
-  ctl:ramp_for(0, 'opLevel1') == nil and approx(geng.channels[1].opLevel1, 8/31))
+for _ = 1, 7 do geng:emit{ type = 'fire', ch = 1 } end  -- march to position 9 (target)
+check('the headless glide reaches its target and stays armed (looping)',
+  ctl:ramp_for(0, 'opLevel1') and ctl:ramp_for(0, 'opLevel1').idx == 9
+  and approx(geng.channels[1].opLevel1, 8/31))
+geng:emit{ type = 'fire', ch = 1 }     -- one more -> loops back to the start (pos 1)
+check('the headless glide loops back to the start',
+  ctl:ramp_for(0, 'opLevel1').idx == 1 and approx(geng.channels[1].opLevel1, 0/31))
+ctl.ramps = {}                         -- cancel the looping glide (it never self-clears)
 geng.channels[1].opLevel1 = 1          -- restore op1 default
 
 -- the channel-strip filter pushes to the SC engine on every set_scalar (unlike

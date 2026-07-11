@@ -50,14 +50,16 @@
 --          value picker on rows 6-7: the cell flashes, and tapping more cells (any
 --          channel/field) toggles them into the selection. A value tap applies that
 --          grid POSITION to every selected cell (each field resolves it through its
---          own 32-value layout) and KEEPS the picker open; a dark/empty column exits.
+--          own 32-value layout) and, on the key LIFT, commits+EXITS the picker (a
+--          tap = touch then release). A dark/empty column cancels without applying.
 --          GESTURE: HOLD one value cell and, while holding, tap another — every
 --          selected cell then GLIDES from the held position to the tapped one, one
 --          grid-step per trigger on its OWN channel's clock (advance_mix_ramps, driven
---          off the fire event). Glides live on the controller (self.ramps), not the
---          picker, so they keep running after the picker closes / the cell loses
---          focus / the MIX page is left — until they land or a plain value tap on the
---          cell cancels them.
+--          off the fire event), then LOOPS back to the start and sweeps again —
+--          a continuous trigger-synced cycle. Glides live on the controller
+--          (self.ramps), not the picker, so they keep running after the picker
+--          closes / the cell loses focus / the MIX page is left. A plain value tap on
+--          the cell (single value) cancels the loop; a fresh gesture re-arms it.
 --          (All four op ratios are sequenced — edited on their row-7 pages, not here.)
 --   PROB:  rows 0-5 = probability (col 0, tap -> 32-value picker on rows 6-7)
 --          · three hold<->step trig toggles (single button each, off=hold on=step):
@@ -769,6 +771,15 @@ end
 
 function GridUI:release(x, y)
   self.downKeys[y * GRID_W + x] = nil
+  -- MIX multi-select exits when a VALUE key (rows 6-7) is LIFTED: a tap = touch
+  -- then release, so the value both applies (on press, in handle_mix_picker_press)
+  -- and commits+exits (here, on release). We close on release rather than press so
+  -- the ramp gesture — HOLD a value cell, tap another — still works: the held cell
+  -- keeps the picker open until its own lift. Channel-row (selection) releases and
+  -- the sequence-lane pickers are untouched; they manage their own lifecycle.
+  if self.picker and self.picker.kind == 'mix' and y >= PICKER_ROW0 then
+    self:close_picker()
+  end
 end
 
 -- The index (1-based, into the value grid's 32 cells) of a value-grid key that is
@@ -894,24 +905,50 @@ function GridUI:handle_picker_press(x, y)
     self:handle_normal_press(x, y)
     return
   end
-  -- a channel step: re-tapping the open step cancels/closes; any other step
-  -- (either half) hops the picker there. Removal lives on the value grid (tap
-  -- the lit value), so it no longer needs the channel row to be reachable.
+  -- a channel step. SINGLE mode: re-tapping the open step cancels; tapping a
+  -- DIFFERENT step arms MULTI-select (both join a sticky selection — "arms on 2nd
+  -- cell", mirroring the MIX page). MULTI mode: a step toggles in/out of the set,
+  -- and a dark cell (beyond the lane) exits. Per-step removal still lives on the
+  -- single value grid (re-tap the lit value).
   local li, step = decode_col(x)
   local lane = self:row_lanes(y)[li]
-  if y == p.ch and lane.param == p.param and lane.layer == p.layer and step == p.col then
-    self:close_picker()
-  else
-    self:_focus(y)
-    self:open_step_picker(y, step, lane.param, lane.layer)
+  if p.sel then
+    if self:step_cell_kind(y, lane.param, lane.layer, step) == 'dark' then
+      self:close_picker(); return
+    end
+    self:step_multi_toggle(y, step, lane.param, lane.layer)
+    self:_focus(y); self:render_all()
+    return
   end
+  if y == p.ch and lane.param == p.param and lane.layer == p.layer and step == p.col then
+    self:close_picker(); return
+  end
+  if self:step_cell_kind(y, lane.param, lane.layer, step) == 'dark' then
+    self:_focus(y); self:render_all(); return  -- empty space in single mode: no-op
+  end
+  self:_focus(y)
+  self:step_multi_arm(y, step, lane.param, lane.layer)
+  self:render_all()
 end
 
 -- ---- value application -------------------------------------------------
 
 function GridUI:apply_picker_value(p, x, y)
   if p.kind == 'step' then
-    local v = op_picker_layout(self, p.ch, p.param, p.layer)[y * GRID_W + x + 1]
+    local pos = y * GRID_W + x + 1
+    if p.sel then
+      -- MULTI: paint this grid POSITION onto every selected step, each resolving
+      -- through its OWN role/layer-aware layout (a carrier-role op-ratio cell and a
+      -- modulator-role one interpret position N differently), then CLOSE — a value is
+      -- the commit of the whole batch (unlike the MIX picker, which stays open).
+      for _, e in ipairs(p.sel) do
+        local sv = op_picker_layout(self, e.ch, e.param, e.layer)[pos]
+        if sv ~= nil then self:set_step(e.ch, e.col, sv, e.param, e.layer) end
+      end
+      self:close_picker()
+      return
+    end
+    local v = op_picker_layout(self, p.ch, p.param, p.layer)[pos]
     if v == nil then return end
     -- pressing the already-selected (full-bright) value toggles the step off:
     -- the value grid (rows 6-7) is the remove affordance, freeing the channel
@@ -1087,6 +1124,70 @@ function GridUI:open_step_picker(ch, col, param, layer)
   self:render_all()
 end
 
+-- classify a step cell within a lane: an existing step ('exists'), the append slot
+-- at the end ('add', only while the lane has room), or empty space past it ('dark').
+-- 'dark' is the multi-select EXIT affordance — a dense step page has no reliably-dark
+-- COLUMN like the MIX page, so the empty cells beyond a lane stand in for it.
+function GridUI:step_cell_kind(ch, param, layer, col)
+  local len = #seqx.values(self:seq_ref(ch, param, layer))
+  if col < len then return 'exists'
+  elseif col == len and len < SEQ_LEN then return 'add'
+  else return 'dark' end
+end
+
+-- append a default step to a lane (used when a selection lands on the add slot so
+-- the newly selected cell has a value to paint); no-op + false if the lane is full.
+function GridUI:append_default_step(ch, param, layer)
+  local cur = seqx.values(self:seq_ref(ch, param, layer))
+  local len = #cur
+  if len >= SEQ_LEN then return false end
+  local nxt = {}
+  for i = 1, len do nxt[i] = cur[i] end
+  nxt[len + 1] = (layer == 'A') and DEFAULT_VALUE[param] or DEFAULT_VALUE_B[param]
+  self:commit_step(ch, param, nxt, layer)
+  return true
+end
+
+-- keep the picker's anchor fields (ch/col/param/layer) pointed at a selection cell so
+-- render_step_picker, the screen mid-gesture check, and the status string stay valid
+-- even in multi-select (the `sel` list layers on top; the anchor drives the view).
+function GridUI:_set_step_anchor(cell)
+  local p = self.picker
+  p.ch, p.col, p.param, p.layer = cell.ch, cell.col, cell.param, cell.layer
+end
+
+-- SINGLE -> MULTI ("arms on 2nd cell"): seed a sticky selection with the current
+-- anchor plus the newly tapped step, mirroring the MIX picker. Appends first if the
+-- new cell is the add slot; the new cell becomes the anchor.
+function GridUI:step_multi_arm(ch, col, param, layer)
+  local p = self.picker
+  if self:step_cell_kind(ch, param, layer, col) == 'add' then
+    self:append_default_step(ch, param, layer)
+  end
+  p.sel = { {ch = p.ch, col = p.col, param = p.param, layer = p.layer},
+            {ch = ch, col = col, param = param, layer = layer} }
+  self:_set_step_anchor(p.sel[2])
+end
+
+-- MULTI: toggle a step in/out of the selection (matched on ch+col+param+layer).
+-- Appends first if it's the add slot. Keeps the picker open even when the set empties
+-- (exit is a dark cell), mirroring the MIX picker. The last cell added is the anchor.
+function GridUI:step_multi_toggle(ch, col, param, layer)
+  local sel = self.picker.sel
+  for i, e in ipairs(sel) do
+    if e.ch == ch and e.col == col and e.param == param and e.layer == layer then
+      table.remove(sel, i)
+      if sel[#sel] then self:_set_step_anchor(sel[#sel]) end
+      return
+    end
+  end
+  if self:step_cell_kind(ch, param, layer, col) == 'add' then
+    self:append_default_step(ch, param, layer)
+  end
+  sel[#sel + 1] = {ch = ch, col = col, param = param, layer = layer}
+  self:_set_step_anchor(sel[#sel])
+end
+
 -- MIX-page scalar picker: edits a per-channel static field (level / opLevelN)
 -- by tapping a value on the rows-6-7 grid. `layout` is the value array, `valkind`
 -- ('level') is for the status string.
@@ -1099,11 +1200,12 @@ end
 -- MIX-page MULTI-SELECT picker. Unlike the single-shot scalar picker, this holds a
 -- LIST of selected {ch, field, layout, valkind} cells (`sel`) that all flash on the
 -- grid. Tapping a value on rows 6-7 applies that grid POSITION to every selected
--- cell (each field resolves the index through its own 32-value layout), and the
--- picker STAYS OPEN so a run of edits share one selection. Tapping another MIX cell
--- toggles it in/out of the set; tapping a dark/empty column exits. The last cell
--- added is the "anchor" (`sel[#sel]`) whose layout + current value drive the value
--- grid's brightness reference.
+-- cell (each field resolves the index through its own 32-value layout); the value
+-- COMMITS + EXITS on the key lift (GridUI:release) so a tap is self-contained. The
+-- picker stays open only between selection taps and while a value cell is HELD for
+-- the ramp gesture. Tapping another MIX cell toggles it in/out of the set; a dark/
+-- empty column cancels. The last cell added is the "anchor" (`sel[#sel]`) whose
+-- layout + current value drive the value grid's brightness reference.
 function GridUI:open_mix_picker(ch, field, layout, valkind)
   self:_focus(ch)
   self.downKeys = {}   -- fresh gesture state; ignore anything held from before
@@ -1112,8 +1214,8 @@ function GridUI:open_mix_picker(ch, field, layout, valkind)
 end
 
 -- add or remove a cell from the selection (matched on ch + field); a re-tapped cell
--- toggles off. Keeps the picker open even when the set empties (exit is the dark
--- column) so the selection is never cleared out from under a series of edits.
+-- toggles off. Keeps the picker open even when the set empties (a dark column
+-- cancels) so the selection is never cleared out from under an in-progress edit.
 function GridUI:toggle_mix_sel(ch, field, layout, valkind)
   local sel = self.picker.sel
   for i, e in ipairs(sel) do
@@ -1133,7 +1235,8 @@ function GridUI:handle_mix_picker_press(x, y)
       self:arm_mix_ramp(from, idx)
     else
       -- plain tap: apply this grid position to every selected cell (cancelling any
-      -- ramp on those cells) and keep the picker open.
+      -- ramp on those cells). The picker stays open until this key LIFTS (release),
+      -- which commits + exits — so the value both applies and closes on a tap.
       for _, e in ipairs(self.picker.sel) do
         self.ramps[ramp_key(e.ch, e.field)] = nil
         local v = e.layout[idx]
@@ -1143,7 +1246,7 @@ function GridUI:handle_mix_picker_press(x, y)
     self:render_all()
     return
   end
-  -- a channel row: a MIX cell toggles selection, a dark/empty column exits.
+  -- a channel row: a MIX cell toggles selection, a dark/empty column cancels.
   local field, layout, valkind = mix_cell_at(x)
   if field == nil then self:close_picker(); return end
   self:_focus(y)
@@ -1157,29 +1260,32 @@ function GridUI:ramp_for(ch, field) return self.ramps[ramp_key(ch, field)] end
 -- into the 32-cell value grid). Registers each as a persistent ramp (self.ramps,
 -- keyed by cell) so it survives the picker; the value snaps to `from` immediately,
 -- then advance_mix_ramps walks it one step toward `to` on each of that channel's
--- fires. Re-arming a cell replaces its ramp.
+-- fires. `from` is retained so the ramp can LOOP back to it. Re-arming a cell
+-- replaces its ramp.
 function GridUI:arm_mix_ramp(from, to)
   for _, e in ipairs(self.picker.sel) do
     self.ramps[ramp_key(e.ch, e.field)] =
-      { ch = e.ch, field = e.field, layout = e.layout, idx = from, target = to }
+      { ch = e.ch, field = e.field, layout = e.layout, from = from, idx = from, target = to }
     local v = e.layout[from]
     if v ~= nil then self:set_scalar(e.ch, e.field, v) end
   end
 end
 
 -- Step every ramp on channel `ch0` (0-based) one grid-position toward its target,
--- writing the new value. Clears a ramp once it lands. Returns true if anything
--- moved (so the caller repaints). Called from the fire subscription REGARDLESS of
--- the current page/picker, so glides keep running headless.
+-- writing the new value. On reaching the target it LOOPS back to `from` and sweeps
+-- again, so the gesture is a continuous trigger-synced cycle — it never self-clears.
+-- A plain value tap (cancel) or a fresh gesture (re-arm) is what ends/replaces it.
+-- Returns true if anything moved (so the caller repaints). Called from the fire
+-- subscription REGARDLESS of the current page/picker, so glides keep running headless.
 function GridUI:advance_mix_ramps(ch0)
   local moved = false
-  for k, r in pairs(self.ramps) do
+  for _, r in pairs(self.ramps) do
     if r.ch == ch0 then
-      if r.idx < r.target then r.idx = r.idx + 1
-      elseif r.idx > r.target then r.idx = r.idx - 1 end
+      if r.idx == r.target then r.idx = r.from      -- loop back to the start
+      elseif r.idx < r.target then r.idx = r.idx + 1
+      else r.idx = r.idx - 1 end
       local v = r.layout[r.idx]
       if v ~= nil then self:set_scalar(r.ch, r.field, v) end
-      if r.idx == r.target then self.ramps[k] = nil end
       moved = true
     end
   end
@@ -1620,9 +1726,17 @@ function GridUI:render_channel_row(ch)
     if running and len > 0 then
       self.g:set_led(base + seqx.playhead(seq), ch, 15)
     end
-    if self.picker and self.picker.kind == 'step' and self.picker.ch == ch
-       and self.picker.param == lane.param and self.picker.layer == lane.layer then
-      self.g:set_led(base + self.picker.col, ch, 15)
+    if self.picker and self.picker.kind == 'step' then
+      -- single = just the anchor (steady); multi = every selected step on this lane,
+      -- strobing like the MIX picker so the active set reads across all channels.
+      local pk = self.picker
+      local cells = pk.sel or {{ch = pk.ch, col = pk.col, param = pk.param, layer = pk.layer}}
+      for _, e in ipairs(cells) do
+        if e.ch == ch and e.param == lane.param and e.layer == lane.layer then
+          self.g:set_led(base + e.col, ch, 15)
+          if pk.sel then self.g:set_strobe(base + e.col, ch, 'fast') end
+        end
+      end
     end
   end
 end
@@ -2016,9 +2130,9 @@ function GridUI:_status()
     local a = self.picker.sel[n]
     if a then
       local lbl = a.valkind or a.field
-      s = 'MIX ' .. n .. ' sel — pick a value (all), empty col = exit · ' .. lbl
+      s = 'MIX ' .. n .. ' sel — value applies to all + exits, dark = cancel · ' .. lbl
     else
-      s = 'MIX 0 sel — tap a cell to select, empty col = exit'
+      s = 'MIX 0 sel — tap a cell to select, dark col = cancel'
     end
   elseif self.picker and self.picker.kind == 'step' then
     local pp = self.picker.param
@@ -2026,8 +2140,13 @@ function GridUI:_status()
     -- op-env A shows the shape name (B is an integer offset); else the raw value
     local v = raw
     if pp:match('^opEnv') and self.picker.layer ~= 'B' and raw then v = SHAPE_NAMES[raw] or raw end
-    s = 'edit ch' .. (self.picker.ch + 1) .. ' step ' .. self.picker.col .. ' ' ..
-        pp .. (self.picker.layer == 'B' and 'B' or '') .. '=' .. tostring(v)
+    if self.picker.sel then
+      s = 'PICK ' .. #self.picker.sel .. ' steps — value paints all + exits, dark = cancel · ' ..
+          pp .. (self.picker.layer == 'B' and 'B' or '')
+    else
+      s = 'edit ch' .. (self.picker.ch + 1) .. ' step ' .. self.picker.col .. ' ' ..
+          pp .. (self.picker.layer == 'B' and 'B' or '') .. '=' .. tostring(v)
+    end
   elseif self.picker and self.picker.kind == 'scale' then
     if self.progRec then
       s = 'HARM REC — tap the degree row to retype the progression (' ..
